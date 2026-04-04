@@ -15,13 +15,13 @@ import { checkOut } from "@/lib/actions";
 interface CheckOutDialogProps {
   sessionId: number;
   guestName: string;
-  cabinName: string;
+  unitName: string;
 }
 
 export function CheckOutDialog({
   sessionId,
   guestName,
-  cabinName,
+  unitName,
 }: CheckOutDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -59,14 +59,14 @@ export function CheckOutDialog({
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Check-out fra {cabinName}</DialogTitle>
+          <DialogTitle>Check-out fra {unitName}</DialogTitle>
         </DialogHeader>
 
         {!result ? (
           <div className="space-y-4">
             <p>
               Er du sikker på at du vil checke <strong>{guestName}</strong> ud
-              fra <strong>{cabinName}</strong>?
+              fra <strong>{unitName}</strong>?
             </p>
             <p className="text-sm text-muted-foreground">
               Systemet vil aflæse målere, beregne forbrug, slukke strøm og låse
@@ -87,8 +87,8 @@ export function CheckOutDialog({
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="font-medium text-blue-800">
+            <div className="p-4 bg-primary/10 border border-primary/20 rounded-lg">
+              <p className="font-medium text-primary">
                 Check-out gennemført!
               </p>
             </div>

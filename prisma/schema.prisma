@@ -36,59 +36,72 @@ model GlobalSetting {
 }
 
 // ──────────────────────────────────────────────
-// Cabin
+// Unit (Hytte, Campingvogn, Plads, etc.)
 // ──────────────────────────────────────────────
-enum CabinStatus {
+enum UnitType {
+  CABIN         // Hytte
+  CARAVAN       // Campingvogn (langtidsleje)
+  PITCH         // Plads (telt/campingvogn gæst)
+}
+
+enum UnitStatus {
   VACANT
   OCCUPIED
 }
 
-model Cabin {
-  id       Int         @id @default(autoincrement())
-  name     String      @unique
-  status   CabinStatus @default(VACANT)
+model Unit {
+  id       Int        @id @default(autoincrement())
+  name     String     @unique
+  type     UnitType   @default(CABIN)
+  status   UnitStatus @default(VACANT)
 
-  hardware CabinHardware?
+  // For langtidsleje (CARAVAN): gæstens info og portal
+  isLongTerm       Boolean  @default(false)
+  longTermGuestName    String?
+  longTermGuestEmail   String?
+  longTermGuestPhone   String?
+  longTermPortalToken  String?  @unique // Permanent gæsteportal for langtidslejere
+
+  hardware UnitHardware?
   sessions Session[]
+  invoices Invoice[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@map("cabins")
+  @@map("units")
 }
 
 // ──────────────────────────────────────────────
-// Cabin Hardware Configuration (1-to-1 with Cabin)
-// Modular: each capability is a boolean flag + optional HA entity IDs.
-// If a cabin lacks a feature, the flag is false and entity IDs are null.
+// Unit Hardware Configuration (1-to-1 with Unit)
 // ──────────────────────────────────────────────
-model CabinHardware {
-  id      Int  @id @default(autoincrement())
-  cabinId Int  @unique
-  cabin   Cabin @relation(fields: [cabinId], references: [id], onDelete: Cascade)
+model UnitHardware {
+  id     Int  @id @default(autoincrement())
+  unitId Int  @unique
+  unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   // Electricity (Shelly Pro 4PM or similar)
   hasElectricity           Boolean @default(false)
-  electricitySwitchEntityId String? // e.g. "switch.cabin_1_power"
-  electricityMeterEntityId  String? // e.g. "sensor.cabin_1_energy" (cumulative kWh)
+  electricitySwitchEntityId String?
+  electricityMeterEntityId  String?
 
   // Water (LoRaWAN meter or similar)
   hasWater            Boolean @default(false)
-  waterMeterEntityId  String? // e.g. "sensor.cabin_1_water" (cumulative liters)
+  waterMeterEntityId  String?
 
   // Climate (thermostat / heat pump)
   hasClimate      Boolean @default(false)
-  climateEntityId String? // e.g. "climate.cabin_1_hvac"
+  climateEntityId String?
 
   // Smart Lock
   hasSmartLock  Boolean @default(false)
-  lockEntityId  String? // e.g. "lock.cabin_1_door"
+  lockEntityId  String?
 
-  @@map("cabin_hardware")
+  @@map("unit_hardware")
 }
 
 // ──────────────────────────────────────────────
-// Guest Session (a single stay)
+// Guest Session (a single stay or billing period)
 // ──────────────────────────────────────────────
 enum SessionStatus {
   ACTIVE
@@ -96,26 +109,26 @@ enum SessionStatus {
 }
 
 model Session {
-  id      Int    @id @default(autoincrement())
-  cabinId Int
-  cabin   Cabin  @relation(fields: [cabinId], references: [id], onDelete: Cascade)
+  id     Int  @id @default(autoincrement())
+  unitId Int
+  unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   guestName        String
-  guestPortalToken String        @unique // UUID — used in /guest/[token] URL
+  guestPortalToken String        @unique
   status           SessionStatus @default(ACTIVE)
 
   checkInTime  DateTime  @default(now())
   checkOutTime DateTime?
 
-  // Baseline readings captured from HA at check-in
+  // Baseline readings captured from HA
   startKwh         Float?
   startWaterLiters Float?
 
-  // End readings captured from HA at check-out
+  // End readings captured at check-out / period close
   endKwh         Float?
   endWaterLiters Float?
 
-  // Calculated totals at check-out
+  // Calculated totals
   totalElectricityCost Float?
   totalWaterCost       Float?
   totalCost            Float?
@@ -124,4 +137,47 @@ model Session {
   updatedAt DateTime @updatedAt
 
   @@map("sessions")
+}
+
+// ──────────────────────────────────────────────
+// Invoice (monthly billing for long-term renters)
+// ──────────────────────────────────────────────
+enum InvoiceStatus {
+  DRAFT       // Kladde — endnu ikke sendt
+  PENDING     // Afventer betaling
+  PAID        // Betalt
+  OVERDUE     // Forfalden
+}
+
+model Invoice {
+  id     Int  @id @default(autoincrement())
+  unitId Int
+  unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  // Billing period
+  periodStart DateTime
+  periodEnd   DateTime
+
+  // Meter readings for this period
+  startKwh         Float?
+  endKwh           Float?
+  startWaterLiters Float?
+  endWaterLiters   Float?
+
+  // Costs
+  electricityCost Float  @default(0)
+  waterCost       Float  @default(0)
+  totalAmount     Float  @default(0)
+
+  status    InvoiceStatus @default(DRAFT)
+  paidAt    DateTime?
+  paymentId String?       // FlatPay/Frisbii transaction ID
+
+  // Payment link
+  paymentToken String? @unique // UUID for payment page
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("invoices")
 }

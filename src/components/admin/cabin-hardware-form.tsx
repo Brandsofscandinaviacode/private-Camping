@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { updateCabinHardware } from "@/lib/actions";
+import { updateUnitHardware } from "@/lib/actions";
 
 interface CabinHardwareFormProps {
   cabin: { id: number; name: string };
@@ -43,7 +43,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
 
   function handleSave() {
     startTransition(async () => {
-      await updateCabinHardware(cabin.id, {
+      await updateUnitHardware(cabin.id, {
         hasElectricity: values.hasElectricity,
         electricitySwitchEntityId: values.electricitySwitchEntityId || null,
         electricityMeterEntityId: values.electricityMeterEntityId || null,

@@ -1,7 +1,4 @@
-import {
-  getGlobalSettings,
-  getCabins,
-} from "@/lib/actions";
+import { getGlobalSettings, getUnits } from "@/lib/actions";
 import { requireAuth } from "@/lib/auth";
 import { SettingsForm } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
@@ -12,42 +9,34 @@ export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const session = await requireAuth();
-  const [settings, cabins] = await Promise.all([
+  const [settings, units] = await Promise.all([
     getGlobalSettings(),
-    getCabins(),
+    getUnits(),
   ]);
 
   return (
-    <div className="p-6 space-y-8 max-w-3xl">
+    <div className="p-6 lg:p-8 space-y-8 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-bold">Indstillinger</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl font-bold tracking-tight">Indstillinger</h1>
+        <p className="text-muted-foreground text-sm mt-1">
           Konfigurér Home Assistant, priser og hardware.
         </p>
       </div>
 
-      {/* HA Connection & Pricing */}
       <SettingsForm settings={settings} />
 
       <Separator />
 
-      {/* Cabin Hardware Mapping */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">
-          Hardware konfiguration per hytte
-        </h2>
-        {cabins.length === 0 ? (
-          <p className="text-muted-foreground">
-            Ingen hytter oprettet endnu. Tilføj hytter fra oversigten.
+        <h2 className="text-lg font-semibold mb-4">Hardware konfiguration per enhed</h2>
+        {units.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            Ingen enheder oprettet endnu. Tilføj enheder fra oversigten.
           </p>
         ) : (
-          <div className="space-y-4">
-            {cabins.map((cabin) => (
-              <CabinHardwareForm
-                key={cabin.id}
-                cabin={cabin}
-                hardware={cabin.hardware}
-              />
+          <div className="space-y-3">
+            {units.map((unit) => (
+              <CabinHardwareForm key={unit.id} cabin={unit} hardware={unit.hardware} />
             ))}
           </div>
         )}
@@ -55,7 +44,6 @@ export default async function SettingsPage() {
 
       <Separator />
 
-      {/* Change Password */}
       <ChangePasswordForm userId={session.userId!} />
     </div>
   );

@@ -9,11 +9,13 @@ export default async function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/30 px-4">
-      <div className="w-full max-w-sm space-y-6">
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="w-full max-w-sm space-y-8">
         <div className="text-center">
-          <Tent className="h-10 w-10 mx-auto text-primary" />
-          <h1 className="text-2xl font-bold mt-3">CampFlow</h1>
+          <div className="h-14 w-14 rounded-2xl bg-primary/20 flex items-center justify-center mx-auto">
+            <Tent className="h-7 w-7 text-primary" />
+          </div>
+          <h1 className="text-2xl font-bold mt-4 tracking-tight">CampFlow</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Log ind for at administrere campingpladsen
           </p>

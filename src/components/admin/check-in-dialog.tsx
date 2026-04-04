@@ -15,11 +15,11 @@ import { Label } from "@/components/ui/label";
 import { checkIn } from "@/lib/actions";
 
 interface CheckInDialogProps {
-  cabinId: number;
-  cabinName: string;
+  unitId: number;
+  unitName: string;
 }
 
-export function CheckInDialog({ cabinId, cabinName }: CheckInDialogProps) {
+export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [open, setOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [loading, setLoading] = useState(false);
@@ -32,7 +32,7 @@ export function CheckInDialog({ cabinId, cabinName }: CheckInDialogProps) {
     if (!guestName.trim()) return;
     setLoading(true);
     try {
-      const res = await checkIn(cabinId, guestName.trim());
+      const res = await checkIn(unitId, guestName.trim());
       setResult(res);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Check-in fejlede");
@@ -60,7 +60,7 @@ export function CheckInDialog({ cabinId, cabinName }: CheckInDialogProps) {
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Check-in til {cabinName}</DialogTitle>
+          <DialogTitle>Check-in til {unitName}</DialogTitle>
         </DialogHeader>
 
         {!result ? (
@@ -85,11 +85,11 @@ export function CheckInDialog({ cabinId, cabinName }: CheckInDialogProps) {
           </form>
         ) : (
           <div className="space-y-4">
-            <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-              <p className="font-medium text-green-800">
+            <div className="p-4 bg-primary/10 border border-primary/20 rounded-lg">
+              <p className="font-medium text-primary">
                 Check-in gennemført!
               </p>
-              <p className="text-sm text-green-700 mt-1">
+              <p className="text-sm text-primary/80 mt-1">
                 Strøm tændt, målere aflæst, gæsteportal oprettet.
               </p>
             </div>

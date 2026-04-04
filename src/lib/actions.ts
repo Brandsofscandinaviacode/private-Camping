@@ -6,7 +6,7 @@ import { prisma } from "./prisma";
 import * as ha from "./homeassistant";
 
 // ──────────────────────────────────────────────
-// Helper: get pricing from global settings
+// Helpers
 // ──────────────────────────────────────────────
 export async function getPricing() {
   const settings = await prisma.globalSetting.findMany();
@@ -26,49 +26,58 @@ export async function getGlobalSettings() {
 }
 
 // ──────────────────────────────────────────────
-// Cabin CRUD
+// Unit CRUD
 // ──────────────────────────────────────────────
-export async function createCabin(name: string) {
-  const cabin = await prisma.cabin.create({
+export async function createUnit(
+  name: string,
+  type: "CABIN" | "CARAVAN" | "PITCH" = "CABIN"
+) {
+  const unit = await prisma.unit.create({
     data: {
       name,
+      type,
+      isLongTerm: type === "CARAVAN",
       hardware: { create: {} },
     },
   });
   revalidatePath("/admin");
-  return cabin;
+  return unit;
 }
 
-export async function deleteCabin(cabinId: number) {
-  await prisma.cabin.delete({ where: { id: cabinId } });
+export async function deleteUnit(unitId: number) {
+  await prisma.unit.delete({ where: { id: unitId } });
   revalidatePath("/admin");
 }
 
-export async function getCabins() {
-  return prisma.cabin.findMany({
+export async function getUnits() {
+  return prisma.unit.findMany({
     include: { hardware: true },
     orderBy: { name: "asc" },
   });
 }
 
-export async function getCabinWithDetails(cabinId: number) {
-  return prisma.cabin.findUnique({
-    where: { id: cabinId },
+export async function getUnitWithDetails(unitId: number) {
+  return prisma.unit.findUnique({
+    where: { id: unitId },
     include: {
       hardware: true,
       sessions: {
         orderBy: { checkInTime: "desc" },
         take: 10,
       },
+      invoices: {
+        orderBy: { periodEnd: "desc" },
+        take: 12,
+      },
     },
   });
 }
 
 // ──────────────────────────────────────────────
-// Cabin Hardware Configuration
+// Unit Hardware Configuration
 // ──────────────────────────────────────────────
-export async function updateCabinHardware(
-  cabinId: number,
+export async function updateUnitHardware(
+  unitId: number,
   data: {
     hasElectricity: boolean;
     electricitySwitchEntityId: string | null;
@@ -81,27 +90,49 @@ export async function updateCabinHardware(
     lockEntityId: string | null;
   }
 ) {
-  await prisma.cabinHardware.upsert({
-    where: { cabinId },
+  await prisma.unitHardware.upsert({
+    where: { unitId },
     update: data,
-    create: { cabinId, ...data },
+    create: { unitId, ...data },
   });
   revalidatePath("/admin");
-  revalidatePath(`/admin/cabins/${cabinId}`);
+  revalidatePath(`/admin/units/${unitId}`);
+}
+
+// ──────────────────────────────────────────────
+// Long-term tenant management
+// ──────────────────────────────────────────────
+export async function updateLongTermTenant(
+  unitId: number,
+  data: {
+    longTermGuestName: string;
+    longTermGuestEmail: string;
+    longTermGuestPhone: string;
+  }
+) {
+  let unit = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unit) throw new Error("Enhed ikke fundet");
+
+  const portalToken = unit.longTermPortalToken || uuidv4();
+
+  await prisma.unit.update({
+    where: { id: unitId },
+    data: {
+      ...data,
+      isLongTerm: true,
+      longTermPortalToken: portalToken,
+      status: "OCCUPIED",
+    },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath(`/admin/units/${unitId}`);
+  return portalToken;
 }
 
 // ──────────────────────────────────────────────
 // Global Settings
 // ──────────────────────────────────────────────
-export async function updateGlobalSetting(key: string, value: string) {
-  await prisma.globalSetting.upsert({
-    where: { key },
-    update: { value },
-    create: { key, value },
-  });
-  revalidatePath("/admin/settings");
-}
-
 export async function updateMultipleSettings(
   settings: { key: string; value: string }[]
 ) {
@@ -118,82 +149,50 @@ export async function updateMultipleSettings(
 // ──────────────────────────────────────────────
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
-export async function checkIn(cabinId: number, guestName: string) {
-  const cabin = await prisma.cabin.findUnique({
-    where: { id: cabinId },
+export async function checkIn(unitId: number, guestName: string) {
+  const unit = await prisma.unit.findUnique({
+    where: { id: unitId },
     include: { hardware: true },
   });
 
-  if (!cabin) throw new Error("Cabin not found");
-  if (cabin.status === "OCCUPIED") throw new Error("Cabin is already occupied");
+  if (!unit) throw new Error("Enhed ikke fundet");
+  if (unit.status === "OCCUPIED") throw new Error("Enheden er allerede optaget");
 
-  const hw = cabin.hardware;
+  const hw = unit.hardware;
   const pricing = await getPricing();
 
-  // Read baseline meter values from HA
   let startKwh: number | null = null;
   let startWaterLiters: number | null = null;
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     startKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
   }
-
   if (hw?.hasWater && hw.waterMeterEntityId) {
     startWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
   }
 
   // Turn on electricity
   if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
-    try {
-      await ha.turnOn(hw.electricitySwitchEntityId);
-    } catch (e) {
-      console.error("Failed to turn on electricity:", e);
-    }
+    try { await ha.turnOn(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
   }
-
-  // Set climate to occupied temperature
+  // Set climate
   if (hw?.hasClimate && hw.climateEntityId) {
-    try {
-      await ha.setClimateTemperature(
-        hw.climateEntityId,
-        pricing.defaultOccupiedTemp
-      );
-    } catch (e) {
-      console.error("Failed to set climate:", e);
-    }
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { console.error("HA:", e); }
   }
-
   // Unlock door
   if (hw?.hasSmartLock && hw.lockEntityId) {
-    try {
-      await ha.unlockDoor(hw.lockEntityId);
-    } catch (e) {
-      console.error("Failed to unlock door:", e);
-    }
+    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
   }
 
-  // Create session
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: {
-      cabinId,
-      guestName,
-      guestPortalToken,
-      startKwh,
-      startWaterLiters,
-      status: "ACTIVE",
-    },
+    data: { unitId, guestName, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
   });
 
-  // Mark cabin as occupied
-  await prisma.cabin.update({
-    where: { id: cabinId },
-    data: { status: "OCCUPIED" },
-  });
+  await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
 
   revalidatePath("/admin");
-  revalidatePath(`/admin/cabins/${cabinId}`);
-
+  revalidatePath(`/admin/units/${unitId}`);
   return { session, guestPortalToken };
 }
 
@@ -203,112 +202,75 @@ export async function checkIn(cabinId: number, guestName: string) {
 export async function checkOut(sessionId: number) {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    include: { cabin: { include: { hardware: true } } },
+    include: { unit: { include: { hardware: true } } },
   });
 
-  if (!session) throw new Error("Session not found");
-  if (session.status === "COMPLETED")
-    throw new Error("Session already completed");
+  if (!session) throw new Error("Session ikke fundet");
+  if (session.status === "COMPLETED") throw new Error("Session allerede afsluttet");
 
-  const hw = session.cabin.hardware;
+  const hw = session.unit.hardware;
   const pricing = await getPricing();
 
-  // Read end meter values from HA
   let endKwh: number | null = null;
   let endWaterLiters: number | null = null;
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
   }
-
   if (hw?.hasWater && hw.waterMeterEntityId) {
     endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
   }
 
-  // Calculate costs
   let totalElectricityCost: number | null = null;
   let totalWaterCost: number | null = null;
 
   if (endKwh !== null && session.startKwh !== null) {
-    const usedKwh = endKwh - session.startKwh;
-    totalElectricityCost = Math.max(0, usedKwh) * pricing.pricePerKwh;
+    totalElectricityCost = Math.max(0, endKwh - session.startKwh) * pricing.pricePerKwh;
   }
-
   if (endWaterLiters !== null && session.startWaterLiters !== null) {
-    const usedLiters = endWaterLiters - session.startWaterLiters;
-    totalWaterCost = Math.max(0, usedLiters) * pricing.pricePerLiterWater;
+    totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * pricing.pricePerLiterWater;
   }
 
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0);
 
-  // Turn off electricity
+  // Turn off
   if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
-    try {
-      await ha.turnOff(hw.electricitySwitchEntityId);
-    } catch (e) {
-      console.error("Failed to turn off electricity:", e);
-    }
+    try { await ha.turnOff(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
   }
-
-  // Set climate to vacant temperature
   if (hw?.hasClimate && hw.climateEntityId) {
-    try {
-      await ha.setClimateTemperature(
-        hw.climateEntityId,
-        pricing.defaultVacantTemp
-      );
-    } catch (e) {
-      console.error("Failed to set climate:", e);
-    }
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { console.error("HA:", e); }
   }
-
-  // Lock door
   if (hw?.hasSmartLock && hw.lockEntityId) {
-    try {
-      await ha.lockDoor(hw.lockEntityId);
-    } catch (e) {
-      console.error("Failed to lock door:", e);
-    }
+    try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
   }
 
-  // Update session
   await prisma.session.update({
     where: { id: sessionId },
-    data: {
-      status: "COMPLETED",
-      checkOutTime: new Date(),
-      endKwh,
-      endWaterLiters,
-      totalElectricityCost,
-      totalWaterCost,
-      totalCost,
-    },
+    data: { status: "COMPLETED", checkOutTime: new Date(), endKwh, endWaterLiters, totalElectricityCost, totalWaterCost, totalCost },
   });
 
-  // Mark cabin as vacant
-  await prisma.cabin.update({
-    where: { id: session.cabinId },
-    data: { status: "VACANT" },
-  });
+  // Only mark vacant for non-long-term
+  if (!session.unit.isLongTerm) {
+    await prisma.unit.update({ where: { id: session.unitId }, data: { status: "VACANT" } });
+  }
 
   revalidatePath("/admin");
-  revalidatePath(`/admin/cabins/${session.cabinId}`);
-
+  revalidatePath(`/admin/units/${session.unitId}`);
   return { totalElectricityCost, totalWaterCost, totalCost };
 }
 
 // ──────────────────────────────────────────────
-// LIVE CONSUMPTION (for active sessions)
+// LIVE CONSUMPTION
 // ──────────────────────────────────────────────
 export async function getLiveConsumption(sessionId: number) {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    include: { cabin: { include: { hardware: true } } },
+    include: { unit: { include: { hardware: true } } },
   });
 
   if (!session || session.status !== "ACTIVE") return null;
 
-  const hw = session.cabin.hardware;
+  const hw = session.unit.hardware;
   const pricing = await getPricing();
 
   let currentKwh: number | null = null;
@@ -329,37 +291,30 @@ export async function getLiveConsumption(sessionId: number) {
   if (hw?.hasWater && hw.waterMeterEntityId) {
     currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
     if (currentWaterLiters !== null && session.startWaterLiters !== null) {
-      usedWaterLiters = Math.max(
-        0,
-        currentWaterLiters - session.startWaterLiters
-      );
+      usedWaterLiters = Math.max(0, currentWaterLiters - session.startWaterLiters);
       waterCost = usedWaterLiters * pricing.pricePerLiterWater;
     }
   }
 
   return {
-    currentKwh,
-    usedKwh,
-    electricityCost,
-    currentWaterLiters,
-    usedWaterLiters,
-    waterCost,
+    currentKwh, usedKwh, electricityCost,
+    currentWaterLiters, usedWaterLiters, waterCost,
     totalLiveCost: (electricityCost ?? 0) + (waterCost ?? 0),
     currency: pricing.currency,
   };
 }
 
 // ──────────────────────────────────────────────
-// HA State helpers (for dashboard cards)
+// HA State helpers
 // ──────────────────────────────────────────────
-export async function getCabinHAStates(cabinId: number) {
-  const cabin = await prisma.cabin.findUnique({
-    where: { id: cabinId },
+export async function getUnitHAStates(unitId: number) {
+  const unit = await prisma.unit.findUnique({
+    where: { id: unitId },
     include: { hardware: true },
   });
 
-  if (!cabin?.hardware) return null;
-  const hw = cabin.hardware;
+  if (!unit?.hardware) return null;
+  const hw = unit.hardware;
 
   let powerOn: boolean | null = null;
   let temperature: number | null = null;
@@ -370,20 +325,15 @@ export async function getCabinHAStates(cabinId: number) {
       const state = await ha.getEntityState(hw.electricitySwitchEntityId);
       powerOn = state.state === "on";
     }
-
     if (hw.hasClimate && hw.climateEntityId) {
       const state = await ha.getEntityState(hw.climateEntityId);
-      temperature =
-        typeof state.attributes.current_temperature === "number"
-          ? state.attributes.current_temperature
-          : null;
+      temperature = typeof state.attributes.current_temperature === "number"
+        ? state.attributes.current_temperature : null;
     }
-
     if (hw.hasSmartLock && hw.lockEntityId) {
       const state = await ha.getEntityState(hw.lockEntityId);
       locked = state.state === "locked";
     }
-
     return { powerOn, temperature, locked, haReachable: true };
   } catch {
     return { powerOn: null, temperature: null, locked: null, haReachable: false };
@@ -393,45 +343,27 @@ export async function getCabinHAStates(cabinId: number) {
 // ──────────────────────────────────────────────
 // Manual HA controls
 // ──────────────────────────────────────────────
-export async function togglePower(cabinId: number, turnOn: boolean) {
-  const cabin = await prisma.cabin.findUnique({
-    where: { id: cabinId },
-    include: { hardware: true },
-  });
-  if (!cabin?.hardware?.electricitySwitchEntityId) return;
-
-  if (turnOn) {
-    await ha.turnOn(cabin.hardware.electricitySwitchEntityId);
-  } else {
-    await ha.turnOff(cabin.hardware.electricitySwitchEntityId);
-  }
-  revalidatePath(`/admin/cabins/${cabinId}`);
+export async function togglePower(unitId: number, turnOn: boolean) {
+  const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
+  if (!unit?.hardware?.electricitySwitchEntityId) return;
+  if (turnOn) { await ha.turnOn(unit.hardware.electricitySwitchEntityId); }
+  else { await ha.turnOff(unit.hardware.electricitySwitchEntityId); }
+  revalidatePath(`/admin/units/${unitId}`);
 }
 
-export async function toggleLock(cabinId: number, lock: boolean) {
-  const cabin = await prisma.cabin.findUnique({
-    where: { id: cabinId },
-    include: { hardware: true },
-  });
-  if (!cabin?.hardware?.lockEntityId) return;
-
-  if (lock) {
-    await ha.lockDoor(cabin.hardware.lockEntityId);
-  } else {
-    await ha.unlockDoor(cabin.hardware.lockEntityId);
-  }
-  revalidatePath(`/admin/cabins/${cabinId}`);
+export async function toggleLock(unitId: number, lock: boolean) {
+  const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
+  if (!unit?.hardware?.lockEntityId) return;
+  if (lock) { await ha.lockDoor(unit.hardware.lockEntityId); }
+  else { await ha.unlockDoor(unit.hardware.lockEntityId); }
+  revalidatePath(`/admin/units/${unitId}`);
 }
 
-export async function setTemperature(cabinId: number, temp: number) {
-  const cabin = await prisma.cabin.findUnique({
-    where: { id: cabinId },
-    include: { hardware: true },
-  });
-  if (!cabin?.hardware?.climateEntityId) return;
-
-  await ha.setClimateTemperature(cabin.hardware.climateEntityId, temp);
-  revalidatePath(`/admin/cabins/${cabinId}`);
+export async function setTemperature(unitId: number, temp: number) {
+  const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
+  if (!unit?.hardware?.climateEntityId) return;
+  await ha.setClimateTemperature(unit.hardware.climateEntityId, temp);
+  revalidatePath(`/admin/units/${unitId}`);
 }
 
 // ──────────────────────────────────────────────
@@ -440,42 +372,143 @@ export async function setTemperature(cabinId: number, temp: number) {
 export async function getSessionByToken(token: string) {
   return prisma.session.findUnique({
     where: { guestPortalToken: token },
-    include: { cabin: { include: { hardware: true } } },
+    include: { unit: { include: { hardware: true } } },
   });
 }
 
-// Guest actions
+export async function getUnitByPortalToken(token: string) {
+  return prisma.unit.findUnique({
+    where: { longTermPortalToken: token },
+    include: { hardware: true, invoices: { orderBy: { periodEnd: "desc" }, take: 12 } },
+  });
+}
+
 export async function guestSetTemperature(token: string, temp: number) {
+  // Check session-based token first, then long-term token
+  let hw: { climateEntityId: string | null } | null = null;
+
   const session = await prisma.session.findUnique({
     where: { guestPortalToken: token },
-    include: { cabin: { include: { hardware: true } } },
+    include: { unit: { include: { hardware: true } } },
   });
-  if (!session || session.status !== "ACTIVE") return;
-  if (!session.cabin.hardware?.climateEntityId) return;
+  if (session?.status === "ACTIVE") hw = session.unit.hardware;
 
-  // Clamp temperature to safe range
+  if (!hw) {
+    const unit = await prisma.unit.findUnique({
+      where: { longTermPortalToken: token },
+      include: { hardware: true },
+    });
+    if (unit) hw = unit.hardware;
+  }
+
+  if (!hw?.climateEntityId) return;
   const clampedTemp = Math.min(25, Math.max(16, temp));
-  await ha.setClimateTemperature(
-    session.cabin.hardware.climateEntityId,
-    clampedTemp
-  );
+  await ha.setClimateTemperature(hw.climateEntityId, clampedTemp);
 }
 
 export async function guestUnlockDoor(token: string) {
+  let hw: { lockEntityId: string | null } | null = null;
+
   const session = await prisma.session.findUnique({
     where: { guestPortalToken: token },
-    include: { cabin: { include: { hardware: true } } },
+    include: { unit: { include: { hardware: true } } },
   });
-  if (!session || session.status !== "ACTIVE") return;
-  if (!session.cabin.hardware?.lockEntityId) return;
+  if (session?.status === "ACTIVE") hw = session.unit.hardware;
 
-  await ha.unlockDoor(session.cabin.hardware.lockEntityId);
+  if (!hw) {
+    const unit = await prisma.unit.findUnique({
+      where: { longTermPortalToken: token },
+      include: { hardware: true },
+    });
+    if (unit) hw = unit.hardware;
+  }
+
+  if (!hw?.lockEntityId) return;
+  await ha.unlockDoor(hw.lockEntityId);
 }
 
-// Get active session for a cabin
-export async function getActiveSession(cabinId: number) {
+export async function getActiveSession(unitId: number) {
   return prisma.session.findFirst({
-    where: { cabinId, status: "ACTIVE" },
+    where: { unitId, status: "ACTIVE" },
     orderBy: { checkInTime: "desc" },
   });
+}
+
+// ──────────────────────────────────────────────
+// INVOICES — Monthly billing
+// ──────────────────────────────────────────────
+export async function createMonthlyInvoice(unitId: number) {
+  const unit = await prisma.unit.findUnique({
+    where: { id: unitId },
+    include: { hardware: true },
+  });
+  if (!unit) throw new Error("Enhed ikke fundet");
+
+  const pricing = await getPricing();
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+  const hw = unit.hardware;
+
+  let startKwh: number | null = null;
+  let endKwh: number | null = null;
+  let startWaterLiters: number | null = null;
+  let endWaterLiters: number | null = null;
+
+  // For now, get current readings as end values
+  // Start values come from previous invoice's end, or current if first invoice
+  const prevInvoice = await prisma.invoice.findFirst({
+    where: { unitId },
+    orderBy: { periodEnd: "desc" },
+  });
+
+  if (hw?.hasElectricity && hw.electricityMeterEntityId) {
+    endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+    startKwh = prevInvoice?.endKwh ?? endKwh;
+  }
+  if (hw?.hasWater && hw.waterMeterEntityId) {
+    endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
+    startWaterLiters = prevInvoice?.endWaterLiters ?? endWaterLiters;
+  }
+
+  const electricityCost = (endKwh !== null && startKwh !== null)
+    ? Math.max(0, endKwh - startKwh) * pricing.pricePerKwh : 0;
+  const waterCost = (endWaterLiters !== null && startWaterLiters !== null)
+    ? Math.max(0, endWaterLiters - startWaterLiters) * pricing.pricePerLiterWater : 0;
+
+  const invoice = await prisma.invoice.create({
+    data: {
+      unitId,
+      periodStart,
+      periodEnd,
+      startKwh,
+      endKwh,
+      startWaterLiters,
+      endWaterLiters,
+      electricityCost,
+      waterCost,
+      totalAmount: electricityCost + waterCost,
+      status: "PENDING",
+      paymentToken: uuidv4(),
+    },
+  });
+
+  revalidatePath(`/admin/units/${unitId}`);
+  return invoice;
+}
+
+export async function getInvoiceByPaymentToken(token: string) {
+  return prisma.invoice.findUnique({
+    where: { paymentToken: token },
+    include: { unit: true },
+  });
+}
+
+export async function markInvoicePaid(invoiceId: number, paymentId?: string) {
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { status: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
+  });
+  revalidatePath("/admin");
 }

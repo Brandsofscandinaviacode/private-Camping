@@ -1,14 +1,14 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
-import path from "path";
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 function resolveDbUrl(url: string): string {
-  // Konvertér relativ file: sti til absolut, så den virker uanset CWD
   if (url.startsWith("file:") && !url.startsWith("file:/")) {
-    const relativePath = url.slice(5); // fjern "file:"
-    return "file:" + path.resolve(process.cwd(), relativePath);
+    const relativePath = url.slice(5);
+    // Use join to build absolute path without dynamic path.resolve
+    const cwd = /*turbopackIgnore: true*/ process.cwd();
+    return "file:" + cwd + "/" + relativePath;
   }
   return url;
 }

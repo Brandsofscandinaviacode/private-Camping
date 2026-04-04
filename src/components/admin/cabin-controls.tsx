@@ -13,8 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { togglePower, toggleLock, setTemperature } from "@/lib/actions";
 
-interface CabinControlsProps {
-  cabinId: number;
+interface UnitControlsProps {
+  unitId: number;
   hardware: {
     hasElectricity: boolean;
     hasWater: boolean;
@@ -30,10 +30,10 @@ interface CabinControlsProps {
 }
 
 export function CabinControls({
-  cabinId,
+  unitId,
   hardware,
   haStates,
-}: CabinControlsProps) {
+}: UnitControlsProps) {
   const [isPending, startTransition] = useTransition();
   const [tempValue, setTempValue] = useState(
     haStates?.temperature?.toString() ?? "21"
@@ -76,7 +76,7 @@ export function CabinControls({
               size="sm"
               disabled={isPending}
               onClick={() =>
-                startTransition(() => togglePower(cabinId, !haStates.powerOn))
+                startTransition(() => togglePower(unitId, !haStates.powerOn))
               }
             >
               {haStates.powerOn ? "Sluk" : "Tænd"}
@@ -99,7 +99,7 @@ export function CabinControls({
               size="sm"
               disabled={isPending}
               onClick={() =>
-                startTransition(() => toggleLock(cabinId, !haStates.locked))
+                startTransition(() => toggleLock(unitId, !haStates.locked))
               }
             >
               {haStates.locked ? "Lås op" : "Lås"}
@@ -125,7 +125,7 @@ export function CabinControls({
                 max="25"
                 value={tempValue}
                 onChange={(e) => setTempValue(e.target.value)}
-                className="w-16 h-8 text-sm border rounded px-2"
+                className="w-16 h-8 text-sm border rounded px-2 bg-input"
               />
               <Button
                 variant="outline"
@@ -133,7 +133,7 @@ export function CabinControls({
                 disabled={isPending}
                 onClick={() =>
                   startTransition(() =>
-                    setTemperature(cabinId, parseFloat(tempValue))
+                    setTemperature(unitId, parseFloat(tempValue))
                   )
                 }
               >

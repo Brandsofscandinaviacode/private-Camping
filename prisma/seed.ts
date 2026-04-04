@@ -2,12 +2,19 @@ import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
 import bcrypt from "bcryptjs";
+import path from "path";
 
-const adapter = new PrismaLibSql({ url: process.env.DATABASE_URL! });
+function resolveDbUrl(url: string): string {
+  if (url.startsWith("file:") && !url.startsWith("file:/")) {
+    return "file:" + path.resolve(process.cwd(), url.slice(5));
+  }
+  return url;
+}
+
+const adapter = new PrismaLibSql({ url: resolveDbUrl(process.env.DATABASE_URL!) });
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  // Default global settings
   const defaults = [
     { key: "price_per_kwh", value: "2.50" },
     { key: "price_per_liter_water", value: "0.05" },
@@ -26,8 +33,6 @@ async function main() {
     });
   }
 
-  // Default admin user: admin / admin123
-  // VIGTIGT: Skift adgangskode efter første login!
   const existingAdmin = await prisma.user.findUnique({
     where: { username: "admin" },
   });
@@ -35,21 +40,15 @@ async function main() {
   if (!existingAdmin) {
     const hash = await bcrypt.hash("admin123", 10);
     await prisma.user.create({
-      data: {
-        username: "admin",
-        passwordHash: hash,
-      },
+      data: { username: "admin", passwordHash: hash },
     });
     console.log("Standard admin-bruger oprettet (admin / admin123)");
     console.log("VIGTIGT: Skift adgangskode efter første login!");
   }
 
-  console.log("Seed fuldført: standardindstillinger oprettet.");
+  console.log("Seed fuldført.");
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
+  .catch((e) => { console.error(e); process.exit(1); })
   .finally(() => prisma.$disconnect());
