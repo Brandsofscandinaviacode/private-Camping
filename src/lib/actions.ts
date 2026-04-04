@@ -149,7 +149,7 @@ export async function updateMultipleSettings(
 // ──────────────────────────────────────────────
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
-export async function checkIn(unitId: number, guestName: string) {
+export async function checkIn(unitId: number, guestName: string, guestEmail?: string, bookingRef?: string) {
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -186,7 +186,7 @@ export async function checkIn(unitId: number, guestName: string) {
 
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: { unitId, guestName, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
+    data: { unitId, guestName, guestEmail: guestEmail || null, bookingRef: bookingRef || null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
   });
 
   await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
@@ -511,4 +511,69 @@ export async function markInvoicePaid(invoiceId: number, paymentId?: string) {
     data: { status: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
   });
   revalidatePath("/admin");
+}
+
+// ──────────────────────────────────────────────
+// BOOKINGS — Session management
+// ──────────────────────────────────────────────
+export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active") {
+  const where = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
+    : filter === "paid" ? { paymentStatus: "PAID" as const }
+    : filter === "active" ? { status: "ACTIVE" as const }
+    : {};
+
+  return prisma.session.findMany({
+    where,
+    include: { unit: true },
+    orderBy: { checkInTime: "desc" },
+    take: 100,
+  });
+}
+
+export async function getSessionById(sessionId: number) {
+  return prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: { include: { hardware: true } } },
+  });
+}
+
+export async function markSessionPaid(sessionId: number, paymentId?: string) {
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { paymentStatus: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
+  });
+  revalidatePath("/admin/bookings");
+  revalidatePath(`/admin/bookings/${sessionId}`);
+}
+
+export async function markSessionUnpaid(sessionId: number) {
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { paymentStatus: "UNPAID", paidAt: null, paymentId: null },
+  });
+  revalidatePath("/admin/bookings");
+  revalidatePath(`/admin/bookings/${sessionId}`);
+}
+
+export async function updateSessionDetails(
+  sessionId: number,
+  data: { guestName?: string; guestEmail?: string; bookingRef?: string; notes?: string }
+) {
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: {
+      ...(data.guestName !== undefined && { guestName: data.guestName }),
+      ...(data.guestEmail !== undefined && { guestEmail: data.guestEmail || null }),
+      ...(data.bookingRef !== undefined && { bookingRef: data.bookingRef || null }),
+      ...(data.notes !== undefined && { notes: data.notes || null }),
+    },
+  });
+  revalidatePath("/admin/bookings");
+  revalidatePath(`/admin/bookings/${sessionId}`);
+}
+
+export async function getUnpaidCount() {
+  return prisma.session.count({
+    where: { status: "COMPLETED", paymentStatus: "UNPAID" },
+  });
 }

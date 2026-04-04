@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,10 +19,29 @@ interface CheckInDialogProps {
   unitName: string;
 }
 
+function copyToClipboard(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text);
+  } else {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  }
+}
+
 export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [open, setOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
+  const [bookingRef, setBookingRef] = useState("");
   const [loading, setLoading] = useState(false);
+  const [copyLabel, setCopyLabel] = useState("Kopiér");
   const [result, setResult] = useState<{
     guestPortalToken: string;
   } | null>(null);
@@ -32,7 +51,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     if (!guestName.trim()) return;
     setLoading(true);
     try {
-      const res = await checkIn(unitId, guestName.trim());
+      const res = await checkIn(unitId, guestName.trim(), guestEmail.trim() || undefined, bookingRef.trim() || undefined);
       setResult(res);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Check-in fejlede");
@@ -44,7 +63,10 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   function handleClose() {
     setOpen(false);
     setGuestName("");
+    setGuestEmail("");
+    setBookingRef("");
     setResult(null);
+    setCopyLabel("Kopiér");
   }
 
   const guestUrl =
@@ -66,7 +88,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
         {!result ? (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <Label htmlFor="guest-name">Gæstens navn</Label>
+              <Label htmlFor="guest-name">Gæstens navn *</Label>
               <Input
                 id="guest-name"
                 value={guestName}
@@ -75,20 +97,39 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
                 autoFocus
               />
             </div>
-            <p className="text-sm text-muted-foreground">
-              Systemet vil automatisk tænde for strøm, aflæse målere og oprette
-              en gæsteportal.
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="booking-ref">Booking nr.</Label>
+                <Input
+                  id="booking-ref"
+                  value={bookingRef}
+                  onChange={(e) => setBookingRef(e.target.value)}
+                  placeholder="F.eks. BK-001"
+                />
+              </div>
+              <div>
+                <Label htmlFor="guest-email">Email</Label>
+                <Input
+                  id="guest-email"
+                  type="email"
+                  value={guestEmail}
+                  onChange={(e) => setGuestEmail(e.target.value)}
+                  placeholder="gæst@email.dk"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Systemet tænder strøm, aflæser målere og opretter gæsteportal.
+              Email bruges til påmindelser om betaling.
             </p>
-            <Button type="submit" disabled={loading || !guestName.trim()}>
+            <Button type="submit" disabled={loading || !guestName.trim()} className="w-full">
               {loading ? "Checker ind..." : "Bekræft check-in"}
             </Button>
           </form>
         ) : (
           <div className="space-y-4">
             <div className="p-4 bg-primary/10 border border-primary/20 rounded-lg">
-              <p className="font-medium text-primary">
-                Check-in gennemført!
-              </p>
+              <p className="font-medium text-primary">Check-in gennemført!</p>
               <p className="text-sm text-primary/80 mt-1">
                 Strøm tændt, målere aflæst, gæsteportal oprettet.
               </p>
@@ -99,9 +140,13 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
                 <Input value={guestUrl} readOnly className="text-xs" />
                 <Button
                   variant="outline"
-                  onClick={() => navigator.clipboard.writeText(guestUrl)}
+                  onClick={() => {
+                    copyToClipboard(guestUrl);
+                    setCopyLabel("Kopieret!");
+                    setTimeout(() => setCopyLabel("Kopiér"), 2000);
+                  }}
                 >
-                  Kopiér
+                  {copyLabel}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">

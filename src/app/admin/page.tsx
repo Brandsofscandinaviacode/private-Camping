@@ -1,12 +1,13 @@
-import { getUnits, getUnitHAStates, getActiveSession } from "@/lib/actions";
+import Link from "next/link";
+import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount } from "@/lib/actions";
 import { UnitCard } from "@/components/admin/cabin-card";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
-import { Tent, Home, Caravan, MapPin } from "lucide-react";
+import { Tent, Home, Caravan, AlertCircle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const units = await getUnits();
+  const [units, unpaidCount] = await Promise.all([getUnits(), getUnpaidCount()]);
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
@@ -70,6 +71,21 @@ export default async function AdminDashboard() {
           <p className="text-2xl font-bold">{caravanCount}</p>
         </div>
       </div>
+
+      {/* Unpaid Alert */}
+      {unpaidCount > 0 && (
+        <Link href="/admin/bookings?filter=unpaid">
+          <div className="flex items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-4 hover:bg-destructive/15 transition-colors cursor-pointer">
+            <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">
+                {unpaidCount} {unpaidCount === 1 ? "booking" : "bookinger"} mangler betaling
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">Klik for at se ubetalte bookinger</p>
+            </div>
+          </div>
+        </Link>
+      )}
 
       {/* Unit Grid */}
       {units.length === 0 ? (

@@ -108,14 +108,25 @@ enum SessionStatus {
   COMPLETED
 }
 
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+}
+
 model Session {
   id     Int  @id @default(autoincrement())
   unitId Int
   unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   guestName        String
+  guestEmail       String?
+  bookingRef       String?           // Booking-nummer
   guestPortalToken String        @unique
   status           SessionStatus @default(ACTIVE)
+  paymentStatus    PaymentStatus @default(UNPAID)
+  paymentId        String?           // FlatPay/Frisbii transaction ID
+  paidAt           DateTime?
 
   checkInTime  DateTime  @default(now())
   checkOutTime DateTime?
@@ -132,6 +143,8 @@ model Session {
   totalElectricityCost Float?
   totalWaterCost       Float?
   totalCost            Float?
+
+  notes String?   // Admin-bemærkninger
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

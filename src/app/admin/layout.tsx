@@ -1,14 +1,18 @@
 import Link from "next/link";
-import { LayoutDashboard, Settings, Tent } from "lucide-react";
+import { LayoutDashboard, Settings, Tent, BookOpen } from "lucide-react";
 import { requireAuth } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { getUnpaidCount } from "@/lib/actions";
 
 export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await requireAuth();
+  const [session, unpaidCount] = await Promise.all([
+    requireAuth(),
+    getUnpaidCount(),
+  ]);
 
   return (
     <div className="flex h-full min-h-screen">
@@ -29,6 +33,18 @@ export default async function AdminLayout({
           >
             <LayoutDashboard className="h-4 w-4" />
             Oversigt
+          </Link>
+          <Link
+            href="/admin/bookings"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+          >
+            <BookOpen className="h-4 w-4" />
+            Bookinger
+            {unpaidCount > 0 && (
+              <span className="ml-auto inline-flex items-center justify-center h-5 min-w-5 px-1.5 text-[10px] font-bold rounded-full bg-destructive text-destructive-foreground">
+                {unpaidCount}
+              </span>
+            )}
           </Link>
           <Link
             href="/admin/settings"
