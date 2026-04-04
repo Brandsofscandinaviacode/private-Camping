@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { LayoutDashboard, Settings, Tent } from "lucide-react";
+import { requireAuth } from "@/lib/auth";
+import { LogoutButton } from "@/components/auth/logout-button";
 
-export default function AdminLayout({
+export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const session = await requireAuth();
+
   return (
     <div className="flex h-full min-h-screen">
       {/* Sidebar */}
@@ -22,18 +26,26 @@ export default function AdminLayout({
             className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent transition-colors"
           >
             <LayoutDashboard className="h-4 w-4" />
-            Dashboard
+            Oversigt
           </Link>
           <Link
             href="/admin/settings"
             className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent transition-colors"
           >
             <Settings className="h-4 w-4" />
-            Settings
+            Indstillinger
           </Link>
         </nav>
-        <div className="p-4 border-t text-xs text-muted-foreground">
-          CampFlow v1.0 &middot; Raspberry Pi 5
+        <div className="p-4 border-t space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              {session.username}
+            </span>
+            <LogoutButton />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            CampFlow v1.0
+          </p>
         </div>
       </aside>
 

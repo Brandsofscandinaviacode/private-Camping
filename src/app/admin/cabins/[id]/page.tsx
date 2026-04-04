@@ -127,7 +127,7 @@ export default async function CabinDetailPage({
                 <p>Ingen hardware konfigureret</p>
                 <Link href="/admin/settings">
                   <Button variant="link" size="sm">
-                    Konfigurér i Settings
+                    Konfigurér i Indstillinger
                   </Button>
                 </Link>
               </CardContent>

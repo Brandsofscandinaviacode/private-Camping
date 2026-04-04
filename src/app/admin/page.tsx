@@ -36,7 +36,7 @@ export default async function AdminDashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <h1 className="text-2xl font-bold">Oversigt</h1>
           <p className="text-muted-foreground">
             {cabins.length} hytter &middot; {occupiedCount} optaget &middot;{" "}
             {vacantCount} ledige

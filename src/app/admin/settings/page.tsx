@@ -2,13 +2,16 @@ import {
   getGlobalSettings,
   getCabins,
 } from "@/lib/actions";
+import { requireAuth } from "@/lib/auth";
 import { SettingsForm } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
+import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { Separator } from "@/components/ui/separator";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
+  const session = await requireAuth();
   const [settings, cabins] = await Promise.all([
     getGlobalSettings(),
     getCabins(),
@@ -23,7 +26,7 @@ export default async function SettingsPage() {
         </p>
       </div>
 
-      {/* HA Connection */}
+      {/* HA Connection & Pricing */}
       <SettingsForm settings={settings} />
 
       <Separator />
@@ -35,7 +38,7 @@ export default async function SettingsPage() {
         </h2>
         {cabins.length === 0 ? (
           <p className="text-muted-foreground">
-            Ingen hytter oprettet endnu. Tilføj hytter fra dashboard.
+            Ingen hytter oprettet endnu. Tilføj hytter fra oversigten.
           </p>
         ) : (
           <div className="space-y-4">
@@ -49,6 +52,11 @@ export default async function SettingsPage() {
           </div>
         )}
       </div>
+
+      <Separator />
+
+      {/* Change Password */}
+      <ChangePasswordForm userId={session.userId!} />
     </div>
   );
 }

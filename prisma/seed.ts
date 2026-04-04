@@ -1,11 +1,13 @@
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
+import bcrypt from "bcryptjs";
 
 const adapter = new PrismaLibSql({ url: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
+  // Default global settings
   const defaults = [
     { key: "price_per_kwh", value: "2.50" },
     { key: "price_per_liter_water", value: "0.05" },
@@ -24,7 +26,25 @@ async function main() {
     });
   }
 
-  console.log("Seed complete: default global settings created.");
+  // Default admin user: admin / admin123
+  // VIGTIGT: Skift adgangskode efter første login!
+  const existingAdmin = await prisma.user.findUnique({
+    where: { username: "admin" },
+  });
+
+  if (!existingAdmin) {
+    const hash = await bcrypt.hash("admin123", 10);
+    await prisma.user.create({
+      data: {
+        username: "admin",
+        passwordHash: hash,
+      },
+    });
+    console.log("Standard admin-bruger oprettet (admin / admin123)");
+    console.log("VIGTIGT: Skift adgangskode efter første login!");
+  }
+
+  console.log("Seed fuldført: standardindstillinger oprettet.");
 }
 
 main()

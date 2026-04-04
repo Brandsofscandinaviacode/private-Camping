@@ -11,6 +11,20 @@ datasource db {
 }
 
 // ──────────────────────────────────────────────
+// Admin User
+// ──────────────────────────────────────────────
+model User {
+  id           Int    @id @default(autoincrement())
+  username     String @unique
+  passwordHash String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// ──────────────────────────────────────────────
 // Global Settings (key-value store)
 // ──────────────────────────────────────────────
 model GlobalSetting {
