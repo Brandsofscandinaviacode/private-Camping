@@ -13,7 +13,7 @@ const sessionOptions = {
     "campflow-default-secret-change-me-in-production-32chars!",
   cookieName: "campflow-session",
   cookieOptions: {
-    secure: process.env.NODE_ENV === "production",
+    secure: false,
     httpOnly: true,
     sameSite: "lax" as const,
   },

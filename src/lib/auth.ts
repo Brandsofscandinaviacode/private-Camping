@@ -18,7 +18,8 @@ const sessionOptions = {
     "campflow-default-secret-change-me-in-production-32chars!",
   cookieName: "campflow-session",
   cookieOptions: {
-    secure: process.env.NODE_ENV === "production",
+    // secure: false — RPi kører over HTTP på LAN, cookies virker ikke med secure over HTTP
+    secure: false,
     httpOnly: true,
     sameSite: "lax" as const,
     maxAge: 60 * 60 * 24 * 7, // 7 dage
@@ -31,23 +32,28 @@ export async function getSession() {
 }
 
 export async function login(username: string, password: string) {
-  const user = await prisma.user.findUnique({ where: { username } });
-  if (!user) {
-    return { error: "Forkert brugernavn eller adgangskode" };
+  try {
+    const user = await prisma.user.findUnique({ where: { username } });
+    if (!user) {
+      return { error: "Forkert brugernavn eller adgangskode" };
+    }
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      return { error: "Forkert brugernavn eller adgangskode" };
+    }
+
+    const session = await getSession();
+    session.userId = user.id;
+    session.username = user.username;
+    session.isLoggedIn = true;
+    await session.save();
+
+    return { success: true };
+  } catch (e) {
+    console.error("Login fejl:", e);
+    return { error: "Der opstod en serverfejl. Tjek logs." };
   }
-
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) {
-    return { error: "Forkert brugernavn eller adgangskode" };
-  }
-
-  const session = await getSession();
-  session.userId = user.id;
-  session.username = user.username;
-  session.isLoggedIn = true;
-  await session.save();
-
-  return { success: true };
 }
 
 export async function logout() {
