@@ -1,7 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// CampFlow - Camping Site Management Platform
+// Database: SQLite (Raspberry Pi 5 deployment)
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +8,106 @@ generator client {
 
 datasource db {
   provider = "sqlite"
+}
+
+// ──────────────────────────────────────────────
+// Global Settings (key-value store)
+// ──────────────────────────────────────────────
+model GlobalSetting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+
+  @@map("global_settings")
+}
+
+// ──────────────────────────────────────────────
+// Cabin
+// ──────────────────────────────────────────────
+enum CabinStatus {
+  VACANT
+  OCCUPIED
+}
+
+model Cabin {
+  id       Int         @id @default(autoincrement())
+  name     String      @unique
+  status   CabinStatus @default(VACANT)
+
+  hardware CabinHardware?
+  sessions Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("cabins")
+}
+
+// ──────────────────────────────────────────────
+// Cabin Hardware Configuration (1-to-1 with Cabin)
+// Modular: each capability is a boolean flag + optional HA entity IDs.
+// If a cabin lacks a feature, the flag is false and entity IDs are null.
+// ──────────────────────────────────────────────
+model CabinHardware {
+  id      Int  @id @default(autoincrement())
+  cabinId Int  @unique
+  cabin   Cabin @relation(fields: [cabinId], references: [id], onDelete: Cascade)
+
+  // Electricity (Shelly Pro 4PM or similar)
+  hasElectricity           Boolean @default(false)
+  electricitySwitchEntityId String? // e.g. "switch.cabin_1_power"
+  electricityMeterEntityId  String? // e.g. "sensor.cabin_1_energy" (cumulative kWh)
+
+  // Water (LoRaWAN meter or similar)
+  hasWater            Boolean @default(false)
+  waterMeterEntityId  String? // e.g. "sensor.cabin_1_water" (cumulative liters)
+
+  // Climate (thermostat / heat pump)
+  hasClimate      Boolean @default(false)
+  climateEntityId String? // e.g. "climate.cabin_1_hvac"
+
+  // Smart Lock
+  hasSmartLock  Boolean @default(false)
+  lockEntityId  String? // e.g. "lock.cabin_1_door"
+
+  @@map("cabin_hardware")
+}
+
+// ──────────────────────────────────────────────
+// Guest Session (a single stay)
+// ──────────────────────────────────────────────
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+}
+
+model Session {
+  id      Int    @id @default(autoincrement())
+  cabinId Int
+  cabin   Cabin  @relation(fields: [cabinId], references: [id], onDelete: Cascade)
+
+  guestName        String
+  guestPortalToken String        @unique // UUID — used in /guest/[token] URL
+  status           SessionStatus @default(ACTIVE)
+
+  checkInTime  DateTime  @default(now())
+  checkOutTime DateTime?
+
+  // Baseline readings captured from HA at check-in
+  startKwh         Float?
+  startWaterLiters Float?
+
+  // End readings captured from HA at check-out
+  endKwh         Float?
+  endWaterLiters Float?
+
+  // Calculated totals at check-out
+  totalElectricityCost Float?
+  totalWaterCost       Float?
+  totalCost            Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("sessions")
 }
