@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { ChevronDown, ChevronRight, Save } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { updateUnitHardware } from "@/lib/actions";
+import { updateUnitHardware, testEntityId } from "@/lib/actions";
 
 interface CabinHardwareFormProps {
   cabin: { id: number; name: string };
@@ -21,6 +21,65 @@ interface CabinHardwareFormProps {
     hasSmartLock: boolean;
     lockEntityId: string | null;
   } | null;
+}
+
+interface TestResult {
+  ok: boolean;
+  value: string;
+  message: string;
+}
+
+function EntityTestButton({ entityId }: { entityId: string }) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<TestResult | null>(null);
+
+  async function handleTest() {
+    if (!entityId.trim()) {
+      setResult({ ok: false, value: "", message: "Udfyld entity ID først" });
+      return;
+    }
+    setTesting(true);
+    setResult(null);
+    try {
+      const res = await testEntityId(entityId.trim());
+      setResult(res);
+    } catch {
+      setResult({ ok: false, value: "", message: "Uventet fejl" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={handleTest}
+        disabled={testing}
+        className="text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 flex items-center gap-1"
+      >
+        {testing ? (
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        ) : (
+          <span className="inline-block h-2.5 w-2.5 text-center">▶</span>
+        )}
+        {testing ? "Tester..." : "Test sensor"}
+      </button>
+      {result && (
+        <div className={`mt-1 text-[11px] px-2 py-1 rounded ${
+          result.ok
+            ? "bg-primary/10 text-primary"
+            : "bg-destructive/10 text-destructive"
+        }`}>
+          {result.ok ? (
+            <span><strong>{result.value}</strong> — {result.message}</span>
+          ) : (
+            <span>{result.message}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
@@ -111,6 +170,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                     placeholder="switch.cabin_1_power"
                     className="mt-1 h-7 text-xs"
                   />
+                  <EntityTestButton entityId={values.electricitySwitchEntityId} />
                 </div>
                 <div>
                   <Label className="text-[11px] text-muted-foreground">Meter Entity ID (kWh)</Label>
@@ -122,6 +182,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                     placeholder="sensor.cabin_1_energy"
                     className="mt-1 h-7 text-xs"
                   />
+                  <EntityTestButton entityId={values.electricityMeterEntityId} />
                 </div>
               </div>
             )}
@@ -149,6 +210,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                   placeholder="sensor.cabin_1_water"
                   className="mt-1 h-7 text-xs"
                 />
+                <EntityTestButton entityId={values.waterMeterEntityId} />
               </div>
             )}
           </div>
@@ -175,6 +237,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                   placeholder="climate.cabin_1_hvac"
                   className="mt-1 h-7 text-xs"
                 />
+                <EntityTestButton entityId={values.climateEntityId} />
               </div>
             )}
           </div>
@@ -201,6 +264,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                   placeholder="lock.cabin_1_door"
                   className="mt-1 h-7 text-xs"
                 />
+                <EntityTestButton entityId={values.lockEntityId} />
               </div>
             )}
           </div>

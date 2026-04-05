@@ -26,6 +26,69 @@ export async function getGlobalSettings() {
 }
 
 // ──────────────────────────────────────────────
+// HA Connection Testing
+// ──────────────────────────────────────────────
+export async function testHAConnection(): Promise<{ ok: boolean; message: string }> {
+  const settings = await prisma.globalSetting.findMany();
+  const map = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+  const url = map.ha_url;
+  const token = map.ha_token;
+
+  if (!url) return { ok: false, message: "HA URL er ikke udfyldt" };
+  if (!token) return { ok: false, message: "HA Token er ikke udfyldt" };
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    return { ok: false, message: `URL skal starte med http:// eller https:// — nuværende: "${url}"` };
+  }
+
+  try {
+    const res = await fetch(`${url}/api/`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (res.status === 401) return { ok: false, message: "Ugyldigt token — tjek dit Long-Lived Access Token" };
+    if (res.status === 403) return { ok: false, message: "Adgang nægtet — tokenet har ikke tilstrækkelige rettigheder" };
+    if (!res.ok) return { ok: false, message: `HA svarede med fejl: ${res.status} ${res.statusText}` };
+
+    const data = await res.json();
+    return { ok: true, message: `Forbundet til Home Assistant (${data.version || "ukendt version"})` };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED")) {
+      return { ok: false, message: `Kan ikke nå ${url} — er HA tændt og på netværket?` };
+    }
+    if (msg.includes("timeout") || msg.includes("AbortError")) {
+      return { ok: false, message: `Timeout — ${url} svarer ikke inden for 10 sekunder` };
+    }
+    return { ok: false, message: `Fejl: ${msg}` };
+  }
+}
+
+export async function testEntityId(entityId: string): Promise<{ ok: boolean; value: string; message: string }> {
+  if (!entityId.trim()) return { ok: false, value: "", message: "Entity ID er tomt" };
+
+  try {
+    const state = await ha.getEntityState(entityId);
+    const attrs = state.attributes;
+    const unit = (attrs.unit_of_measurement as string) || "";
+    const friendly = (attrs.friendly_name as string) || "";
+    return {
+      ok: true,
+      value: `${state.state}${unit ? ` ${unit}` : ""}`,
+      message: friendly || entityId,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("404")) return { ok: false, value: "", message: `Entity "${entityId}" findes ikke i HA` };
+    if (msg.includes("401")) return { ok: false, value: "", message: "HA token er ugyldigt" };
+    return { ok: false, value: "", message: `Fejl: ${msg}` };
+  }
+}
+
+// ──────────────────────────────────────────────
 // Unit CRUD
 // ──────────────────────────────────────────────
 export async function createUnit(

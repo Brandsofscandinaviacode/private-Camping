@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Save } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -23,6 +23,8 @@ export function SettingsForm({ settings }: SettingsFormProps) {
     default_vacant_temp: settings.default_vacant_temp || "15",
   });
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   function handleChange(key: string, value: string) {
     setValues((v) => ({ ...v, [key]: value }));
@@ -35,8 +37,26 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         Object.entries(values).map(([key, value]) => ({ key, value }))
       );
       setSaved(true);
+      setTestResult(null);
       setTimeout(() => setSaved(false), 3000);
     });
+  }
+
+  async function handleTest() {
+    // Save first, then test
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await updateMultipleSettings(
+        Object.entries(values).map(([key, value]) => ({ key, value }))
+      );
+      const result = await testHAConnection();
+      setTestResult(result);
+    } catch {
+      setTestResult({ ok: false, message: "Uventet fejl under test" });
+    } finally {
+      setTesting(false);
+    }
   }
 
   return (
@@ -53,9 +73,12 @@ export function SettingsForm({ settings }: SettingsFormProps) {
               id="ha_url"
               value={values.ha_url}
               onChange={(e) => handleChange("ha_url", e.target.value)}
-              placeholder="http://homeassistant.local:8123"
+              placeholder="http://192.168.1.13:8123"
               className="mt-1 h-8 text-sm"
             />
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Skal starte med http:// eller https://
+            </p>
           </div>
           <div>
             <Label htmlFor="ha_token" className="text-xs text-muted-foreground">Long-Lived Access Token</Label>
@@ -70,6 +93,39 @@ export function SettingsForm({ settings }: SettingsFormProps) {
             <p className="text-[11px] text-muted-foreground mt-1">
               HA &rarr; Profil &rarr; Langvarige adgangstokener
             </p>
+          </div>
+
+          {/* Test connection */}
+          <div className="pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={handleTest}
+              disabled={testing}
+            >
+              {testing ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : (
+                <Wifi className="h-3 w-3 mr-1.5" />
+              )}
+              {testing ? "Tester..." : "Test forbindelse"}
+            </Button>
+
+            {testResult && (
+              <div className={`mt-2 flex items-start gap-2 text-xs p-2.5 rounded-md ${
+                testResult.ok
+                  ? "bg-primary/10 text-primary"
+                  : "bg-destructive/10 text-destructive"
+              }`}>
+                {testResult.ok ? (
+                  <Wifi className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                ) : (
+                  <WifiOff className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                )}
+                <span>{testResult.message}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
