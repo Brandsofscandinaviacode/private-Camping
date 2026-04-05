@@ -16,12 +16,14 @@ interface CheckOutDialogProps {
   sessionId: number;
   guestName: string;
   unitName: string;
+  autoPowerOff?: boolean;
 }
 
 export function CheckOutDialog({
   sessionId,
   guestName,
   unitName,
+  autoPowerOff = false,
 }: CheckOutDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -69,8 +71,9 @@ export function CheckOutDialog({
               fra <strong>{unitName}</strong>?
             </p>
             <p className="text-sm text-muted-foreground">
-              Systemet vil aflæse målere, beregne forbrug, slukke strøm og låse
-              døren.
+              {autoPowerOff
+                ? "Systemet vil aflæse målere, beregne forbrug, slukke strøm og låse døren."
+                : "Systemet vil aflæse målere og beregne forbrug."}
             </p>
             <div className="flex gap-2">
               <Button

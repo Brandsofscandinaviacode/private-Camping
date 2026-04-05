@@ -21,6 +21,9 @@ export function SettingsForm({ settings }: SettingsFormProps) {
     currency: settings.currency || "DKK",
     default_occupied_temp: settings.default_occupied_temp || "21",
     default_vacant_temp: settings.default_vacant_temp || "15",
+    auto_power_off_on_checkout: settings.auto_power_off_on_checkout || "false",
+    invoice_email_enabled: settings.invoice_email_enabled || "false",
+    invoice_email_day: settings.invoice_email_day || "1",
   });
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -198,6 +201,71 @@ export function SettingsForm({ settings }: SettingsFormProps) {
               />
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Checkout Settings */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Check-out</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.auto_power_off_on_checkout === "true"}
+              onChange={(e) => handleChange("auto_power_off_on_checkout", e.target.checked ? "true" : "false")}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <div>
+              <p className="text-sm font-medium">Sluk strøm automatisk ved check-out</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Når en gæst betaler og checker ud, slukkes strømmen og døren låses automatisk
+              </p>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      {/* Invoice Email Settings */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Faktura-email (fastliggere)</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.invoice_email_enabled === "true"}
+              onChange={(e) => handleChange("invoice_email_enabled", e.target.checked ? "true" : "false")}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <div>
+              <p className="text-sm font-medium">Send faktura automatisk via email</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Fastliggere modtager automatisk en faktura med link til deres gæsteportal
+              </p>
+            </div>
+          </label>
+
+          {values.invoice_email_enabled === "true" && (
+            <div>
+              <Label className="text-sm text-muted-foreground">Send faktura den</Label>
+              <div className="flex items-center gap-3 mt-1">
+                <select
+                  value={values.invoice_email_day}
+                  onChange={(e) => handleChange("invoice_email_day", e.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="1">1. i måneden</option>
+                  <option value="14">14. i måneden</option>
+                </select>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Fakturaen dækker forbruget fra den foregående måned
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

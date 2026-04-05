@@ -262,32 +262,40 @@ export function GuestPortalClient({
             </CardHeader>
             <CardContent className="space-y-2">
               {invoices.map((inv) => (
-                <div key={inv.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                  <div>
-                    <p className="text-sm font-medium">
-                      {new Date(inv.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" })}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      El: {inv.electricityCost.toFixed(2)} · Vand: {inv.waterCost.toFixed(2)}
-                    </p>
+                <div key={inv.id} className="p-3 rounded-lg bg-muted/50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">
+                        {new Date(inv.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" })}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        El: {inv.electricityCost.toFixed(2)} · Vand: {inv.waterCost.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm">{inv.totalAmount.toFixed(2)} DKK</span>
+                      <Badge variant={inv.status === "PAID" ? "default" : "secondary"}
+                        className={inv.status === "PAID" ? "bg-primary/20 text-primary" :
+                          inv.status === "OVERDUE" ? "bg-destructive/20 text-destructive" : ""}>
+                        {inv.status === "PENDING" ? "Afventer" :
+                         inv.status === "PAID" ? "Betalt" :
+                         inv.status === "OVERDUE" ? "Forfalden" : "Kladde"}
+                      </Badge>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-sm">{inv.totalAmount.toFixed(2)} DKK</span>
-                    <Badge variant={inv.status === "PAID" ? "default" : "secondary"}
-                      className={inv.status === "PAID" ? "bg-primary/20 text-primary" :
-                        inv.status === "OVERDUE" ? "bg-destructive/20 text-destructive" : ""}>
-                      {inv.status === "PENDING" ? "Afventer" :
-                       inv.status === "PAID" ? "Betalt" :
-                       inv.status === "OVERDUE" ? "Forfalden" : "Kladde"}
-                    </Badge>
-                  </div>
+                  {(inv.status === "PENDING" || inv.status === "OVERDUE") && (
+                    <Button variant="outline" size="sm" disabled className="w-full text-xs">
+                      <CreditCard className="h-3.5 w-3.5 mr-1.5" />
+                      Betal faktura (FlatPay kommer snart)
+                    </Button>
+                  )}
                 </div>
               ))}
             </CardContent>
           </Card>
         )}
 
-        {/* Payment placeholder */}
+        {/* Payment placeholder — only for short-term stays */}
         {isActive && !isLongTerm && (
           <Card className="border-dashed border-border/50">
             <CardContent className="py-6 text-center">

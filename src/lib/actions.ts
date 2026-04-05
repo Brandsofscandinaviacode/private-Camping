@@ -296,15 +296,21 @@ export async function checkOut(sessionId: number) {
 
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0);
 
-  // Turn off
-  if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
-    try { await ha.turnOff(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
+  // Turn off devices based on auto_power_off setting
+  const globalSettings = await getGlobalSettings();
+  const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
+
+  if (autoPowerOff) {
+    if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
+      try { await ha.turnOff(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
+    }
+    if (hw?.hasSmartLock && hw.lockEntityId) {
+      try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
+    }
   }
+  // Always set climate to vacant temp
   if (hw?.hasClimate && hw.climateEntityId) {
     try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { console.error("HA:", e); }
-  }
-  if (hw?.hasSmartLock && hw.lockEntityId) {
-    try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
   }
 
   await prisma.session.update({

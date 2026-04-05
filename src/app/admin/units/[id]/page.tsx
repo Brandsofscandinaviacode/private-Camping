@@ -7,6 +7,7 @@ import {
   getUnitWithDetails,
   getUnitHAStates,
   getActiveSession,
+  getGlobalSettings,
 } from "@/lib/actions";
 import { CheckInDialog } from "@/components/admin/check-in-dialog";
 import { CheckOutDialog } from "@/components/admin/check-out-dialog";
@@ -33,10 +34,12 @@ export default async function UnitDetailPage({
   const unit = await getUnitWithDetails(unitId);
   if (!unit) notFound();
 
-  const [haStates, activeSession] = await Promise.all([
+  const [haStates, activeSession, globalSettings] = await Promise.all([
     getUnitHAStates(unitId).catch(() => null),
     getActiveSession(unitId),
+    getGlobalSettings(),
   ]);
+  const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
 
   const isOccupied = unit.status === "OCCUPIED";
   const hw = unit.hardware;
@@ -102,6 +105,7 @@ export default async function UnitDetailPage({
                   sessionId={activeSession.id}
                   guestName={activeSession.guestName}
                   unitName={unitDisplayName}
+                  autoPowerOff={autoPowerOff}
                 />
               </div>
             </div>
