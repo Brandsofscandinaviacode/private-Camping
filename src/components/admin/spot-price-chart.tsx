@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getSpotPricesForDate, getHourlyConsumptionForDate } from "@/lib/actions";
+import { getSpotPricesForDate, getHourlyConsumptionForDate, getLatestSpotPriceDate, testEdsApi } from "@/lib/actions";
 
 interface ChartEntry {
   hour: string;
@@ -39,10 +39,14 @@ function formatDanishDate(date: Date): string {
 }
 
 export function SpotPriceChart() {
-  const [selectedDate, setSelectedDate] = useState(() => formatDate(new Date()));
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [latestDate, setLatestDate] = useState<string | null>(null);
   const [data, setData] = useState<ChartEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [initializing, setInitializing] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testing, setTesting] = useState(false);
   const [pricingInfo, setPricingInfo] = useState<{
     mode: string;
     fixedPrice: number;
@@ -118,18 +122,57 @@ export function SpotPriceChart() {
     }
   }, []);
 
+  // On mount: fetch latest available date from EDS
   useEffect(() => {
-    loadData(selectedDate);
+    getLatestSpotPriceDate().then((range) => {
+      setLatestDate(range.latest);
+      setSelectedDate(range.latest);
+      setInitializing(false);
+    }).catch(() => {
+      setSelectedDate(formatDate(new Date()));
+      setInitializing(false);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (selectedDate) loadData(selectedDate);
   }, [selectedDate, loadData]);
 
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testEdsApi();
+      setTestResult({ ok: result.ok, message: result.message });
+      if (result.ok && result.latestDate) {
+        setLatestDate(result.latestDate);
+      }
+    } catch (e) {
+      setTestResult({ ok: false, message: e instanceof Error ? e.message : "Uventet fejl" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   function changeDate(delta: number) {
+    if (!selectedDate) return;
     const d = new Date(selectedDate);
     d.setDate(d.getDate() + delta);
     setSelectedDate(formatDate(d));
   }
 
-  const isToday = selectedDate === formatDate(new Date());
-  const isTomorrow = selectedDate === formatDate(new Date(Date.now() + 86400000));
+  if (initializing) {
+    return (
+      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Finder tilgængelige elpriser...
+      </div>
+    );
+  }
+
+  const displayDate = selectedDate || formatDate(new Date());
+  const isToday = displayDate === formatDate(new Date());
+  const isTomorrow = displayDate === formatDate(new Date(Date.now() + 86400000));
 
   const modeLabels: Record<string, string> = {
     fixed: "Fast pris",
@@ -158,9 +201,12 @@ export function SpotPriceChart() {
           <ChevronLeft className="h-4 w-4 mr-1" /> Forrige dag
         </Button>
         <div className="text-center">
-          <p className="font-semibold capitalize">{formatDanishDate(new Date(selectedDate))}</p>
+          <p className="font-semibold capitalize">{formatDanishDate(new Date(displayDate))}</p>
           {isToday && <span className="text-xs text-primary font-medium">I dag</span>}
           {isTomorrow && <span className="text-xs text-blue-600 font-medium">I morgen</span>}
+          {latestDate && displayDate === latestDate && !isToday && !isTomorrow && (
+            <span className="text-xs text-green-600 font-medium">Nyeste data</span>
+          )}
         </div>
         <Button variant="outline" size="sm" onClick={() => changeDate(1)}>
           Næste dag <ChevronRight className="h-4 w-4 ml-1" />
@@ -168,17 +214,19 @@ export function SpotPriceChart() {
       </div>
 
       {/* Quick date buttons */}
-      <div className="flex gap-2 justify-center">
-        <button
-          onClick={() => setSelectedDate(formatDate(new Date(Date.now() - 86400000)))}
-          className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-            selectedDate === formatDate(new Date(Date.now() - 86400000))
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground hover:bg-muted/80"
-          }`}
-        >
-          I går
-        </button>
+      <div className="flex flex-wrap gap-2 justify-center">
+        {latestDate && (
+          <button
+            onClick={() => setSelectedDate(latestDate)}
+            className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+              displayDate === latestDate
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            Nyeste data ({latestDate})
+          </button>
+        )}
         <button
           onClick={() => setSelectedDate(formatDate(new Date()))}
           className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
@@ -189,20 +237,10 @@ export function SpotPriceChart() {
         >
           I dag
         </button>
-        <button
-          onClick={() => setSelectedDate(formatDate(new Date(Date.now() + 86400000)))}
-          className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-            isTomorrow
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground hover:bg-muted/80"
-          }`}
-        >
-          I morgen
-        </button>
         <div className="ml-2">
           <input
             type="date"
-            value={selectedDate}
+            value={displayDate}
             onChange={(e) => setSelectedDate(e.target.value)}
             className="h-7 text-xs rounded-md border border-input bg-background px-2"
           />
@@ -230,8 +268,22 @@ export function SpotPriceChart() {
           {error}
         </div>
       ) : validPrices.length === 0 ? (
-        <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
-          Ingen prisdata tilgængelig for denne dato
+        <div className="h-72 flex flex-col items-center justify-center gap-3">
+          <p className="text-sm text-muted-foreground">Ingen prisdata tilgængelig for {displayDate}</p>
+          {latestDate && displayDate !== latestDate && (
+            <p className="text-xs text-muted-foreground">
+              Nyeste data er fra <button onClick={() => setSelectedDate(latestDate)} className="underline text-primary hover:text-primary/80">{latestDate}</button>
+            </p>
+          )}
+          <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
+            {testing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            {testing ? "Tester..." : "Test API-forbindelse"}
+          </Button>
+          {testResult && (
+            <div className={`text-xs px-3 py-2 rounded-lg ${testResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+              {testResult.message}
+            </div>
+          )}
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={340}>

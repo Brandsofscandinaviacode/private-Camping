@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -313,6 +313,43 @@ export function HASettings({ settings }: SettingsFormProps) {
 
 // ─── NOTIFICATIONS TAB ───
 export function NotificationSettings({ settings }: SettingsFormProps) {
+  const [smsTestNumber, setSmsTestNumber] = useState("");
+  const [smsTestResult, setSmsTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [smsTesting, setSmsTesting] = useState(false);
+  const [emailTestAddr, setEmailTestAddr] = useState("");
+  const [emailTestResult, setEmailTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [emailTesting, setEmailTesting] = useState(false);
+
+  async function handleTestSMS() {
+    setSmsTesting(true);
+    setSmsTestResult(null);
+    try {
+      // Save settings first so Twilio credentials are up to date
+      await updateMultipleSettings(Object.entries(values).map(([key, value]) => ({ key, value })));
+      const result = await testSMS(smsTestNumber);
+      setSmsTestResult(result);
+    } catch {
+      setSmsTestResult({ ok: false, message: "Uventet fejl" });
+    } finally {
+      setSmsTesting(false);
+    }
+  }
+
+  async function handleTestEmail() {
+    setEmailTesting(true);
+    setEmailTestResult(null);
+    try {
+      // Save settings first so SMTP credentials are up to date
+      await updateMultipleSettings(Object.entries(values).map(([key, value]) => ({ key, value })));
+      const result = await testEmail(emailTestAddr);
+      setEmailTestResult(result);
+    } catch {
+      setEmailTestResult({ ok: false, message: "Uventet fejl" });
+    } finally {
+      setEmailTesting(false);
+    }
+  }
+
   const [values, setValues] = useState({
     notifications_sms_enabled: settings.notifications_sms_enabled || "false",
     twilio_account_sid: settings.twilio_account_sid || "",
@@ -381,6 +418,26 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
                 <Label className="text-sm text-muted-foreground">Telefonnummer (afsender)</Label>
                 <Input value={values.twilio_phone_number} onChange={(e) => h("twilio_phone_number", e.target.value)} placeholder="+45XXXXXXXX" className="mt-1" />
               </div>
+              <div className="pt-2 border-t border-border mt-3">
+                <p className="text-sm font-medium mb-2">Test SMS</p>
+                <div className="flex gap-2">
+                  <Input
+                    value={smsTestNumber}
+                    onChange={(e) => setSmsTestNumber(e.target.value)}
+                    placeholder="+45XXXXXXXX"
+                    className="flex-1"
+                  />
+                  <Button variant="outline" size="sm" onClick={handleTestSMS} disabled={smsTesting || !smsTestNumber.trim()}>
+                    {smsTesting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    {smsTesting ? "Sender..." : "Send test-SMS"}
+                  </Button>
+                </div>
+                {smsTestResult && (
+                  <div className={`mt-2 text-sm p-2.5 rounded-lg ${smsTestResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                    {smsTestResult.message}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -420,6 +477,26 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
               <div>
                 <Label className="text-sm text-muted-foreground">Afsender-adresse (valgfri)</Label>
                 <Input value={values.smtp_from} onChange={(e) => h("smtp_from", e.target.value)} placeholder="noreply@camping.dk" className="mt-1" />
+              </div>
+              <div className="pt-2 border-t border-border mt-3">
+                <p className="text-sm font-medium mb-2">Test email</p>
+                <div className="flex gap-2">
+                  <Input
+                    value={emailTestAddr}
+                    onChange={(e) => setEmailTestAddr(e.target.value)}
+                    placeholder="din@email.dk"
+                    className="flex-1"
+                  />
+                  <Button variant="outline" size="sm" onClick={handleTestEmail} disabled={emailTesting || !emailTestAddr.trim()}>
+                    {emailTesting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    {emailTesting ? "Sender..." : "Send test-email"}
+                  </Button>
+                </div>
+                {emailTestResult && (
+                  <div className={`mt-2 text-sm p-2.5 rounded-lg ${emailTestResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                    {emailTestResult.message}
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -104,6 +104,37 @@ export async function testEntityId(entityId: string): Promise<{ ok: boolean; val
 }
 
 // ──────────────────────────────────────────────
+// SMS / Email Test
+// ──────────────────────────────────────────────
+export async function testSMS(toNumber: string): Promise<{ ok: boolean; message: string }> {
+  if (!toNumber.trim()) return { ok: false, message: "Indtast et telefonnummer" };
+  try {
+    const { sendSMS } = await import("./notifications");
+    const result = await sendSMS(toNumber, "CampSense test-besked. Hvis du modtager denne, virker SMS-notifikationer korrekt!");
+    if (result.ok) return { ok: true, message: `SMS sendt til ${toNumber}` };
+    return { ok: false, message: result.error || "SMS kunne ikke sendes" };
+  } catch (e) {
+    return { ok: false, message: `Fejl: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+export async function testEmail(toAddr: string): Promise<{ ok: boolean; message: string }> {
+  if (!toAddr.trim()) return { ok: false, message: "Indtast en email-adresse" };
+  try {
+    const { sendEmail } = await import("./notifications");
+    const result = await sendEmail(
+      toAddr,
+      "CampSense test-email",
+      "<h2>Test-email fra CampSense</h2><p>Hvis du modtager denne email, virker email-notifikationer korrekt!</p>"
+    );
+    if (result.ok) return { ok: true, message: `Email sendt til ${toAddr}` };
+    return { ok: false, message: result.error || "Email kunne ikke sendes" };
+  } catch (e) {
+    return { ok: false, message: `Fejl: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ──────────────────────────────────────────────
 // Unit CRUD
 // ──────────────────────────────────────────────
 export async function createUnit(
@@ -1072,6 +1103,38 @@ export async function checkConsumptionAlarms(): Promise<{
 // ──────────────────────────────────────────────
 // SPOT PRICES — daily hourly prices for chart
 // ──────────────────────────────────────────────
+export async function getLatestSpotPriceDate() {
+  const pricing = await getPricing();
+  const { getAvailableDateRange } = await import("./energi-data-service");
+  return getAvailableDateRange(pricing.edsPriceArea);
+}
+
+export async function testEdsApi() {
+  const pricing = await getPricing();
+  const { getAvailableDateRange, fetchSpotPricesForDate } = await import("./energi-data-service");
+  try {
+    const range = await getAvailableDateRange(pricing.edsPriceArea);
+    const prices = await fetchSpotPricesForDate(range.latest, pricing.edsPriceArea);
+    return {
+      ok: true,
+      area: pricing.edsPriceArea,
+      latestDate: range.latest,
+      priceCount: prices.length,
+      samplePrice: prices[0] ? `${prices[0].pricePerKwh.toFixed(4)} kr/kWh kl. ${prices[0].hour.slice(11, 16)}` : null,
+      message: `Forbindelse OK — ${prices.length} timepriser for ${range.latest}`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      area: pricing.edsPriceArea,
+      latestDate: null,
+      priceCount: 0,
+      samplePrice: null,
+      message: `Fejl: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
 export async function getSpotPricesForDate(date: string) {
   const pricing = await getPricing();
   const { fetchSpotPricesForDate } = await import("./energi-data-service");
