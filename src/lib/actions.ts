@@ -1068,3 +1068,66 @@ export async function checkConsumptionAlarms(): Promise<{
 
   return { alerts };
 }
+
+// ──────────────────────────────────────────────
+// SPOT PRICES — daily hourly prices for chart
+// ──────────────────────────────────────────────
+export async function getSpotPricesForDate(date: string) {
+  const pricing = await getPricing();
+  const { fetchSpotPricesForDate } = await import("./energi-data-service");
+  const prices = await fetchSpotPricesForDate(date, pricing.edsPriceArea);
+  return {
+    prices,
+    pricingMode: pricing.pricingMode,
+    fixedPrice: pricing.pricePerKwh,
+    surcharge: pricing.elSurcharge,
+    area: pricing.edsPriceArea,
+  };
+}
+
+// Get hourly consumption rate for a given date (from consumption logs)
+export async function getHourlyConsumptionForDate(date: string) {
+  const startOfDay = new Date(`${date}T00:00:00`);
+  const endOfDay = new Date(`${date}T23:59:59`);
+
+  const logs = await prisma.consumptionLog.findMany({
+    where: {
+      recordedAt: { gte: startOfDay, lte: endOfDay },
+    },
+    orderBy: { recordedAt: "asc" },
+  });
+
+  // Group by hour and sum electricity across all units
+  const hourlyMap = new Map<string, { totalKwh: number; count: number }>();
+
+  // We need pairs of consecutive logs per unit to compute rate
+  const byUnit = new Map<number, typeof logs>();
+  for (const log of logs) {
+    const arr = byUnit.get(log.unitId) || [];
+    arr.push(log);
+    byUnit.set(log.unitId, arr);
+  }
+
+  for (const [, unitLogs] of byUnit) {
+    for (let i = 1; i < unitLogs.length; i++) {
+      const prev = unitLogs[i - 1];
+      const curr = unitLogs[i];
+      if (prev.electricityKwh === null || curr.electricityKwh === null) continue;
+
+      const diffHours = (curr.recordedAt.getTime() - prev.recordedAt.getTime()) / 3600000;
+      if (diffHours <= 0 || diffHours > 2) continue; // skip gaps
+
+      const kwhRate = (curr.electricityKwh - prev.electricityKwh) / diffHours;
+      const hourKey = curr.recordedAt.toISOString().slice(0, 13) + ":00:00";
+
+      const existing = hourlyMap.get(hourKey) || { totalKwh: 0, count: 0 };
+      existing.totalKwh += Math.max(0, kwhRate);
+      existing.count++;
+      hourlyMap.set(hourKey, existing);
+    }
+  }
+
+  return Array.from(hourlyMap.entries())
+    .map(([hour, { totalKwh }]) => ({ hour, kwhPerHour: parseFloat(totalKwh.toFixed(3)) }))
+    .sort((a, b) => a.hour.localeCompare(b.hour));
+}

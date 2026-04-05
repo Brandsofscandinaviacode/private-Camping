@@ -29,6 +29,38 @@ export async function fetchSpotPrices(area: "DK1" | "DK2" = "DK1"): Promise<Spot
   return data.records || [];
 }
 
+// Fetch spot prices for a specific date (full day 00:00–23:00)
+export async function fetchSpotPricesForDate(
+  date: string, // "YYYY-MM-DD"
+  area: "DK1" | "DK2" = "DK1"
+): Promise<{ hour: string; pricePerKwh: number }[]> {
+  const startStr = `${date}T00:00`;
+  const endStr = `${date}T23:59`;
+
+  const url = `https://api.energidataservice.dk/dataset/Elspotprices?offset=0&start=${startStr}&end=${endStr}&filter={"PriceArea":"${area}"}&sort=HourDK asc`;
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000), next: { revalidate: 300 } });
+  if (!res.ok) throw new Error(`EDS API fejl: ${res.status}`);
+
+  const data: EdsResponse = await res.json();
+  return (data.records || []).map((p) => ({
+    hour: p.HourDK,
+    pricePerKwh: p.SpotPriceDKK / 1000,
+  }));
+}
+
+// Get the available date range from the API
+export async function getAvailableDateRange(area: "DK1" | "DK2" = "DK1"): Promise<{ earliest: string; latest: string }> {
+  // EDS typically has data from ~2020 onwards and up to tomorrow
+  // Fetch the earliest record to determine range
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 24 * 3600000);
+  return {
+    earliest: "2020-01-01",
+    latest: tomorrow.toISOString().slice(0, 10),
+  };
+}
+
 // Get the current hour's spot price in DKK/kWh
 export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<number | null> {
   try {

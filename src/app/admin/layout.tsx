@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { LayoutDashboard, Settings, Tent, BookOpen } from "lucide-react";
+import { LayoutDashboard, Settings, Tent, BookOpen, Zap } from "lucide-react";
 import { requireAuth } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { getUnpaidCount } from "@/lib/actions";
@@ -50,6 +50,13 @@ export default async function AdminLayout({
                   {unpaidCount}
                 </span>
               )}
+            </Link>
+            <Link
+              href="/admin/elpriser"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+            >
+              <Zap className="h-[18px] w-[18px]" />
+              Elpriser
             </Link>
           </div>
 
