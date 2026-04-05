@@ -382,25 +382,38 @@ export async function getUnitHAStates(unitId: number) {
   let powerOn: boolean | null = null;
   let temperature: number | null = null;
   let locked: boolean | null = null;
+  let anySuccess = false;
 
-  try {
-    if (hw.hasElectricity && hw.electricitySwitchEntityId) {
+  if (hw.hasElectricity && hw.electricitySwitchEntityId) {
+    try {
       const state = await ha.getEntityState(hw.electricitySwitchEntityId);
       powerOn = state.state === "on";
-    }
-    if (hw.hasClimate && hw.climateEntityId) {
+      anySuccess = true;
+    } catch { /* entity unavailable */ }
+  }
+  if (hw.hasClimate && hw.climateEntityId) {
+    try {
       const state = await ha.getEntityState(hw.climateEntityId);
       temperature = typeof state.attributes.current_temperature === "number"
         ? state.attributes.current_temperature : null;
-    }
-    if (hw.hasSmartLock && hw.lockEntityId) {
+      anySuccess = true;
+    } catch { /* entity unavailable */ }
+  }
+  if (hw.hasSmartLock && hw.lockEntityId) {
+    try {
       const state = await ha.getEntityState(hw.lockEntityId);
       locked = state.state === "locked";
-    }
-    return { powerOn, temperature, locked, haReachable: true };
-  } catch {
-    return { powerOn: null, temperature: null, locked: null, haReachable: false };
+      anySuccess = true;
+    } catch { /* entity unavailable */ }
   }
+
+  // If no entities are configured, check basic HA connectivity
+  if (!anySuccess) {
+    const reachable = await ha.checkHAConnection();
+    return { powerOn, temperature, locked, haReachable: reachable };
+  }
+
+  return { powerOn, temperature, locked, haReachable: true };
 }
 
 // ──────────────────────────────────────────────
