@@ -1194,3 +1194,80 @@ export async function getHourlyConsumptionForDate(date: string) {
     .map(([hour, { totalKwh }]) => ({ hour, kwhPerHour: parseFloat(totalKwh.toFixed(3)) }))
     .sort((a, b) => a.hour.localeCompare(b.hour));
 }
+
+// ──────────────────────────────────────────────
+// QUICKPAY — Payment
+// ──────────────────────────────────────────────
+export async function createSessionPayment(sessionId: number, portalToken: string) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: true },
+  });
+  if (!session) throw new Error("Session ikke fundet");
+  if (session.guestPortalToken !== portalToken) throw new Error("Ugyldigt token");
+  if (session.paymentStatus === "PAID") throw new Error("Allerede betalt");
+
+  const amount = (session.totalCost || 0) + (session.externalPrice || 0);
+  if (amount <= 0) throw new Error("Intet beløb at betale");
+
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+
+  const { createPaymentLink, generateOrderId } = await import("./quickpay");
+  const orderId = generateOrderId("S", sessionId);
+
+  const { paymentId, paymentLink } = await createPaymentLink({
+    orderId,
+    amount,
+    currency: settings.currency || "DKK",
+    continueUrl: `${baseUrl}/guest/${portalToken}?paid=1`,
+    cancelUrl: `${baseUrl}/guest/${portalToken}?cancelled=1`,
+    callbackUrl: `${baseUrl}/api/quickpay/callback`,
+  });
+
+  // Store the QuickPay payment ID on the session
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { paymentId: String(paymentId) },
+  });
+
+  return { paymentLink };
+}
+
+export async function createInvoicePayment(invoiceId: number) {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { unit: true },
+  });
+  if (!invoice) throw new Error("Faktura ikke fundet");
+  if (invoice.status === "PAID") throw new Error("Allerede betalt");
+  if (invoice.totalAmount <= 0) throw new Error("Intet beløb at betale");
+
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+  const portalToken = invoice.unit.longTermPortalToken;
+
+  const { createPaymentLink, generateOrderId } = await import("./quickpay");
+  const orderId = generateOrderId("I", invoiceId);
+
+  const { paymentId, paymentLink } = await createPaymentLink({
+    orderId,
+    amount: invoice.totalAmount,
+    currency: settings.currency || "DKK",
+    continueUrl: `${baseUrl}/guest/${portalToken}?paid=1`,
+    cancelUrl: `${baseUrl}/guest/${portalToken}?cancelled=1`,
+    callbackUrl: `${baseUrl}/api/quickpay/callback`,
+  });
+
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { paymentId: String(paymentId) },
+  });
+
+  return { paymentLink };
+}
+
+export async function testQuickPay() {
+  const { testQuickPayConnection } = await import("./quickpay");
+  return testQuickPayConnection();
+}

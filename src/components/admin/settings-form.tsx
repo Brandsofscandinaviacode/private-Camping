@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -564,6 +564,96 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
               />
             </div>
           </div>
+        </div>
+      </div>
+
+      <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+    </div>
+  );
+}
+
+// ─── PAYMENT TAB (QuickPay) ───
+export function PaymentSettings({ settings }: SettingsFormProps) {
+  const [values, setValues] = useState({
+    quickpay_enabled: settings.quickpay_enabled || "false",
+    quickpay_api_key: settings.quickpay_api_key || "",
+    quickpay_private_key: settings.quickpay_private_key || "",
+  });
+  const { isPending, saved, handleSave } = useSave(values);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  function h(key: string, value: string) {
+    setValues((v) => ({ ...v, [key]: value }));
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await updateMultipleSettings(Object.entries(values).map(([key, value]) => ({ key, value })));
+      const result = await testQuickPay();
+      setTestResult(result);
+    } catch {
+      setTestResult({ ok: false, message: "Uventet fejl under test" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">QuickPay</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" checked={values.quickpay_enabled === "true"} onChange={(e) => h("quickpay_enabled", e.target.checked ? "true" : "false")} className="mt-0.5 h-4 w-4 accent-primary" />
+            <div>
+              <p className="text-sm font-medium">Aktivér QuickPay betaling</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Gæster kan betale online via QuickPay betalingslink</p>
+            </div>
+          </label>
+          {values.quickpay_enabled === "true" && (
+            <div className="space-y-3 pt-1">
+              <div>
+                <Label className="text-sm text-muted-foreground">API-nøgle</Label>
+                <Input type="password" value={values.quickpay_api_key} onChange={(e) => h("quickpay_api_key", e.target.value)} placeholder="Din QuickPay API-nøgle" className="mt-1" />
+                <p className="text-xs text-muted-foreground mt-1.5">Findes under Indstillinger &rarr; Integration &rarr; API i QuickPay Manager</p>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Privat nøgle (til callback-verifikation)</Label>
+                <Input type="password" value={values.quickpay_private_key} onChange={(e) => h("quickpay_private_key", e.target.value)} placeholder="Din QuickPay private key" className="mt-1" />
+                <p className="text-xs text-muted-foreground mt-1.5">Bruges til at verificere callbacks fra QuickPay. Findes under Indstillinger &rarr; Integration &rarr; API</p>
+              </div>
+              <div className="pt-1">
+                <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
+                  {testing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wifi className="h-4 w-4 mr-2" />}
+                  {testing ? "Tester..." : "Test forbindelse"}
+                </Button>
+                {testResult && (
+                  <div className={`mt-3 flex items-start gap-2.5 text-sm p-3 rounded-lg ${testResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                    {testResult.ok ? <Wifi className="h-4 w-4 shrink-0 mt-0.5" /> : <WifiOff className="h-4 w-4 shrink-0 mt-0.5" />}
+                    <span>{testResult.message}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Sådan virker det</h2>
+        </div>
+        <div className="p-5 text-sm text-muted-foreground space-y-2">
+          <p>1. Gæsten ser en <strong>&quot;Betal online&quot;</strong> knap på sin gæsteportal</p>
+          <p>2. Ved klik oprettes en betaling hos QuickPay og gæsten sendes til betalingsvinduet</p>
+          <p>3. Når betalingen er gennemført, sender QuickPay en callback til CampSense</p>
+          <p>4. Betalingsstatus opdateres automatisk til &quot;Betalt&quot;</p>
+          <p className="pt-2 text-xs">Callback URL: <code className="bg-muted px-1.5 py-0.5 rounded">{"{site_url}"}/api/quickpay/callback</code></p>
         </div>
       </div>
 

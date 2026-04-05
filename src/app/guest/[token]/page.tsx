@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getSessionByToken, getUnitByPortalToken, getActiveSession, getLiveConsumption } from "@/lib/actions";
+import { getSessionByToken, getUnitByPortalToken, getActiveSession, getLiveConsumption, getGlobalSettings } from "@/lib/actions";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +10,8 @@ export default async function GuestPortalPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
+  const globalSettings = await getGlobalSettings();
+  const quickpayEnabled = globalSettings.quickpay_enabled === "true";
 
   // Try session-based token first
   const session = await getSessionByToken(token);
@@ -36,6 +38,7 @@ export default async function GuestPortalPage({
         paymentStatus={session.paymentStatus}
         isLongTerm={false}
         invoices={[]}
+        quickpayEnabled={quickpayEnabled}
       />
     );
   }
@@ -76,6 +79,7 @@ export default async function GuestPortalPage({
           status: inv.status,
           paymentToken: inv.paymentToken,
         }))}
+        quickpayEnabled={quickpayEnabled}
       />
     );
   }

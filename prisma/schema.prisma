@@ -128,7 +128,7 @@ model Session {
   guestPortalToken String        @unique
   status           SessionStatus @default(ACTIVE)
   paymentStatus    PaymentStatus @default(UNPAID)
-  paymentId        String?           // FlatPay/Frisbii transaction ID
+  paymentId        String?           // QuickPay transaction ID
   paidAt           DateTime?
 
   checkInTime  DateTime  @default(now())
@@ -191,7 +191,7 @@ model Invoice {
 
   status    InvoiceStatus @default(DRAFT)
   paidAt    DateTime?
-  paymentId String?       // FlatPay/Frisbii transaction ID
+  paymentId String?       // QuickPay transaction ID
 
   // Payment link
   paymentToken String? @unique // UUID for payment page

@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Settings, Wifi, Bell, Cpu, Activity } from "lucide-react";
+import { Settings, Wifi, Bell, Cpu, Activity, CreditCard } from "lucide-react";
 
 const tabs = [
   { id: "general", label: "Generelt", icon: Settings },
   { id: "ha", label: "Home Assistant", icon: Wifi },
   { id: "notifications", label: "Notifikationer", icon: Bell },
+  { id: "payment", label: "Betaling", icon: CreditCard },
   { id: "hardware", label: "Hardware", icon: Cpu },
   { id: "system", label: "System", icon: Activity },
 ] as const;

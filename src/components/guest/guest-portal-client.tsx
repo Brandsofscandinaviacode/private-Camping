@@ -18,6 +18,8 @@ import {
   getLiveConsumption,
   guestSetTemperature,
   guestUnlockDoor,
+  createSessionPayment,
+  createInvoicePayment,
 } from "@/lib/actions";
 
 interface InvoiceData {
@@ -51,6 +53,7 @@ interface GuestPortalClientProps {
   paymentStatus: string;
   isLongTerm: boolean;
   invoices: InvoiceData[];
+  quickpayEnabled: boolean;
 }
 
 interface ConsumptionData {
@@ -82,11 +85,15 @@ export function GuestPortalClient({
   paymentStatus,
   isLongTerm,
   invoices,
+  quickpayEnabled,
 }: GuestPortalClientProps) {
   const [consumption, setConsumption] = useState<ConsumptionData | null>(null);
   const [tempValue, setTempValue] = useState("21");
   const [isPending, startTransition] = useTransition();
   const [unlockMsg, setUnlockMsg] = useState("");
+  const [payingSession, setPayingSession] = useState(false);
+  const [payingInvoiceId, setPayingInvoiceId] = useState<number | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
 
   const isActive = status === "ACTIVE";
 
@@ -118,6 +125,31 @@ export function GuestPortalClient({
       setUnlockMsg("Døren er låst op!");
       setTimeout(() => setUnlockMsg(""), 5000);
     });
+  }
+
+  async function handlePaySession() {
+    if (!sessionId) return;
+    setPayingSession(true);
+    setPayError(null);
+    try {
+      const result = await createSessionPayment(sessionId, token);
+      window.location.href = result.paymentLink;
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : "Betaling kunne ikke oprettes");
+      setPayingSession(false);
+    }
+  }
+
+  async function handlePayInvoice(invoiceId: number) {
+    setPayingInvoiceId(invoiceId);
+    setPayError(null);
+    try {
+      const result = await createInvoicePayment(invoiceId);
+      window.location.href = result.paymentLink;
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : "Betaling kunne ikke oprettes");
+      setPayingInvoiceId(null);
+    }
   }
 
   const formatDKK = (v: number | null) => v !== null ? `${v.toFixed(2)} DKK` : "—";
@@ -177,10 +209,15 @@ export function GuestPortalClient({
                   <div className="bg-amber-50 text-amber-700 rounded-lg p-3 text-sm">
                     Afventer betaling
                   </div>
-                  <Button variant="outline" disabled className="w-full">
-                    <CreditCard className="h-4 w-4 mr-2" />
-                    Betal online (FlatPay kommer snart)
-                  </Button>
+                  {quickpayEnabled ? (
+                    <Button onClick={handlePaySession} disabled={payingSession} className="w-full">
+                      <CreditCard className="h-4 w-4 mr-2" />
+                      {payingSession ? "Opretter betaling..." : "Betal online"}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground text-center">Kontakt campingpladsen for betaling</p>
+                  )}
+                  {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
                 </div>
               )}
             </CardContent>
@@ -314,10 +351,15 @@ export function GuestPortalClient({
                       </Badge>
                     </div>
                   </div>
-                  {(inv.status === "PENDING" || inv.status === "OVERDUE") && (
-                    <Button variant="outline" size="sm" disabled className="w-full text-xs">
+                  {(inv.status === "PENDING" || inv.status === "OVERDUE") && quickpayEnabled && (
+                    <Button
+                      variant="outline" size="sm"
+                      disabled={payingInvoiceId === inv.id}
+                      onClick={() => handlePayInvoice(inv.id)}
+                      className="w-full text-xs"
+                    >
                       <CreditCard className="h-3.5 w-3.5 mr-1.5" />
-                      Betal faktura (FlatPay kommer snart)
+                      {payingInvoiceId === inv.id ? "Opretter betaling..." : "Betal faktura"}
                     </Button>
                   )}
                 </div>
@@ -326,13 +368,12 @@ export function GuestPortalClient({
           </Card>
         )}
 
-        {/* Payment placeholder — only for short-term stays */}
-        {isActive && !isLongTerm && (
+        {/* Payment info — only for short-term stays */}
+        {isActive && !isLongTerm && quickpayEnabled && (
           <Card className="border-dashed border-border/50">
             <CardContent className="py-6 text-center">
               <CreditCard className="h-8 w-8 mx-auto mb-2 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">Online betaling via FlatPay kommer snart</p>
-              <Button variant="outline" disabled className="mt-2">Betal &amp; check-ud</Button>
+              <p className="text-sm text-muted-foreground">Betaling sker ved check-ud</p>
             </CardContent>
           </Card>
         )}
