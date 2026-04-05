@@ -15,7 +15,7 @@ export default async function LoginPage() {
           <div className="h-16 w-16 rounded-2xl bg-primary flex items-center justify-center mx-auto">
             <Tent className="h-8 w-8 text-primary-foreground" />
           </div>
-          <h1 className="text-2xl font-bold mt-5 tracking-tight">CampFlow</h1>
+          <h1 className="text-2xl font-bold mt-5 tracking-tight">CampSense</h1>
           <p className="text-muted-foreground mt-1">
             Log ind for at administrere campingpladsen
           </p>

@@ -1,4 +1,4 @@
-// CampFlow - Camping Site Management Platform
+// CampSense - Camping Site Management Platform
 // Database: SQLite (Raspberry Pi 5 deployment)
 
 generator client {

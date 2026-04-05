@@ -23,7 +23,7 @@ export default async function AdminLayout({
             <div className="h-8 w-8 rounded-lg bg-sidebar-primary flex items-center justify-center">
               <Tent className="h-4 w-4 text-sidebar-primary-foreground" />
             </div>
-            <span className="text-base font-semibold tracking-tight text-sidebar-accent-foreground">CampFlow</span>
+            <span className="text-base font-semibold tracking-tight text-sidebar-accent-foreground">CampSense</span>
           </Link>
         </div>
 

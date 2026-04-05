@@ -10,8 +10,8 @@ interface SessionData {
 const sessionOptions = {
   password:
     process.env.SESSION_SECRET ||
-    "campflow-default-secret-change-me-in-production-32chars!",
-  cookieName: "campflow-session",
+    "campsense-default-secret-change-me-in-production-32chars!",
+  cookieName: "campsense-session",
   cookieOptions: {
     secure: false,
     httpOnly: true,

@@ -298,7 +298,7 @@ export function GuestPortalClient({
           </Card>
         )}
 
-        <p className="text-[11px] text-center text-muted-foreground/50 pt-4">Drevet af CampFlow</p>
+        <p className="text-[11px] text-center text-muted-foreground/50 pt-4">Drevet af CampSense</p>
       </div>
     </div>
   );

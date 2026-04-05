@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CampFlow",
+  title: "CampSense",
   description: "Camping site management platform",
 };
 

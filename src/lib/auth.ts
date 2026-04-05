@@ -15,8 +15,8 @@ interface SessionData {
 const sessionOptions = {
   password:
     process.env.SESSION_SECRET ||
-    "campflow-default-secret-change-me-in-production-32chars!",
-  cookieName: "campflow-session",
+    "campsense-default-secret-change-me-in-production-32chars!",
+  cookieName: "campsense-session",
   cookieOptions: {
     // secure: false — RPi kører over HTTP på LAN, cookies virker ikke med secure over HTTP
     secure: false,

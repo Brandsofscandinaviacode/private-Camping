@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Anchor } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -14,6 +14,8 @@ import { CabinControls } from "@/components/admin/cabin-controls";
 import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CopyButton } from "@/components/admin/copy-button";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
+import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
+import { InvoiceRow } from "@/components/admin/invoice-row";
 
 export const dynamic = "force-dynamic";
 
@@ -39,26 +41,30 @@ export default async function UnitDetailPage({
   const isOccupied = unit.status === "OCCUPIED";
   const hw = unit.hardware;
   const completedSessions = unit.sessions.filter((s) => s.status === "COMPLETED");
+  const unitDisplayName = `${typeLabels[unit.type]} ${unit.name}`;
 
   return (
     <div className="p-8 lg:p-10 space-y-6 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <Link href="/admin">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">{typeLabels[unit.type]} {unit.name}</h1>
-            <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-              isOccupied ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-            }`}>
-              {isOccupied ? "Optaget" : "Ledig"}
-            </span>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/admin">
+            <Button variant="ghost" size="sm">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          </Link>
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold">{unitDisplayName}</h1>
+              <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                isOccupied ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+              }`}>
+                {isOccupied ? "Optaget" : "Ledig"}
+              </span>
+            </div>
           </div>
         </div>
+        <DeleteUnitButton unitId={unit.id} unitName={unitDisplayName} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -66,11 +72,17 @@ export default async function UnitDetailPage({
         <div className="space-y-5">
           {/* Short-term: Check-in / Check-out */}
           {!isOccupied && !unit.isLongTerm ? (
-            <CheckInDialog unitId={unit.id} unitName={`${typeLabels[unit.type]} ${unit.name}`} />
+            <CheckInDialog unitId={unit.id} unitName={unitDisplayName} />
           ) : activeSession ? (
             <div className="rounded-xl border bg-card shadow-sm">
-              <div className="px-5 py-4 border-b border-border">
+              <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h2 className="font-semibold">Aktuel gæst</h2>
+                <Link href={`/admin/bookings/${activeSession.id}`}>
+                  <Button variant="outline" size="sm">
+                    <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                    Se booking
+                  </Button>
+                </Link>
               </div>
               <div className="p-5 space-y-3">
                 <div className="flex justify-between">
@@ -89,7 +101,7 @@ export default async function UnitDetailPage({
                 <CheckOutDialog
                   sessionId={activeSession.id}
                   guestName={activeSession.guestName}
-                  unitName={`${typeLabels[unit.type]} ${unit.name}`}
+                  unitName={unitDisplayName}
                 />
               </div>
             </div>
@@ -144,23 +156,7 @@ export default async function UnitDetailPage({
                 ) : (
                   <div className="space-y-2">
                     {unit.invoices.map((inv) => (
-                      <div key={inv.id} className="flex items-center justify-between py-2.5 px-4 rounded-lg bg-muted/50 text-sm">
-                        <span className="font-medium">
-                          {new Date(inv.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" })}
-                        </span>
-                        <div className="flex items-center gap-3">
-                          <span className="tabular-nums">{inv.totalAmount.toFixed(2)} DKK</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            inv.status === "PAID" ? "bg-green-50 text-green-600" :
-                            inv.status === "OVERDUE" ? "bg-red-50 text-red-600" :
-                            "bg-muted text-muted-foreground"
-                          }`}>
-                            {inv.status === "DRAFT" ? "Kladde" :
-                             inv.status === "PENDING" ? "Afventer" :
-                             inv.status === "PAID" ? "Betalt" : "Forfalden"}
-                          </span>
-                        </div>
-                      </div>
+                      <InvoiceRow key={inv.id} invoice={inv} />
                     ))}
                   </div>
                 )}
@@ -194,7 +190,7 @@ export default async function UnitDetailPage({
         </div>
       </div>
 
-      {/* Session History */}
+      {/* Session History — clickable rows */}
       {completedSessions.length > 0 && (
         <div className="rounded-xl border bg-card shadow-sm">
           <div className="px-5 py-4 border-b border-border">
@@ -210,12 +206,17 @@ export default async function UnitDetailPage({
                   <th className="px-5 py-3 font-medium text-right">El</th>
                   <th className="px-5 py-3 font-medium text-right">Vand</th>
                   <th className="px-5 py-3 font-medium text-right">Total</th>
+                  <th className="px-5 py-3 font-medium text-right">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {completedSessions.map((s) => (
                   <tr key={s.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-5 py-3">{s.guestName}</td>
+                    <td className="px-5 py-3">
+                      <Link href={`/admin/bookings/${s.id}`} className="text-primary hover:underline">
+                        {s.guestName}
+                      </Link>
+                    </td>
                     <td className="px-5 py-3 text-muted-foreground">
                       {new Date(s.checkInTime).toLocaleDateString("da-DK")}
                     </td>
@@ -225,6 +226,14 @@ export default async function UnitDetailPage({
                     <td className="px-5 py-3 text-right tabular-nums">{s.totalElectricityCost?.toFixed(2) ?? "—"}</td>
                     <td className="px-5 py-3 text-right tabular-nums">{s.totalWaterCost?.toFixed(2) ?? "—"}</td>
                     <td className="px-5 py-3 text-right font-medium tabular-nums">{s.totalCost?.toFixed(2) ?? "—"} DKK</td>
+                    <td className="px-5 py-3 text-right">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        s.paymentStatus === "PAID" ? "bg-green-50 text-green-600" :
+                        "bg-red-50 text-red-600"
+                      }`}>
+                        {s.paymentStatus === "PAID" ? "Betalt" : "Ubetalt"}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
