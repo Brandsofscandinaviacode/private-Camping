@@ -39,9 +39,10 @@ model GlobalSetting {
 // Unit (Hytte, Campingvogn, Plads, etc.)
 // ──────────────────────────────────────────────
 enum UnitType {
-  CABIN         // Hytte
-  CARAVAN       // Campingvogn (langtidsleje)
-  PITCH         // Plads (telt/campingvogn gæst)
+  CABIN         // Hytte (korttid)
+  SEASONAL      // Fastligger (langtidsleje)
+  CARAVAN       // Campingvogn (korttid)
+  PITCH         // Plads (korttid)
 }
 
 enum UnitStatus {
@@ -51,11 +52,11 @@ enum UnitStatus {
 
 model Unit {
   id       Int        @id @default(autoincrement())
-  name     String     @unique
+  name     String
   type     UnitType   @default(CABIN)
   status   UnitStatus @default(VACANT)
 
-  // For langtidsleje (CARAVAN): gæstens info og portal
+  // For langtidsleje (SEASONAL): gæstens info og portal
   isLongTerm       Boolean  @default(false)
   longTermGuestName    String?
   longTermGuestEmail   String?

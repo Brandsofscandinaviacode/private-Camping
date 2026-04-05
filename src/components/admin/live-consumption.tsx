@@ -54,58 +54,58 @@ export function LiveConsumption({
 
   if (loading) {
     return (
-      <div className="rounded-lg border bg-card p-4 text-center">
-        <p className="text-xs text-muted-foreground">Henter forbrugsdata...</p>
+      <div className="rounded-xl border bg-card shadow-sm p-5 text-center">
+        <p className="text-sm text-muted-foreground">Henter forbrugsdata...</p>
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="rounded-lg border bg-card p-4 text-center">
-        <p className="text-xs text-muted-foreground">Ingen forbrugsdata</p>
+      <div className="rounded-xl border bg-card shadow-sm p-5 text-center">
+        <p className="text-sm text-muted-foreground">Ingen forbrugsdata</p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border bg-card">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium">Live forbrug</h2>
+    <div className="rounded-xl border bg-card shadow-sm">
+      <div className="px-5 py-4 border-b border-border">
+        <h2 className="font-semibold">Live forbrug</h2>
       </div>
-      <div className="p-4 space-y-2.5">
+      <div className="p-5 space-y-3">
         {data.usedKwh !== null && (
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <Zap className="h-3.5 w-3.5 text-yellow-400/80" />
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2.5">
+              <Zap className="h-4 w-4 text-yellow-500" />
               <span>El: {formatNum(data.usedKwh)} kWh</span>
             </div>
-            <span className="tabular-nums">
+            <span className="tabular-nums font-medium">
               {formatNum(data.electricityCost)} {data.currency}
             </span>
           </div>
         )}
 
         {data.usedWaterLiters !== null && (
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <Droplets className="h-3.5 w-3.5 text-blue-400/80" />
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2.5">
+              <Droplets className="h-4 w-4 text-blue-500" />
               <span>Vand: {formatNum(data.usedWaterLiters, 0)} L</span>
             </div>
-            <span className="tabular-nums">
+            <span className="tabular-nums font-medium">
               {formatNum(data.waterCost)} {data.currency}
             </span>
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-border pt-2 text-xs">
-          <span className="font-medium">Total</span>
-          <span className="font-medium tabular-nums">
+        <div className="flex items-center justify-between border-t border-border pt-3">
+          <span className="font-semibold">Total</span>
+          <span className="font-semibold tabular-nums">
             {formatNum(data.totalLiveCost)} {data.currency}
           </span>
         </div>
 
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           Opdateres hvert {refreshInterval}s
         </p>
       </div>

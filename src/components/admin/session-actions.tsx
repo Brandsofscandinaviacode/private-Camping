@@ -16,22 +16,22 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
   const [isPending, startTransition] = useTransition();
 
   return (
-    <div className="rounded-lg border bg-card">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium flex items-center gap-2">
-          <CreditCard className="h-3.5 w-3.5 text-muted-foreground" />
+    <div className="rounded-xl border bg-card shadow-sm">
+      <div className="px-5 py-4 border-b border-border">
+        <h2 className="font-semibold flex items-center gap-2">
+          <CreditCard className="h-4 w-4 text-muted-foreground" />
           Betaling
         </h2>
       </div>
-      <div className="p-4 space-y-3">
-        <div className="flex items-center justify-between text-xs">
+      <div className="p-5 space-y-4">
+        <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Status</span>
-          <span className={`font-medium ${isPaid ? "text-primary" : paymentStatus === "UNPAID" ? "text-destructive" : ""}`}>
+          <span className={`font-medium ${isPaid ? "text-green-600" : paymentStatus === "UNPAID" ? "text-red-500" : ""}`}>
             {isPaid ? "Betalt" : paymentStatus === "UNPAID" ? "Ubetalt" : paymentStatus}
           </span>
         </div>
         {paidAt && (
-          <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Betalt</span>
             <span>{new Date(paidAt).toLocaleString("da-DK")}</span>
           </div>
@@ -39,21 +39,21 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
 
         {!isPaid ? (
           <Button
-            className="w-full h-9 text-sm"
+            className="w-full"
             disabled={isPending}
             onClick={() => startTransition(async () => { await markSessionPaid(sessionId); })}
           >
-            <Check className="h-3.5 w-3.5 mr-1.5" />
+            <Check className="h-4 w-4 mr-2" />
             {isPending ? "Markerer..." : "Markér som betalt"}
           </Button>
         ) : (
           <Button
             variant="outline"
-            className="w-full h-9 text-sm"
+            className="w-full"
             disabled={isPending}
             onClick={() => startTransition(async () => { await markSessionUnpaid(sessionId); })}
           >
-            <Undo2 className="h-3.5 w-3.5 mr-1.5" />
+            <Undo2 className="h-4 w-4 mr-2" />
             {isPending ? "Fortryder..." : "Fortryd betaling"}
           </Button>
         )}

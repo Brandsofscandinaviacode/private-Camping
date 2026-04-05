@@ -2,9 +2,16 @@ import Link from "next/link";
 import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount } from "@/lib/actions";
 import { UnitCard } from "@/components/admin/cabin-card";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
-import { Tent, Home, Caravan, AlertCircle } from "lucide-react";
+import { Tent, Home, Caravan, MapPin, Anchor, AlertCircle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+
+const typeConfig = [
+  { type: "CABIN", label: "Hytter", icon: Home },
+  { type: "SEASONAL", label: "Fastliggere", icon: Anchor },
+  { type: "CARAVAN", label: "Campingvogne", icon: Caravan },
+  { type: "PITCH", label: "Pladser", icon: MapPin },
+];
 
 export default async function AdminDashboard() {
   const [units, unpaidCount] = await Promise.all([getUnits(), getUnpaidCount()]);
@@ -26,82 +33,76 @@ export default async function AdminDashboard() {
 
   const occupiedCount = units.filter((u) => u.status === "OCCUPIED").length;
   const vacantCount = units.filter((u) => u.status === "VACANT").length;
-  const cabinCount = units.filter((u) => u.type === "CABIN").length;
-  const caravanCount = units.filter((u) => u.type === "CARAVAN").length;
+
+  // Group by type
+  const grouped = typeConfig
+    .map((tc) => ({
+      ...tc,
+      units: unitData.filter((d) => d.unit.type === tc.type),
+    }))
+    .filter((g) => g.units.length > 0);
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-7xl">
+    <div className="p-8 lg:p-10 space-y-8 max-w-7xl">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold">Dashboard</h1>
-          <p className="text-muted-foreground text-xs mt-0.5">
-            {units.length} enheder i alt
+          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground mt-1">
+            {units.length} enheder &middot; {occupiedCount} optaget &middot; {vacantCount} ledige
           </p>
         </div>
         <AddUnitDialog />
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="rounded-lg border bg-card p-4">
-          <p className="text-xs text-muted-foreground mb-1">Optaget</p>
-          <p className="text-xl font-semibold">{occupiedCount}</p>
-        </div>
-        <div className="rounded-lg border bg-card p-4">
-          <p className="text-xs text-muted-foreground mb-1">Ledige</p>
-          <p className="text-xl font-semibold">{vacantCount}</p>
-        </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-            <Home className="h-3 w-3" /> Hytter
-          </div>
-          <p className="text-xl font-semibold">{cabinCount}</p>
-        </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-            <Caravan className="h-3 w-3" /> Campingvogne
-          </div>
-          <p className="text-xl font-semibold">{caravanCount}</p>
-        </div>
-      </div>
-
       {/* Unpaid Alert */}
       {unpaidCount > 0 && (
         <Link href="/admin/bookings?filter=unpaid">
-          <div className="flex items-center gap-3 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 hover:bg-destructive/10 transition-colors cursor-pointer">
-            <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
-            <p className="text-sm">
-              <span className="font-medium">{unpaidCount}</span>{" "}
-              <span className="text-muted-foreground">
-                {unpaidCount === 1 ? "booking" : "bookinger"} afventer betaling
-              </span>
+          <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 hover:bg-red-100 transition-colors cursor-pointer">
+            <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
+            <p className="text-sm text-red-700">
+              <span className="font-semibold">{unpaidCount}</span>{" "}
+              {unpaidCount === 1 ? "booking" : "bookinger"} afventer betaling
             </p>
           </div>
         </Link>
       )}
 
-      {/* Unit Grid */}
+      {/* Grouped Units */}
       {units.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-          <div className="h-14 w-14 rounded-xl bg-muted flex items-center justify-center mb-4">
-            <Tent className="h-7 w-7" />
+          <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mb-4">
+            <Tent className="h-8 w-8" />
           </div>
-          <p className="text-sm font-medium">Ingen enheder endnu</p>
-          <p className="text-xs mt-1">
+          <p className="text-lg font-medium">Ingen enheder endnu</p>
+          <p className="mt-1">
             Klik &ldquo;Tilføj enhed&rdquo; for at komme i gang
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {unitData.map(({ unit, haStates, activeGuestName }) => (
-            <UnitCard
-              key={unit.id}
-              unit={unit}
-              haStates={haStates}
-              activeGuestName={activeGuestName}
-            />
-          ))}
+        <div className="space-y-8">
+          {grouped.map((group) => {
+            const Icon = group.icon;
+            return (
+              <section key={group.type}>
+                <div className="flex items-center gap-2.5 mb-4">
+                  <Icon className="h-5 w-5 text-muted-foreground" />
+                  <h2 className="text-lg font-semibold">{group.label}</h2>
+                  <span className="text-sm text-muted-foreground">({group.units.length})</span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {group.units.map(({ unit, haStates, activeGuestName }) => (
+                    <UnitCard
+                      key={unit.id}
+                      unit={unit}
+                      haStates={haStates}
+                      activeGuestName={activeGuestName}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </div>
       )}
     </div>

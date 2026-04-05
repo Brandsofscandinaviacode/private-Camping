@@ -8,8 +8,15 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { updateUnitHardware, testEntityId } from "@/lib/actions";
 
+const typeLabels: Record<string, string> = {
+  CABIN: "Hytte",
+  SEASONAL: "Fastligger",
+  CARAVAN: "Campingvogn",
+  PITCH: "Plads",
+};
+
 interface CabinHardwareFormProps {
-  cabin: { id: number; name: string };
+  cabin: { id: number; name: string; type: string };
   hardware: {
     hasElectricity: boolean;
     electricitySwitchEntityId: string | null;
@@ -56,20 +63,20 @@ function EntityTestButton({ entityId }: { entityId: string }) {
         type="button"
         onClick={handleTest}
         disabled={testing}
-        className="text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 flex items-center gap-1"
+        className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 flex items-center gap-1"
       >
         {testing ? (
-          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          <Loader2 className="h-3 w-3 animate-spin" />
         ) : (
-          <span className="inline-block h-2.5 w-2.5 text-center">▶</span>
+          <span className="inline-block h-3 w-3 text-center">▶</span>
         )}
         {testing ? "Tester..." : "Test sensor"}
       </button>
       {result && (
-        <div className={`mt-1 text-[11px] px-2 py-1 rounded ${
+        <div className={`mt-1.5 text-xs px-3 py-1.5 rounded-md ${
           result.ok
-            ? "bg-primary/10 text-primary"
-            : "bg-destructive/10 text-destructive"
+            ? "bg-green-50 text-green-700"
+            : "bg-red-50 text-red-600"
         }`}>
           {result.ok ? (
             <span><strong>{result.value}</strong> — {result.message}</span>
@@ -125,15 +132,15 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
   ].filter(Boolean);
 
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="rounded-xl border bg-card shadow-sm">
       <button
-        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-accent/30 transition-colors"
+        className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-muted/30 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{cabin.name}</span>
+          <span className="text-sm font-medium">{typeLabels[cabin.type] || cabin.type} {cabin.name}</span>
           {capabilities.length > 0 && (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               ({capabilities.join(", ")})
             </span>
           )}
@@ -146,11 +153,11 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
       </button>
 
       {expanded && (
-        <div className="border-t border-border px-4 py-4 space-y-5">
+        <div className="border-t border-border px-5 py-5 space-y-5">
           {/* Electricity */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Elektricitet</Label>
+              <Label className="text-sm font-medium">Elektricitet</Label>
               <Switch
                 checked={values.hasElectricity}
                 onCheckedChange={(checked) =>
@@ -161,26 +168,26 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             {values.hasElectricity && (
               <div className="space-y-2 pl-3 border-l-2 border-border">
                 <div>
-                  <Label className="text-[11px] text-muted-foreground">Switch Entity ID</Label>
+                  <Label className="text-xs text-muted-foreground">Switch Entity ID</Label>
                   <Input
                     value={values.electricitySwitchEntityId}
                     onChange={(e) =>
                       setValues((v) => ({ ...v, electricitySwitchEntityId: e.target.value }))
                     }
                     placeholder="switch.cabin_1_power"
-                    className="mt-1 h-7 text-xs"
+                    className="mt-1"
                   />
                   <EntityTestButton entityId={values.electricitySwitchEntityId} />
                 </div>
                 <div>
-                  <Label className="text-[11px] text-muted-foreground">Meter Entity ID (kWh)</Label>
+                  <Label className="text-xs text-muted-foreground">Meter Entity ID (kWh)</Label>
                   <Input
                     value={values.electricityMeterEntityId}
                     onChange={(e) =>
                       setValues((v) => ({ ...v, electricityMeterEntityId: e.target.value }))
                     }
                     placeholder="sensor.cabin_1_energy"
-                    className="mt-1 h-7 text-xs"
+                    className="mt-1"
                   />
                   <EntityTestButton entityId={values.electricityMeterEntityId} />
                 </div>
@@ -191,7 +198,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
           {/* Water */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Vand</Label>
+              <Label className="text-sm font-medium">Vand</Label>
               <Switch
                 checked={values.hasWater}
                 onCheckedChange={(checked) =>
@@ -201,14 +208,14 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             </div>
             {values.hasWater && (
               <div className="pl-3 border-l-2 border-border">
-                <Label className="text-[11px] text-muted-foreground">Meter Entity ID (liter)</Label>
+                <Label className="text-xs text-muted-foreground">Meter Entity ID (liter)</Label>
                 <Input
                   value={values.waterMeterEntityId}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, waterMeterEntityId: e.target.value }))
                   }
                   placeholder="sensor.cabin_1_water"
-                  className="mt-1 h-7 text-xs"
+                  className="mt-1"
                 />
                 <EntityTestButton entityId={values.waterMeterEntityId} />
               </div>
@@ -218,7 +225,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
           {/* Climate */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Klima</Label>
+              <Label className="text-sm font-medium">Klima</Label>
               <Switch
                 checked={values.hasClimate}
                 onCheckedChange={(checked) =>
@@ -228,14 +235,14 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             </div>
             {values.hasClimate && (
               <div className="pl-3 border-l-2 border-border">
-                <Label className="text-[11px] text-muted-foreground">Climate Entity ID</Label>
+                <Label className="text-xs text-muted-foreground">Climate Entity ID</Label>
                 <Input
                   value={values.climateEntityId}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, climateEntityId: e.target.value }))
                   }
                   placeholder="climate.cabin_1_hvac"
-                  className="mt-1 h-7 text-xs"
+                  className="mt-1"
                 />
                 <EntityTestButton entityId={values.climateEntityId} />
               </div>
@@ -245,7 +252,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
           {/* Smart Lock */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Smart lås</Label>
+              <Label className="text-sm font-medium">Smart lås</Label>
               <Switch
                 checked={values.hasSmartLock}
                 onCheckedChange={(checked) =>
@@ -255,21 +262,21 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             </div>
             {values.hasSmartLock && (
               <div className="pl-3 border-l-2 border-border">
-                <Label className="text-[11px] text-muted-foreground">Lock Entity ID</Label>
+                <Label className="text-xs text-muted-foreground">Lock Entity ID</Label>
                 <Input
                   value={values.lockEntityId}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, lockEntityId: e.target.value }))
                   }
                   placeholder="lock.cabin_1_door"
-                  className="mt-1 h-7 text-xs"
+                  className="mt-1"
                 />
                 <EntityTestButton entityId={values.lockEntityId} />
               </div>
             )}
           </div>
 
-          <Button onClick={handleSave} disabled={isPending} size="sm" className="h-8 text-xs">
+          <Button onClick={handleSave} disabled={isPending} size="sm">
             <Save className="h-3 w-3 mr-1.5" />
             {isPending ? "Gemmer..." : saved ? "Gemt!" : "Gem hardware"}
           </Button>

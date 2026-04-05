@@ -12,17 +12,20 @@ import {
   Home,
   Caravan,
   MapPin,
+  Anchor,
   ChevronRight,
 } from "lucide-react";
 
 const typeIcons: Record<string, typeof Home> = {
   CABIN: Home,
+  SEASONAL: Anchor,
   CARAVAN: Caravan,
   PITCH: MapPin,
 };
 
 const typeLabels: Record<string, string> = {
   CABIN: "Hytte",
+  SEASONAL: "Fastligger",
   CARAVAN: "Campingvogn",
   PITCH: "Plads",
 };
@@ -60,80 +63,85 @@ export function UnitCard({ unit, haStates, activeGuestName }: UnitCardProps) {
   return (
     <Link href={`/admin/units/${unit.id}`}>
       <div
-        className={`group rounded-lg border bg-card p-4 hover:border-primary/30 transition-all cursor-pointer ${
-          isOccupied ? "border-l-2 border-l-primary" : ""
+        className={`group rounded-xl border bg-card p-5 hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full flex flex-col ${
+          isOccupied ? "border-l-[3px] border-l-primary" : ""
         }`}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded bg-muted flex items-center justify-center">
-              <TypeIcon className="h-3 w-3 text-muted-foreground" />
+        {/* Header row */}
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center shrink-0">
+              <TypeIcon className="h-5 w-5 text-muted-foreground" />
             </div>
-            <span className="text-sm font-medium">{unit.name}</span>
+            <div>
+              <p className="text-base font-semibold leading-tight">{unit.name}</p>
+              <p className="text-sm text-muted-foreground mt-0.5">{typeLabels[unit.type]}</p>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className={`text-[11px] px-1.5 py-0.5 rounded ${
-              isOccupied
-                ? "bg-primary/10 text-primary"
-                : "bg-muted text-muted-foreground"
-            }`}>
-              {isOccupied ? "Optaget" : "Ledig"}
-            </span>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
-          </div>
+          <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-muted-foreground transition-colors mt-1" />
         </div>
 
-        {/* Meta */}
+        {/* Status */}
         <div className="flex items-center gap-2 mb-3">
-          <span className="text-[11px] text-muted-foreground">{typeLabels[unit.type]}</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            isOccupied
+              ? "bg-primary/10 text-primary"
+              : "bg-muted text-muted-foreground"
+          }`}>
+            {isOccupied ? "Optaget" : "Ledig"}
+          </span>
           {unit.isLongTerm && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">Langtid</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+              Langtid
+            </span>
           )}
         </div>
 
         {/* Guest */}
         {displayGuest && (
-          <p className="text-xs text-foreground/60 mb-3 truncate">{displayGuest}</p>
+          <p className="text-sm text-foreground/70 mb-3 truncate">{displayGuest}</p>
         )}
+
+        {/* Spacer */}
+        <div className="flex-1" />
 
         {/* HA Status */}
         {haStates && !haStates.haReachable && (
-          <div className="flex items-center gap-1 text-[11px] text-orange-400/80 mb-2">
-            <WifiOff className="h-3 w-3" />
-            Utilgængelig
+          <div className="flex items-center gap-1.5 text-xs text-orange-500 mb-1">
+            <WifiOff className="h-3.5 w-3.5" />
+            HA utilgængelig
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2.5 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
           {hw?.hasElectricity && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               {haStates?.powerOn ? (
-                <Zap className="h-3 w-3 text-yellow-400/80" />
+                <Zap className="h-4 w-4 text-yellow-500" />
               ) : (
-                <ZapOff className="h-3 w-3 text-muted-foreground/40" />
+                <ZapOff className="h-4 w-4 text-muted-foreground/30" />
               )}
-              <span>{haStates?.powerOn ? "Tændt" : "Slukket"}</span>
+              <span className="text-xs">{haStates?.powerOn ? "Tændt" : "Slukket"}</span>
             </div>
           )}
           {hw?.hasClimate && haStates?.temperature !== null && (
-            <div className="flex items-center gap-1">
-              <Thermometer className="h-3 w-3 text-blue-400/80" />
-              <span>{haStates?.temperature}°C</span>
+            <div className="flex items-center gap-1.5">
+              <Thermometer className="h-4 w-4 text-blue-500" />
+              <span className="text-xs">{haStates?.temperature}°C</span>
             </div>
           )}
           {hw?.hasSmartLock && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               {haStates?.locked ? (
-                <Lock className="h-3 w-3 text-muted-foreground/50" />
+                <Lock className="h-4 w-4 text-muted-foreground/40" />
               ) : (
-                <Unlock className="h-3 w-3 text-primary/70" />
+                <Unlock className="h-4 w-4 text-primary" />
               )}
             </div>
           )}
           {hw?.hasWater && (
-            <div className="flex items-center gap-1">
-              <Droplets className="h-3 w-3 text-blue-400/80" />
+            <div className="flex items-center gap-1.5">
+              <Droplets className="h-4 w-4 text-blue-500" />
             </div>
           )}
         </div>

@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/lib/auth";
@@ -37,11 +36,11 @@ export function LoginForm() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Log ind</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <div className="rounded-xl border bg-card shadow-sm">
+      <div className="px-5 py-4 border-b border-border">
+        <h2 className="font-semibold">Log ind</h2>
+      </div>
+      <div className="p-5">
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <Label htmlFor="username">Brugernavn</Label>
@@ -52,6 +51,7 @@ export function LoginForm() {
               placeholder="admin"
               autoFocus
               autoComplete="username"
+              className="mt-1"
             />
           </div>
           <div>
@@ -63,11 +63,12 @@ export function LoginForm() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               autoComplete="current-password"
+              className="mt-1"
             />
           </div>
 
           {error && (
-            <p className="text-sm text-destructive bg-destructive/10 p-2 rounded">
+            <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">
               {error}
             </p>
           )}
@@ -81,7 +82,7 @@ export function LoginForm() {
             {loading ? "Logger ind..." : "Log ind"}
           </Button>
         </form>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Home, Caravan, MapPin } from "lucide-react";
+import { Plus, Home, Caravan, MapPin, Anchor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,15 +15,16 @@ import { Label } from "@/components/ui/label";
 import { createUnit } from "@/lib/actions";
 
 const unitTypes = [
-  { value: "CABIN" as const, label: "Hytte", icon: Home },
-  { value: "CARAVAN" as const, label: "Campingvogn", icon: Caravan },
-  { value: "PITCH" as const, label: "Plads", icon: MapPin },
+  { value: "CABIN" as const, label: "Hytte", icon: Home, desc: "Korttidsleje" },
+  { value: "SEASONAL" as const, label: "Fastligger", icon: Anchor, desc: "Langtidsleje med månedlig fakturering" },
+  { value: "CARAVAN" as const, label: "Campingvogn", icon: Caravan, desc: "Korttidsleje" },
+  { value: "PITCH" as const, label: "Plads", icon: MapPin, desc: "Korttidsleje (telt/vogn)" },
 ];
 
 export function AddUnitDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [type, setType] = useState<"CABIN" | "CARAVAN" | "PITCH">("CABIN");
+  const [type, setType] = useState<"CABIN" | "SEASONAL" | "CARAVAN" | "PITCH">("CABIN");
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -42,6 +43,8 @@ export function AddUnitDialog() {
     }
   }
 
+  const selectedType = unitTypes.find((t) => t.value === type);
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button />}>
@@ -52,20 +55,21 @@ export function AddUnitDialog() {
         <DialogHeader>
           <DialogTitle>Tilføj ny enhed</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
             <Label htmlFor="unit-name">Navn</Label>
             <Input
               id="unit-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="F.eks. Hytte 1, Vogn A3, Plads 12..."
+              placeholder="F.eks. 1, A3, 12..."
               autoFocus
+              className="mt-1"
             />
           </div>
           <div>
             <Label>Type</Label>
-            <div className="grid grid-cols-3 gap-2 mt-1.5">
+            <div className="grid grid-cols-2 gap-2 mt-2">
               {unitTypes.map((t) => {
                 const Icon = t.icon;
                 return (
@@ -73,23 +77,21 @@ export function AddUnitDialog() {
                     type="button"
                     key={t.value}
                     onClick={() => setType(t.value)}
-                    className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-sm transition-colors ${
+                    className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors ${
                       type === t.value
-                        ? "border-primary bg-primary/10 text-primary"
+                        ? "border-primary bg-primary/5 text-primary"
                         : "border-border hover:border-muted-foreground/30"
                     }`}
                   >
-                    <Icon className="h-5 w-5" />
-                    {t.label}
+                    <Icon className="h-5 w-5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">{t.label}</p>
+                      <p className="text-xs text-muted-foreground">{t.desc}</p>
+                    </div>
                   </button>
                 );
               })}
             </div>
-            {type === "CARAVAN" && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Campingvogn sættes automatisk op til langtidsleje med månedlig fakturering.
-              </p>
-            )}
           </div>
           <Button type="submit" disabled={loading || !name.trim()} className="w-full">
             {loading ? "Opretter..." : "Opret enhed"}

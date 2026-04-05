@@ -93,13 +93,13 @@ export async function testEntityId(entityId: string): Promise<{ ok: boolean; val
 // ──────────────────────────────────────────────
 export async function createUnit(
   name: string,
-  type: "CABIN" | "CARAVAN" | "PITCH" = "CABIN"
+  type: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH" = "CABIN"
 ) {
   const unit = await prisma.unit.create({
     data: {
       name,
       type,
-      isLongTerm: type === "CARAVAN",
+      isLongTerm: type === "SEASONAL",
       hardware: { create: {} },
     },
   });
