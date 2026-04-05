@@ -928,7 +928,9 @@ export async function getConsumptionLogs(unitId: number, days: number = 7) {
 // TOTAL USAGE — current consumption rate per hour
 // ──────────────────────────────────────────────
 export async function getTotalUsage() {
-  const units = await prisma.unit.findMany({ select: { id: true, name: true, type: true } });
+  const units = await prisma.unit.findMany({
+    select: { id: true, name: true, type: true, hardware: true },
+  });
 
   let totalKwhPerHour = 0;
   let totalWaterLitersPerHour = 0;
@@ -936,35 +938,71 @@ export async function getTotalUsage() {
   const perUnit: { unitId: number; name: string; type: string; kwhPerHour: number | null; waterPerHour: number | null }[] = [];
 
   for (const unit of units) {
-    // Get the 2 most recent logs to compute rate
+    // Try consumption log rate first (2 most recent logs)
     const logs = await prisma.consumptionLog.findMany({
       where: { unitId: unit.id },
       orderBy: { recordedAt: "desc" },
       take: 2,
     });
 
-    if (logs.length < 2) {
-      perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwhPerHour: null, waterPerHour: null });
-      continue;
-    }
-
-    const [latest, previous] = logs;
-    const hoursDiff = (new Date(latest.recordedAt).getTime() - new Date(previous.recordedAt).getTime()) / 3600000;
-    if (hoursDiff <= 0) continue;
-
     let kwhPerHour: number | null = null;
     let waterPerHour: number | null = null;
 
-    if (latest.electricityKwh !== null && previous.electricityKwh !== null) {
-      kwhPerHour = Math.max(0, latest.electricityKwh - previous.electricityKwh) / hoursDiff;
-      totalKwhPerHour += kwhPerHour;
+    if (logs.length >= 2) {
+      const [latest, previous] = logs;
+      const hoursDiff = (new Date(latest.recordedAt).getTime() - new Date(previous.recordedAt).getTime()) / 3600000;
+      if (hoursDiff > 0 && hoursDiff < 4) {
+        if (latest.electricityKwh !== null && previous.electricityKwh !== null) {
+          kwhPerHour = Math.max(0, latest.electricityKwh - previous.electricityKwh) / hoursDiff;
+        }
+        if (latest.waterLiters !== null && previous.waterLiters !== null) {
+          waterPerHour = Math.max(0, latest.waterLiters - previous.waterLiters) / hoursDiff;
+        }
+      }
     }
-    if (latest.waterLiters !== null && previous.waterLiters !== null) {
-      waterPerHour = Math.max(0, latest.waterLiters - previous.waterLiters) / hoursDiff;
+
+    // Fallback: read live power (W) from HA if no log-based rate available
+    if (kwhPerHour === null && unit.hardware?.hasElectricity && unit.hardware.electricityMeterEntityId) {
+      try {
+        // Try to get instantaneous power (W) from the switch entity
+        const switchId = unit.hardware.electricitySwitchEntityId;
+        if (switchId) {
+          // Shelly devices often expose power as an attribute or companion sensor
+          const powerEntityId = switchId.replace("switch.", "sensor.") + "_power";
+          try {
+            const watts = await ha.getEntityNumericState(powerEntityId);
+            if (watts !== null && watts >= 0) {
+              kwhPerHour = watts / 1000; // W to kW
+            }
+          } catch {
+            // Power sensor might not exist with that naming — fall back to meter diff
+          }
+        }
+
+        // If still no rate, try computing from meter entity + recent session
+        if (kwhPerHour === null) {
+          const currentKwh = await ha.getEntityNumericState(unit.hardware.electricityMeterEntityId);
+          // Use the single log entry we have + current reading to estimate rate
+          if (currentKwh !== null && logs.length >= 1 && logs[0].electricityKwh !== null) {
+            const hoursSinceLog = (Date.now() - new Date(logs[0].recordedAt).getTime()) / 3600000;
+            if (hoursSinceLog > 0 && hoursSinceLog < 4) {
+              kwhPerHour = Math.max(0, currentKwh - logs[0].electricityKwh) / hoursSinceLog;
+            }
+          }
+        }
+      } catch {
+        // HA unreachable
+      }
+    }
+
+    if (kwhPerHour !== null) {
+      totalKwhPerHour += kwhPerHour;
+      unitCount++;
+    }
+    if (waterPerHour !== null) {
       totalWaterLitersPerHour += waterPerHour;
     }
 
-    if (kwhPerHour !== null || waterPerHour !== null) unitCount++;
     perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwhPerHour, waterPerHour });
   }
 

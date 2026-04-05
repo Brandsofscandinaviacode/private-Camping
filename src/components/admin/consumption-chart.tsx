@@ -76,8 +76,9 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
 
   if (data.length < 2) {
     return (
-      <div className="h-48 flex items-center justify-center text-sm text-muted-foreground">
-        Ikke nok data til graf endnu. Data opsamles automatisk.
+      <div className="h-48 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+        <p>Ikke nok data til graf endnu.</p>
+        <p className="text-xs">Forbrug logges via cron (hvert 15. min). Kør <code className="bg-muted px-1 rounded">/api/cron</code> for at starte dataindsamling.</p>
       </div>
     );
   }

@@ -84,9 +84,10 @@ export function SpotPriceChart() {
         const hourStr = h.toString().padStart(2, "0");
         const fullHour = `${date}T${hourStr}:00:00`;
 
-        // Find matching price
+        // Find matching price — parse hour directly from HourDK string (Danish local time)
         const priceEntry = priceData.prices.find((p) => {
-          const pHour = new Date(p.hour).getHours();
+          // HourDK format: "2025-09-30T17:00:00"
+          const pHour = parseInt(p.hour.slice(11, 13), 10);
           return pHour === h;
         });
 
