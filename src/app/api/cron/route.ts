@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { logAllConsumption, checkConsumptionAlarms } from "@/lib/actions";
+import { logAllConsumption, checkConsumptionAlarms, updateMultipleSettings } from "@/lib/actions";
 
 // GET /api/cron — Called periodically (e.g. every 15 min via cron or HA automation)
 // Logs consumption for all units and checks alarms
@@ -9,6 +9,13 @@ export async function GET() {
     await logAllConsumption();
     const { alerts } = await checkConsumptionAlarms();
 
+    // Track last run time and count
+    await updateMultipleSettings([
+      { key: "_cron_last_run", value: new Date().toISOString() },
+      { key: "_cron_last_status", value: "ok" },
+      { key: "_cron_alerts", value: String(alerts.length) },
+    ]);
+
     return NextResponse.json({
       ok: true,
       logged: true,
@@ -17,6 +24,15 @@ export async function GET() {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+
+    // Track failure
+    try {
+      await updateMultipleSettings([
+        { key: "_cron_last_run", value: new Date().toISOString() },
+        { key: "_cron_last_status", value: `fejl: ${msg}` },
+      ]);
+    } catch {}
+
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

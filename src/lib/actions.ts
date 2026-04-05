@@ -684,6 +684,34 @@ export async function getUnpaidCount() {
 }
 
 // ──────────────────────────────────────────────
+// SYSTEM STATUS
+// ──────────────────────────────────────────────
+export async function getSystemStatus() {
+  const settings = await getGlobalSettings();
+  const logCount = await prisma.consumptionLog.count();
+  const latestLog = await prisma.consumptionLog.findFirst({ orderBy: { recordedAt: "desc" } });
+  const unitCount = await prisma.unit.count();
+  const sessionCount = await prisma.session.count();
+  const invoiceCount = await prisma.invoice.count();
+
+  return {
+    cronLastRun: settings._cron_last_run || null,
+    cronLastStatus: settings._cron_last_status || null,
+    cronAlerts: settings._cron_alerts || "0",
+    totalLogs: logCount,
+    latestLogTime: latestLog?.recordedAt?.toISOString() || null,
+    unitCount,
+    sessionCount,
+    invoiceCount,
+    alarmEnabled: settings.alarm_enabled === "true",
+    smsEnabled: settings.notifications_sms_enabled === "true",
+    emailEnabled: settings.notifications_email_enabled === "true",
+    invoiceEmailEnabled: settings.invoice_email_enabled === "true",
+    autoPowerOff: settings.auto_power_off_on_checkout === "true",
+  };
+}
+
+// ──────────────────────────────────────────────
 // CONSUMPTION LOGGING — periodic meter readings
 // ──────────────────────────────────────────────
 export async function logAllConsumption() {

@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth";
 import { SettingsForm } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
 import { ChangePasswordForm } from "@/components/admin/change-password-form";
+import { SystemStatus } from "@/components/admin/system-status";
 import { Home, Anchor, Caravan, MapPin } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,10 @@ export default async function SettingsPage() {
           Home Assistant, priser og hardware konfiguration.
         </p>
       </div>
+
+      <SystemStatus />
+
+      <div className="border-t border-border" />
 
       <SettingsForm settings={settings} />
 
