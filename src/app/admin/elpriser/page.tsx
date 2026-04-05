@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export default function ElpriserPage() {
   return (
-    <div className="p-8 lg:p-10 space-y-6 max-w-5xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
       <div>
         <div className="flex items-center gap-2.5">
           <Zap className="h-6 w-6 text-yellow-500" />

@@ -50,16 +50,16 @@ export default async function AdminDashboard() {
     .filter((g) => g.units.length > 0);
 
   return (
-    <div className="p-8 lg:p-10 space-y-8 max-w-7xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 sm:space-y-8 max-w-7xl">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground text-sm mt-1">
             {units.length} enheder &middot; {occupiedCount} optaget &middot; {vacantCount} ledige
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <ExportButton />
           <AddUnitDialog />
         </div>
@@ -100,7 +100,7 @@ export default async function AdminDashboard() {
 
       {/* Total Usage Summary — current rate per hour + spot price */}
       {(totalUsage?.unitCount ?? 0) > 0 && (
-        <div className={`grid gap-4 ${elPricing && elPricing.mode !== "fixed" ? "grid-cols-3" : "grid-cols-2"}`}>
+        <div className={`grid gap-3 sm:gap-4 grid-cols-1 ${elPricing && elPricing.mode !== "fixed" ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
           <div className="rounded-xl border bg-card shadow-sm p-5">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
@@ -168,7 +168,7 @@ export default async function AdminDashboard() {
                   <h2 className="text-lg font-semibold">{group.label}</h2>
                   <span className="text-sm text-muted-foreground">({group.units.length})</span>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
                   {group.units.map(({ unit, haStates, activeGuestName }) => (
                     <UnitCard
                       key={unit.id}

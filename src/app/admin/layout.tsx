@@ -2,6 +2,7 @@ import Link from "next/link";
 import { LayoutDashboard, Settings, Tent, BookOpen, Zap } from "lucide-react";
 import { requireAuth } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { MobileSidebar } from "@/components/admin/mobile-sidebar";
 import { getUnpaidCount } from "@/lib/actions";
 
 export default async function AdminLayout({
@@ -15,9 +16,12 @@ export default async function AdminLayout({
   ]);
 
   return (
-    <div className="flex h-full min-h-screen">
-      {/* Dark Sidebar */}
-      <aside className="w-60 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col shrink-0">
+    <div className="flex flex-col md:flex-row h-full min-h-screen">
+      {/* Mobile top bar + drawer */}
+      <MobileSidebar username={session.username || "admin"} unpaidCount={unpaidCount} />
+
+      {/* Desktop Sidebar — hidden on mobile */}
+      <aside className="hidden md:flex w-60 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex-col shrink-0">
         <div className="px-5 py-5 border-b border-sidebar-border">
           <Link href="/admin" className="flex items-center gap-2.5">
             <div className="h-8 w-8 rounded-lg bg-sidebar-primary flex items-center justify-center">
@@ -89,7 +93,7 @@ export default async function AdminLayout({
         </div>
       </aside>
 
-      {/* Light Main Content */}
+      {/* Main Content */}
       <main className="flex-1 overflow-auto bg-background">
         {children}
       </main>

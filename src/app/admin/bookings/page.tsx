@@ -25,7 +25,7 @@ export default async function BookingsPage({
   ]);
 
   return (
-    <div className="p-8 lg:p-10 space-y-6 max-w-5xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Bookinger</h1>
         <p className="text-muted-foreground mt-1">

@@ -20,7 +20,7 @@ export function SettingsTabs({ children }: { children: Record<string, React.Reac
   return (
     <div>
       {/* Tab navigation */}
-      <div className="flex gap-1 border-b border-border mb-6 overflow-x-auto">
+      <div className="flex gap-1 border-b border-border mb-6 overflow-x-auto scrollbar-none -mx-4 px-4 sm:mx-0 sm:px-0">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;

@@ -197,20 +197,21 @@ export function SpotPriceChart() {
   return (
     <div className="space-y-5">
       {/* Date navigation */}
-      <div className="flex items-center justify-between">
-        <Button variant="outline" size="sm" onClick={() => changeDate(-1)}>
-          <ChevronLeft className="h-4 w-4 mr-1" /> Forrige dag
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="outline" size="sm" onClick={() => changeDate(-1)} className="shrink-0">
+          <ChevronLeft className="h-4 w-4 sm:mr-1" />
+          <span className="hidden sm:inline">Forrige dag</span>
         </Button>
-        <div className="text-center">
-          <p className="font-semibold capitalize">{formatDanishDate(new Date(displayDate))}</p>
+        <div className="text-center min-w-0">
+          <p className="font-semibold capitalize text-sm sm:text-base truncate">{formatDanishDate(new Date(displayDate))}</p>
           {isToday && <span className="text-xs text-primary font-medium">I dag</span>}
           {isTomorrow && <span className="text-xs text-blue-600 font-medium">I morgen</span>}
           {latestDate && displayDate === latestDate && !isToday && !isTomorrow && (
             <span className="text-xs text-green-600 font-medium">Nyeste data</span>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => changeDate(1)}>
-          Næste dag <ChevronRight className="h-4 w-4 ml-1" />
+        <Button variant="outline" size="sm" onClick={() => changeDate(1)} className="shrink-0">
+          <span className="hidden sm:inline">Næste dag</span> <ChevronRight className="h-4 w-4 sm:ml-1" />
         </Button>
       </div>
 
@@ -372,7 +373,7 @@ export function SpotPriceChart() {
 
       {/* Day stats */}
       {validPrices.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <div className="rounded-lg border bg-card p-3">
             <p className="text-xs text-muted-foreground">Gns. spotpris</p>
             <p className="text-lg font-bold tabular-nums">{avgSpot?.toFixed(2)} kr/kWh</p>

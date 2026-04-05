@@ -35,7 +35,7 @@ export default async function BookingDetailPage({
     ? Math.max(0, session.endWaterLiters - session.startWaterLiters) : null;
 
   return (
-    <div className="p-8 lg:p-10 space-y-6 max-w-4xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-4xl">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/admin/bookings">

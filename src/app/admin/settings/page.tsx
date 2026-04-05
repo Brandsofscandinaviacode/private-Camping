@@ -95,7 +95,7 @@ export default async function SettingsPage() {
   );
 
   return (
-    <div className="p-8 lg:p-10 max-w-3xl">
+    <div className="p-4 sm:p-6 lg:p-10 max-w-3xl">
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight">Indstillinger</h1>
         <p className="text-muted-foreground mt-1">

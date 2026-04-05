@@ -48,7 +48,7 @@ export default async function UnitDetailPage({
   const unitDisplayName = `${typeLabels[unit.type]} ${unit.name}`;
 
   return (
-    <div className="p-8 lg:p-10 space-y-6 max-w-5xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
