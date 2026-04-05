@@ -147,6 +147,10 @@ model Session {
   totalWaterCost       Float?
   totalCost            Float?
 
+  // External booking system price (added to total)
+  externalPrice       Float?
+  externalDescription String?
+
   notes String?   // Admin-bemærkninger
 
   createdAt DateTime @default(now())

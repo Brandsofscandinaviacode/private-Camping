@@ -31,6 +31,9 @@ export default async function GuestPortalPage({
         totalElectricityCost={session.totalElectricityCost}
         totalWaterCost={session.totalWaterCost}
         totalCost={session.totalCost}
+        externalPrice={session.externalPrice}
+        externalDescription={session.externalDescription}
+        paymentStatus={session.paymentStatus}
         isLongTerm={false}
         invoices={[]}
       />
@@ -59,6 +62,9 @@ export default async function GuestPortalPage({
         totalElectricityCost={null}
         totalWaterCost={null}
         totalCost={null}
+        externalPrice={null}
+        externalDescription={null}
+        paymentStatus="UNPAID"
         isLongTerm={true}
         invoices={unit.invoices.map((inv) => ({
           id: inv.id,

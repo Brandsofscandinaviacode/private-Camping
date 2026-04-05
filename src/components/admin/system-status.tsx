@@ -15,7 +15,9 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getSystemStatus } from "@/lib/actions";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { getSystemStatus, updateMultipleSettings } from "@/lib/actions";
 
 interface StatusData {
   cronLastRun: string | null;
@@ -31,6 +33,7 @@ interface StatusData {
   emailEnabled: boolean;
   invoiceEmailEnabled: boolean;
   autoPowerOff: boolean;
+  apiKey: string;
 }
 
 export function SystemStatus() {
@@ -38,12 +41,15 @@ export function SystemStatus() {
   const [loading, setLoading] = useState(true);
   const [testingCron, setTestingCron] = useState(false);
   const [cronTestResult, setCronTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeySaved, setApiKeySaved] = useState(false);
 
   async function loadStatus() {
     setLoading(true);
     try {
       const data = await getSystemStatus();
       setStatus(data);
+      setApiKey(data.apiKey || "");
     } catch {
       /* ignore */
     } finally {
@@ -230,6 +236,58 @@ export function SystemStatus() {
             <StatusRow icon={Mail} label="Faktura-email (fastliggere)" enabled={status.invoiceEmailEnabled} />
             <StatusRow icon={Bell} label="Forbrugsalarm" enabled={status.alarmEnabled} />
             <StatusRow icon={Zap} label="Auto-slukning ved check-out" enabled={status.autoPowerOff} />
+          </div>
+        </div>
+      </div>
+
+      {/* API Configuration */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h2 className="font-semibold">REST API</h2>
+          <a
+            href="/api-docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-primary hover:underline"
+          >
+            Åbn API-dokumentation &rarr;
+          </a>
+        </div>
+        <div className="p-5 space-y-4 text-sm">
+          <div>
+            <Label className="text-sm text-muted-foreground">API-nøgle</Label>
+            <div className="flex gap-2 mt-1">
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => { setApiKey(e.target.value); setApiKeySaved(false); }}
+                placeholder="Indtast en API-nøgle for ekstern adgang"
+                className="text-sm"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  await updateMultipleSettings([{ key: "api_key", value: apiKey }]);
+                  setApiKeySaved(true);
+                  setTimeout(() => setApiKeySaved(false), 3000);
+                }}
+              >
+                {apiKeySaved ? "Gemt!" : "Gem"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Bruges som <code className="bg-muted px-1 rounded">Authorization: Bearer &lt;nøgle&gt;</code> til API-kald
+            </p>
+          </div>
+          <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Tilgængelige endpoints:</p>
+            <p><code className="bg-background px-1 rounded">GET /api/v1/units</code> — Hent alle enheder</p>
+            <p><code className="bg-background px-1 rounded">GET /api/v1/sessions</code> — Hent sessioner</p>
+            <p><code className="bg-background px-1 rounded">POST /api/v1/sessions</code> — Check-in (fra booking-system)</p>
+            <p><code className="bg-background px-1 rounded">PATCH /api/v1/sessions</code> — Check-out, sæt pris, markér betalt</p>
+            <p><code className="bg-background px-1 rounded">GET /api/v1/consumption</code> — Forbrugsdata</p>
+            <p><code className="bg-background px-1 rounded">GET /api/docs</code> — OpenAPI spec (JSON)</p>
           </div>
         </div>
       </div>

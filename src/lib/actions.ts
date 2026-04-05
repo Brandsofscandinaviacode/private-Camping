@@ -803,6 +803,7 @@ export async function getSystemStatus() {
     emailEnabled: settings.notifications_email_enabled === "true",
     invoiceEmailEnabled: settings.invoice_email_enabled === "true",
     autoPowerOff: settings.auto_power_off_on_checkout === "true",
+    apiKey: settings.api_key || "",
   };
 }
 

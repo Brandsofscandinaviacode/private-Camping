@@ -46,6 +46,9 @@ interface GuestPortalClientProps {
   totalElectricityCost: number | null;
   totalWaterCost: number | null;
   totalCost: number | null;
+  externalPrice: number | null;
+  externalDescription: string | null;
+  paymentStatus: string;
   isLongTerm: boolean;
   invoices: InvoiceData[];
 }
@@ -74,6 +77,9 @@ export function GuestPortalClient({
   totalElectricityCost,
   totalWaterCost,
   totalCost,
+  externalPrice,
+  externalDescription,
+  paymentStatus,
   isLongTerm,
   invoices,
 }: GuestPortalClientProps) {
@@ -136,20 +142,45 @@ export function GuestPortalClient({
         {/* Completed session */}
         {!isActive && !isLongTerm && (
           <Card>
-            <CardContent className="py-6 text-center">
-              <p className="font-medium">Dit ophold er afsluttet</p>
-              {checkOutTime && (
-                <p className="text-sm text-muted-foreground mt-1">
-                  Afrejse: {new Date(checkOutTime).toLocaleDateString("da-DK", {
-                    weekday: "long", day: "numeric", month: "long",
-                  })}
-                </p>
-              )}
+            <CardContent className="py-6 text-center space-y-4">
+              <div>
+                <p className="font-medium">Dit ophold er afsluttet</p>
+                {checkOutTime && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Afrejse: {new Date(checkOutTime).toLocaleDateString("da-DK", {
+                      weekday: "long", day: "numeric", month: "long",
+                    })}
+                  </p>
+                )}
+              </div>
               {totalCost !== null && (
-                <div className="mt-4 space-y-1 text-sm">
-                  {totalElectricityCost !== null && <p>El: {formatDKK(totalElectricityCost)}</p>}
-                  {totalWaterCost !== null && <p>Vand: {formatDKK(totalWaterCost)}</p>}
-                  <p className="text-xl font-bold mt-2">Total: {formatDKK(totalCost)}</p>
+                <div className="space-y-1 text-sm">
+                  {totalElectricityCost !== null && totalElectricityCost > 0 && <p>El: {formatDKK(totalElectricityCost)}</p>}
+                  {totalWaterCost !== null && totalWaterCost > 0 && <p>Vand: {formatDKK(totalWaterCost)}</p>}
+                  {externalPrice !== null && externalPrice > 0 && (
+                    <p>{externalDescription || "Ophold"}: {formatDKK(externalPrice)}</p>
+                  )}
+                  <Separator className="my-2" />
+                  <p className="text-xl font-bold">
+                    Total: {formatDKK((totalCost || 0) + (externalPrice || 0))}
+                  </p>
+                </div>
+              )}
+
+              {/* Payment status */}
+              {paymentStatus === "PAID" ? (
+                <div className="bg-green-50 text-green-700 rounded-lg p-3 text-sm font-medium">
+                  Betalt — tak for dit ophold!
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="bg-amber-50 text-amber-700 rounded-lg p-3 text-sm">
+                    Afventer betaling
+                  </div>
+                  <Button variant="outline" disabled className="w-full">
+                    <CreditCard className="h-4 w-4 mr-2" />
+                    Betal online (FlatPay kommer snart)
+                  </Button>
                 </div>
               )}
             </CardContent>
