@@ -17,7 +17,22 @@ export async function getPricing() {
     currency: map.currency || "DKK",
     defaultOccupiedTemp: parseFloat(map.default_occupied_temp || "21"),
     defaultVacantTemp: parseFloat(map.default_vacant_temp || "15"),
+    pricingMode: (map.pricing_mode || "fixed") as "fixed" | "minimum" | "spot",
+    elSurcharge: parseFloat(map.el_surcharge || "0.50"),
+    edsPriceArea: (map.eds_price_area || "DK1") as "DK1" | "DK2",
   };
+}
+
+// Get effective electricity price based on pricing mode (EDS integration)
+export async function getEffectiveElPricing() {
+  const pricing = await getPricing();
+  const { getEffectiveElPrice } = await import("./energi-data-service");
+  return getEffectiveElPrice(
+    pricing.pricingMode,
+    pricing.pricePerKwh,
+    pricing.elSurcharge,
+    pricing.edsPriceArea,
+  );
 }
 
 export async function getGlobalSettings() {
@@ -297,6 +312,15 @@ export async function checkOut(sessionId: number) {
   const hw = session.unit.hardware;
   const pricing = await getPricing();
 
+  // Get effective electricity price at checkout time
+  let effectiveElPrice = pricing.pricePerKwh;
+  try {
+    const effective = await getEffectiveElPricing();
+    effectiveElPrice = effective.pricePerKwh;
+  } catch {
+    // Fallback to fixed price
+  }
+
   let endKwh: number | null = null;
   let endWaterLiters: number | null = null;
 
@@ -311,7 +335,7 @@ export async function checkOut(sessionId: number) {
   let totalWaterCost: number | null = null;
 
   if (endKwh !== null && session.startKwh !== null) {
-    totalElectricityCost = Math.max(0, endKwh - session.startKwh) * pricing.pricePerKwh;
+    totalElectricityCost = Math.max(0, endKwh - session.startKwh) * effectiveElPrice;
   }
   if (endWaterLiters !== null && session.startWaterLiters !== null) {
     totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * pricing.pricePerLiterWater;
@@ -365,6 +389,17 @@ export async function getLiveConsumption(sessionId: number) {
   const hw = session.unit.hardware;
   const pricing = await getPricing();
 
+  // Get effective electricity price (spot/minimum/fixed)
+  let effectiveElPrice = pricing.pricePerKwh;
+  let spotPrice: number | null = null;
+  try {
+    const effective = await getEffectiveElPricing();
+    effectiveElPrice = effective.pricePerKwh;
+    spotPrice = effective.spotPrice;
+  } catch {
+    // Fallback to fixed price
+  }
+
   let currentKwh: number | null = null;
   let usedKwh: number | null = null;
   let electricityCost: number | null = null;
@@ -376,7 +411,7 @@ export async function getLiveConsumption(sessionId: number) {
     currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
     if (currentKwh !== null && session.startKwh !== null) {
       usedKwh = Math.max(0, currentKwh - session.startKwh);
-      electricityCost = usedKwh * pricing.pricePerKwh;
+      electricityCost = usedKwh * effectiveElPrice;
     }
   }
 
@@ -393,6 +428,9 @@ export async function getLiveConsumption(sessionId: number) {
     currentWaterLiters, usedWaterLiters, waterCost,
     totalLiveCost: (electricityCost ?? 0) + (waterCost ?? 0),
     currency: pricing.currency,
+    pricePerKwh: effectiveElPrice,
+    spotPrice,
+    pricingMode: pricing.pricingMode,
   };
 }
 
@@ -577,8 +615,17 @@ export async function createMonthlyInvoice(unitId: number) {
     startWaterLiters = prevInvoice?.endWaterLiters ?? endWaterLiters;
   }
 
+  // Get effective electricity price for invoice
+  let effectiveElPrice = pricing.pricePerKwh;
+  try {
+    const effective = await getEffectiveElPricing();
+    effectiveElPrice = effective.pricePerKwh;
+  } catch {
+    // Fallback to fixed price
+  }
+
   const electricityCost = (endKwh !== null && startKwh !== null)
-    ? Math.max(0, endKwh - startKwh) * pricing.pricePerKwh : 0;
+    ? Math.max(0, endKwh - startKwh) * effectiveElPrice : 0;
   const waterCost = (endWaterLiters !== null && startWaterLiters !== null)
     ? Math.max(0, endWaterLiters - startWaterLiters) * pricing.pricePerLiterWater : 0;
 

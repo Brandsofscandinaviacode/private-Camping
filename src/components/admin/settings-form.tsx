@@ -45,6 +45,9 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
     price_per_kwh: settings.price_per_kwh || "2.50",
     price_per_liter_water: settings.price_per_liter_water || "0.05",
     currency: settings.currency || "DKK",
+    pricing_mode: settings.pricing_mode || "fixed",
+    el_surcharge: settings.el_surcharge || "0.50",
+    eds_price_area: settings.eds_price_area || "DK1",
     default_occupied_temp: settings.default_occupied_temp || "21",
     default_vacant_temp: settings.default_vacant_temp || "15",
     auto_power_off_on_checkout: settings.auto_power_off_on_checkout || "false",
@@ -77,21 +80,78 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
 
       {/* Pricing */}
       <div className="rounded-xl border bg-card shadow-sm">
-        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Priser</h2></div>
+        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Elpriser</h2></div>
         <div className="p-5 space-y-4">
+          <div>
+            <Label className="text-sm text-muted-foreground">Prismodel</Label>
+            <select value={values.pricing_mode} onChange={(e) => h("pricing_mode", e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+              <option value="fixed">Fast pris per kWh</option>
+              <option value="minimum">Minimumspris (spot kan lægge til)</option>
+              <option value="spot">Spotpris + tillæg</option>
+            </select>
+          </div>
+
+          {values.pricing_mode === "fixed" && (
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              Gæsten betaler altid den faste pris per kWh, uanset elspotprisen.
+            </div>
+          )}
+
+          {values.pricing_mode === "minimum" && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+              Fast pris er minimumsprisen. Hvis spotprisen overstiger den faste pris, lægges forskellen oven i gæstens pris. Gæsten ser kun den samlede kWh-pris.
+            </div>
+          )}
+
+          {values.pricing_mode === "spot" && (
+            <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
+              Gæsten betaler den aktuelle spotpris + et fast tillæg. Gæsten ser kun den samlede kWh-pris — tillægget er skjult.
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label className="text-sm text-muted-foreground">Pris per kWh</Label>
-              <Input type="number" step="0.01" value={values.price_per_kwh} onChange={(e) => h("price_per_kwh", e.target.value)} className="mt-1" />
+              <Label className="text-sm text-muted-foreground">
+                {values.pricing_mode === "spot" ? "Tillæg per kWh (DKK)" : "Fast pris per kWh (DKK)"}
+              </Label>
+              {values.pricing_mode === "spot" ? (
+                <Input type="number" step="0.01" value={values.el_surcharge} onChange={(e) => h("el_surcharge", e.target.value)} className="mt-1" />
+              ) : (
+                <Input type="number" step="0.01" value={values.price_per_kwh} onChange={(e) => h("price_per_kwh", e.target.value)} className="mt-1" />
+              )}
             </div>
+            {values.pricing_mode !== "fixed" && (
+              <div>
+                <Label className="text-sm text-muted-foreground">Prisområde</Label>
+                <select value={values.eds_price_area} onChange={(e) => h("eds_price_area", e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="DK1">DK1 — Vest for Storebælt</option>
+                  <option value="DK2">DK2 — Øst for Storebælt</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          {values.pricing_mode !== "fixed" && (
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              Spotpriser hentes automatisk fra <a href="https://www.energidataservice.dk" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">Energi Data Service</a> (opdateres hvert 5. minut).
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Water + Currency */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Vand & valuta</h2></div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <Label className="text-sm text-muted-foreground">Pris per liter vand</Label>
               <Input type="number" step="0.01" value={values.price_per_liter_water} onChange={(e) => h("price_per_liter_water", e.target.value)} className="mt-1" />
             </div>
-          </div>
-          <div>
-            <Label className="text-sm text-muted-foreground">Valuta</Label>
-            <Input value={values.currency} onChange={(e) => h("currency", e.target.value)} className="mt-1 w-24" />
+            <div>
+              <Label className="text-sm text-muted-foreground">Valuta</Label>
+              <Input value={values.currency} onChange={(e) => h("currency", e.target.value)} className="mt-1" />
+            </div>
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateAPI } from "@/lib/api-auth";
-import { getLiveConsumption, getConsumptionLogs, getTotalUsage, getPricing } from "@/lib/actions";
+import { getLiveConsumption, getConsumptionLogs, getTotalUsage, getPricing, getEffectiveElPricing } from "@/lib/actions";
 
 // GET /api/v1/consumption?session_id=1 — Get live consumption for a session
 // GET /api/v1/consumption?unit_id=1&days=7 — Get consumption logs for a unit
@@ -16,10 +16,15 @@ export async function GET(req: NextRequest) {
   const total = req.nextUrl.searchParams.get("total");
   const pricing = req.nextUrl.searchParams.get("pricing");
 
-  // Get pricing
+  // Get pricing (includes effective spot price if applicable)
   if (pricing === "true") {
     const p = await getPricing();
-    return NextResponse.json(p);
+    let effectivePrice = null;
+    try { effectivePrice = await getEffectiveElPricing(); } catch { /* fallback */ }
+    return NextResponse.json({
+      ...p,
+      effectiveElPrice: effectivePrice,
+    });
   }
 
   // Get total usage rate

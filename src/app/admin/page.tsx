@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms } from "@/lib/actions";
+import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
 import { UnitCard } from "@/components/admin/cabin-card";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { ExportButton } from "@/components/admin/export-button";
@@ -15,11 +15,12 @@ const typeConfig = [
 ];
 
 export default async function AdminDashboard() {
-  const [units, unpaidCount, totalUsage, alarmResult] = await Promise.all([
+  const [units, unpaidCount, totalUsage, alarmResult, elPricing] = await Promise.all([
     getUnits(),
     getUnpaidCount(),
     getTotalUsage().catch(() => null),
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
+    getEffectiveElPricing().catch(() => null),
   ]);
 
   const unitData = await Promise.all(
@@ -97,9 +98,9 @@ export default async function AdminDashboard() {
         </div>
       )}
 
-      {/* Total Usage Summary — current rate per hour */}
-      {totalUsage && totalUsage.unitCount > 0 && (
-        <div className="grid grid-cols-2 gap-4">
+      {/* Total Usage Summary — current rate per hour + spot price */}
+      {(totalUsage?.unitCount ?? 0) > 0 && (
+        <div className={`grid gap-4 ${elPricing && elPricing.mode !== "fixed" ? "grid-cols-3" : "grid-cols-2"}`}>
           <div className="rounded-xl border bg-card shadow-sm p-5">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
@@ -107,8 +108,8 @@ export default async function AdminDashboard() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Nuværende strømforbrug</p>
-                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalKwhPerHour.toFixed(2)} kWh/t</p>
-                <p className="text-xs text-muted-foreground">{(totalUsage.totalKwhPerHour * 1000).toFixed(0)} W — alle enheder</p>
+                <p className="text-2xl font-bold tabular-nums">{totalUsage!.totalKwhPerHour.toFixed(2)} kWh/t</p>
+                <p className="text-xs text-muted-foreground">{(totalUsage!.totalKwhPerHour * 1000).toFixed(0)} W — alle enheder</p>
               </div>
             </div>
           </div>
@@ -119,11 +120,29 @@ export default async function AdminDashboard() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Nuværende vandforbrug</p>
-                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalWaterLitersPerHour.toFixed(1)} L/t</p>
+                <p className="text-2xl font-bold tabular-nums">{totalUsage!.totalWaterLitersPerHour.toFixed(1)} L/t</p>
                 <p className="text-xs text-muted-foreground">Alle enheder</p>
               </div>
             </div>
           </div>
+          {elPricing && elPricing.mode !== "fixed" && (
+            <div className="rounded-xl border bg-card shadow-sm p-5">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-lg bg-green-500/10 flex items-center justify-center">
+                  <Zap className="h-5 w-5 text-green-500" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Effektiv elpris</p>
+                  <p className="text-2xl font-bold tabular-nums">{elPricing.pricePerKwh.toFixed(2)} kr/kWh</p>
+                  <p className="text-xs text-muted-foreground">
+                    {elPricing.spotPrice !== null ? `Spot: ${elPricing.spotPrice.toFixed(2)} kr/kWh` : "Spotpris utilgængelig"}
+                    {" — "}
+                    {elPricing.mode === "minimum" ? "Minimumspris" : "Spot + tillæg"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

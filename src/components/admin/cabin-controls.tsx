@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   Zap,
   ZapOff,
@@ -34,6 +35,9 @@ export function CabinControls({
   haStates,
 }: UnitControlsProps) {
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+  const [localPowerOn, setLocalPowerOn] = useState(haStates?.powerOn ?? false);
+  const [localLocked, setLocalLocked] = useState(haStates?.locked ?? true);
   const [tempValue, setTempValue] = useState(
     haStates?.temperature?.toString() ?? "21"
   );
@@ -61,7 +65,7 @@ export function CabinControls({
         {hardware.hasElectricity && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              {haStates.powerOn ? (
+              {localPowerOn ? (
                 <Zap className="h-5 w-5 text-yellow-500" />
               ) : (
                 <ZapOff className="h-5 w-5 text-muted-foreground/40" />
@@ -69,14 +73,19 @@ export function CabinControls({
               <span>Strøm</span>
             </div>
             <Button
-              variant={haStates.powerOn ? "destructive" : "default"}
+              variant={localPowerOn ? "destructive" : "default"}
               size="sm"
               disabled={isPending}
-              onClick={() =>
-                startTransition(() => togglePower(unitId, !haStates.powerOn))
-              }
+              onClick={() => {
+                const newState = !localPowerOn;
+                setLocalPowerOn(newState);
+                startTransition(async () => {
+                  await togglePower(unitId, newState);
+                  router.refresh();
+                });
+              }}
             >
-              {haStates.powerOn ? "Sluk" : "Tænd"}
+              {localPowerOn ? "Sluk" : "Tænd"}
             </Button>
           </div>
         )}
@@ -84,7 +93,7 @@ export function CabinControls({
         {hardware.hasSmartLock && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              {haStates.locked ? (
+              {localLocked ? (
                 <Lock className="h-5 w-5 text-muted-foreground/50" />
               ) : (
                 <Unlock className="h-5 w-5 text-primary" />
@@ -95,11 +104,16 @@ export function CabinControls({
               variant="outline"
               size="sm"
               disabled={isPending}
-              onClick={() =>
-                startTransition(() => toggleLock(unitId, !haStates.locked))
-              }
+              onClick={() => {
+                const newState = !localLocked;
+                setLocalLocked(newState);
+                startTransition(async () => {
+                  await toggleLock(unitId, newState);
+                  router.refresh();
+                });
+              }}
             >
-              {haStates.locked ? "Lås op" : "Lås"}
+              {localLocked ? "Lås op" : "Lås"}
             </Button>
           </div>
         )}
@@ -126,9 +140,10 @@ export function CabinControls({
                 size="sm"
                 disabled={isPending}
                 onClick={() =>
-                  startTransition(() =>
-                    setTemperature(unitId, parseFloat(tempValue))
-                  )
+                  startTransition(async () => {
+                    await setTemperature(unitId, parseFloat(tempValue));
+                    router.refresh();
+                  })
                 }
               >
                 Sæt
