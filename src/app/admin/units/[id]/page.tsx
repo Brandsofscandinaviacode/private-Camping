@@ -17,6 +17,7 @@ import { CopyButton } from "@/components/admin/copy-button";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
+import { ConsumptionChart } from "@/components/admin/consumption-chart";
 
 export const dynamic = "force-dynamic";
 
@@ -146,6 +147,16 @@ export default async function UnitDetailPage({
 
           {/* Live Consumption */}
           {activeSession && <LiveConsumption sessionId={activeSession.id} />}
+
+          {/* Consumption Trends */}
+          <div className="rounded-xl border bg-card shadow-sm">
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="font-semibold">Forbrugstrend</h2>
+            </div>
+            <div className="p-5">
+              <ConsumptionChart unitId={unit.id} />
+            </div>
+          </div>
 
           {/* Monthly invoicing for long-term */}
           {unit.isLongTerm && (

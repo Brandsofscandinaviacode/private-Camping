@@ -63,9 +63,10 @@ model Unit {
   longTermGuestPhone   String?
   longTermPortalToken  String?  @unique // Permanent gæsteportal for langtidslejere
 
-  hardware UnitHardware?
-  sessions Session[]
-  invoices Invoice[]
+  hardware         UnitHardware?
+  sessions         Session[]
+  invoices         Invoice[]
+  consumptionLogs  ConsumptionLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -122,6 +123,7 @@ model Session {
 
   guestName        String
   guestEmail       String?
+  guestPhone       String?
   bookingRef       String?           // Booking-nummer
   guestPortalToken String        @unique
   status           SessionStatus @default(ACTIVE)
@@ -194,4 +196,20 @@ model Invoice {
   updatedAt DateTime @updatedAt
 
   @@map("invoices")
+}
+
+// ──────────────────────────────────────────────
+// Consumption Log (periodic readings for trends)
+// ──────────────────────────────────────────────
+model ConsumptionLog {
+  id     Int  @id @default(autoincrement())
+  unitId Int
+  unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  electricityKwh Float?
+  waterLiters    Float?
+
+  recordedAt DateTime @default(now())
+
+  @@map("consumption_logs")
 }

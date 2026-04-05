@@ -14,6 +14,7 @@ interface SettingsFormProps {
 export function SettingsForm({ settings }: SettingsFormProps) {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState({
+    site_url: settings.site_url || "http://localhost:3000",
     ha_url: settings.ha_url || "http://homeassistant.local:8123",
     ha_token: settings.ha_token || "",
     price_per_kwh: settings.price_per_kwh || "2.50",
@@ -24,6 +25,24 @@ export function SettingsForm({ settings }: SettingsFormProps) {
     auto_power_off_on_checkout: settings.auto_power_off_on_checkout || "false",
     invoice_email_enabled: settings.invoice_email_enabled || "false",
     invoice_email_day: settings.invoice_email_day || "1",
+    // Twilio
+    twilio_account_sid: settings.twilio_account_sid || "",
+    twilio_auth_token: settings.twilio_auth_token || "",
+    twilio_phone_number: settings.twilio_phone_number || "",
+    // SMTP
+    smtp_host: settings.smtp_host || "",
+    smtp_port: settings.smtp_port || "587",
+    smtp_user: settings.smtp_user || "",
+    smtp_pass: settings.smtp_pass || "",
+    smtp_from: settings.smtp_from || "",
+    // Notifications
+    notifications_sms_enabled: settings.notifications_sms_enabled || "false",
+    notifications_email_enabled: settings.notifications_email_enabled || "false",
+    // Alarm
+    alarm_enabled: settings.alarm_enabled || "false",
+    alarm_kwh_threshold: settings.alarm_kwh_threshold || "10",
+    alarm_water_threshold: settings.alarm_water_threshold || "500",
+    alarm_hours_window: settings.alarm_hours_window || "24",
   });
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -63,6 +82,28 @@ export function SettingsForm({ settings }: SettingsFormProps) {
 
   return (
     <div className="space-y-5">
+      {/* Site URL */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Generelt</h2>
+        </div>
+        <div className="p-5">
+          <div>
+            <Label htmlFor="site_url" className="text-sm text-muted-foreground">Site URL</Label>
+            <Input
+              id="site_url"
+              value={values.site_url}
+              onChange={(e) => handleChange("site_url", e.target.value)}
+              placeholder="http://192.168.1.100:3000"
+              className="mt-1"
+            />
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Bruges til links i SMS og email-notifikationer
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Home Assistant Connection */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
@@ -227,6 +268,142 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         </div>
       </div>
 
+      {/* Notifications — SMS */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">SMS-notifikationer (Twilio)</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.notifications_sms_enabled === "true"}
+              onChange={(e) => handleChange("notifications_sms_enabled", e.target.checked ? "true" : "false")}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <div>
+              <p className="text-sm font-medium">Aktivér SMS-notifikationer</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Send SMS til gæster ved check-in og faktura til fastliggere
+              </p>
+            </div>
+          </label>
+
+          {values.notifications_sms_enabled === "true" && (
+            <div className="space-y-3 pt-1">
+              <div>
+                <Label className="text-sm text-muted-foreground">Account SID</Label>
+                <Input
+                  value={values.twilio_account_sid}
+                  onChange={(e) => handleChange("twilio_account_sid", e.target.value)}
+                  placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Auth Token</Label>
+                <Input
+                  type="password"
+                  value={values.twilio_auth_token}
+                  onChange={(e) => handleChange("twilio_auth_token", e.target.value)}
+                  placeholder="Dit Twilio auth token"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Telefonnummer (afsender)</Label>
+                <Input
+                  value={values.twilio_phone_number}
+                  onChange={(e) => handleChange("twilio_phone_number", e.target.value)}
+                  placeholder="+45XXXXXXXX"
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Dit Twilio-telefonnummer med landekode
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Notifications — Email */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Email-notifikationer (SMTP)</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.notifications_email_enabled === "true"}
+              onChange={(e) => handleChange("notifications_email_enabled", e.target.checked ? "true" : "false")}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <div>
+              <p className="text-sm font-medium">Aktivér email-notifikationer</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Send email til gæster ved check-in og faktura til fastliggere
+              </p>
+            </div>
+          </label>
+
+          {values.notifications_email_enabled === "true" && (
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-sm text-muted-foreground">SMTP Host</Label>
+                  <Input
+                    value={values.smtp_host}
+                    onChange={(e) => handleChange("smtp_host", e.target.value)}
+                    placeholder="smtp.gmail.com"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm text-muted-foreground">Port</Label>
+                  <Input
+                    type="number"
+                    value={values.smtp_port}
+                    onChange={(e) => handleChange("smtp_port", e.target.value)}
+                    placeholder="587"
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Brugernavn</Label>
+                <Input
+                  value={values.smtp_user}
+                  onChange={(e) => handleChange("smtp_user", e.target.value)}
+                  placeholder="din@email.dk"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Adgangskode</Label>
+                <Input
+                  type="password"
+                  value={values.smtp_pass}
+                  onChange={(e) => handleChange("smtp_pass", e.target.value)}
+                  placeholder="App-adgangskode"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Afsender-adresse (valgfri)</Label>
+                <Input
+                  value={values.smtp_from}
+                  onChange={(e) => handleChange("smtp_from", e.target.value)}
+                  placeholder="noreply@camping.dk"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Invoice Email Settings */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
@@ -241,7 +418,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
               className="mt-0.5 h-4 w-4 accent-primary"
             />
             <div>
-              <p className="text-sm font-medium">Send faktura automatisk via email</p>
+              <p className="text-sm font-medium">Send faktura automatisk via email/SMS</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Fastliggere modtager automatisk en faktura med link til deres gæsteportal
               </p>
@@ -264,6 +441,68 @@ export function SettingsForm({ settings }: SettingsFormProps) {
               <p className="text-xs text-muted-foreground mt-1.5">
                 Fakturaen dækker forbruget fra den foregående måned
               </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Consumption Alarm */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Forbrugsalarm</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.alarm_enabled === "true"}
+              onChange={(e) => handleChange("alarm_enabled", e.target.checked ? "true" : "false")}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <div>
+              <p className="text-sm font-medium">Aktivér forbrugsalarm</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Få besked hvis en enhed bruger mere end grænseværdien inden for tidsvinduet
+              </p>
+            </div>
+          </label>
+
+          {values.alarm_enabled === "true" && (
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-sm text-muted-foreground">El-grænse (kWh)</Label>
+                  <Input
+                    type="number"
+                    step="0.5"
+                    value={values.alarm_kwh_threshold}
+                    onChange={(e) => handleChange("alarm_kwh_threshold", e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm text-muted-foreground">Vand-grænse (liter)</Label>
+                  <Input
+                    type="number"
+                    step="10"
+                    value={values.alarm_water_threshold}
+                    onChange={(e) => handleChange("alarm_water_threshold", e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Tidsvindue (timer)</Label>
+                <Input
+                  type="number"
+                  value={values.alarm_hours_window}
+                  onChange={(e) => handleChange("alarm_hours_window", e.target.value)}
+                  className="mt-1 w-24"
+                />
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Alarm udløses hvis grænsen overskrides inden for dette antal timer
+                </p>
+              </div>
             </div>
           )}
         </div>

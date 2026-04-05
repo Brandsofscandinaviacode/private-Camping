@@ -212,7 +212,7 @@ export async function updateMultipleSettings(
 // ──────────────────────────────────────────────
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
-export async function checkIn(unitId: number, guestName: string, guestEmail?: string, bookingRef?: string) {
+export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string) {
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -249,14 +249,37 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: { unitId, guestName, guestEmail: guestEmail || null, bookingRef: bookingRef || null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
+    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
   });
 
   await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
 
+  // Send notifications (non-blocking)
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const unitDisplayName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
+  sendCheckInNotificationAsync(guestName, guestPhone, guestEmail, guestPortalToken, unitDisplayName);
+
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unitId}`);
   return { session, guestPortalToken };
+}
+
+async function sendCheckInNotificationAsync(
+  guestName: string,
+  guestPhone?: string,
+  guestEmail?: string,
+  portalToken?: string,
+  unitName?: string,
+) {
+  try {
+    const { sendCheckInNotification } = await import("./notifications");
+    const settings = await getGlobalSettings();
+    const baseUrl = settings.site_url || "http://localhost:3000";
+    const portalUrl = `${baseUrl}/guest/${portalToken}`;
+    await sendCheckInNotification(guestName, guestPhone, guestEmail, portalUrl, unitName || "");
+  } catch (e) {
+    console.error("Notification fejl:", e);
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -658,4 +681,209 @@ export async function getUnpaidCount() {
   return prisma.session.count({
     where: { status: "COMPLETED", paymentStatus: "UNPAID" },
   });
+}
+
+// ──────────────────────────────────────────────
+// CONSUMPTION LOGGING — periodic meter readings
+// ──────────────────────────────────────────────
+export async function logAllConsumption() {
+  const units = await prisma.unit.findMany({
+    include: { hardware: true },
+  });
+
+  for (const unit of units) {
+    const hw = unit.hardware;
+    if (!hw) continue;
+
+    let electricityKwh: number | null = null;
+    let waterLiters: number | null = null;
+
+    if (hw.hasElectricity && hw.electricityMeterEntityId) {
+      try { electricityKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+    }
+    if (hw.hasWater && hw.waterMeterEntityId) {
+      try { waterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+    }
+
+    if (electricityKwh !== null || waterLiters !== null) {
+      await prisma.consumptionLog.create({
+        data: { unitId: unit.id, electricityKwh, waterLiters },
+      });
+    }
+  }
+}
+
+export async function getConsumptionLogs(unitId: number, days: number = 7) {
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  return prisma.consumptionLog.findMany({
+    where: { unitId, recordedAt: { gte: since } },
+    orderBy: { recordedAt: "asc" },
+  });
+}
+
+// ──────────────────────────────────────────────
+// TOTAL USAGE — aggregate across all units
+// ──────────────────────────────────────────────
+export async function getTotalUsage() {
+  const units = await prisma.unit.findMany({
+    include: { hardware: true },
+  });
+
+  let totalKwh = 0;
+  let totalWaterLiters = 0;
+  let unitCount = 0;
+  const perUnit: { unitId: number; name: string; type: string; kwh: number | null; water: number | null }[] = [];
+
+  for (const unit of units) {
+    const hw = unit.hardware;
+    if (!hw) continue;
+
+    let kwh: number | null = null;
+    let water: number | null = null;
+
+    if (hw.hasElectricity && hw.electricityMeterEntityId) {
+      try { kwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+    }
+    if (hw.hasWater && hw.waterMeterEntityId) {
+      try { water = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+    }
+
+    if (kwh !== null) totalKwh += kwh;
+    if (water !== null) totalWaterLiters += water;
+    if (kwh !== null || water !== null) unitCount++;
+
+    perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwh, water });
+  }
+
+  return { totalKwh, totalWaterLiters, unitCount, perUnit };
+}
+
+// ──────────────────────────────────────────────
+// CSV EXPORT — accounting
+// ──────────────────────────────────────────────
+export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
+  const where = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
+    : filter === "paid" ? { paymentStatus: "PAID" as const }
+    : {};
+
+  const sessions = await prisma.session.findMany({
+    where,
+    include: { unit: true },
+    orderBy: { checkInTime: "desc" },
+  });
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const header = "ID;Enhed;Type;Gæst;Email;Telefon;Check-in;Check-out;El (kWh);El (DKK);Vand (L);Vand (DKK);Total (DKK);Betaling;Betalt dato;Booking nr.\n";
+  const rows = sessions.map((s) => {
+    const type = typeLabels[s.unit.type] || s.unit.type;
+    const usedKwh = (s.endKwh !== null && s.startKwh !== null) ? (s.endKwh - s.startKwh).toFixed(2) : "";
+    const usedWater = (s.endWaterLiters !== null && s.startWaterLiters !== null) ? (s.endWaterLiters - s.startWaterLiters).toFixed(0) : "";
+    return [
+      s.id,
+      `${type} ${s.unit.name}`,
+      type,
+      s.guestName,
+      s.guestEmail || "",
+      s.guestPhone || "",
+      s.checkInTime.toISOString().slice(0, 10),
+      s.checkOutTime?.toISOString().slice(0, 10) || "",
+      usedKwh,
+      s.totalElectricityCost?.toFixed(2) || "",
+      usedWater,
+      s.totalWaterCost?.toFixed(2) || "",
+      s.totalCost?.toFixed(2) || "",
+      s.paymentStatus,
+      s.paidAt?.toISOString().slice(0, 10) || "",
+      s.bookingRef || "",
+    ].join(";");
+  });
+
+  return header + rows.join("\n");
+}
+
+export async function exportInvoicesCSV() {
+  const invoices = await prisma.invoice.findMany({
+    include: { unit: true },
+    orderBy: { periodEnd: "desc" },
+  });
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const header = "ID;Enhed;Type;Periode start;Periode slut;El start (kWh);El slut (kWh);El forbrug (kWh);El (DKK);Vand start (L);Vand slut (L);Vand forbrug (L);Vand (DKK);Total (DKK);Status;Betalt dato\n";
+  const rows = invoices.map((inv) => {
+    const type = typeLabels[inv.unit.type] || inv.unit.type;
+    const elUsed = (inv.endKwh !== null && inv.startKwh !== null) ? (inv.endKwh - inv.startKwh).toFixed(2) : "";
+    const waterUsed = (inv.endWaterLiters !== null && inv.startWaterLiters !== null) ? (inv.endWaterLiters - inv.startWaterLiters).toFixed(0) : "";
+    return [
+      inv.id,
+      `${type} ${inv.unit.name}`,
+      type,
+      inv.periodStart.toISOString().slice(0, 10),
+      inv.periodEnd.toISOString().slice(0, 10),
+      inv.startKwh?.toFixed(2) || "",
+      inv.endKwh?.toFixed(2) || "",
+      elUsed,
+      inv.electricityCost.toFixed(2),
+      inv.startWaterLiters?.toFixed(0) || "",
+      inv.endWaterLiters?.toFixed(0) || "",
+      waterUsed,
+      inv.waterCost.toFixed(2),
+      inv.totalAmount.toFixed(2),
+      inv.status,
+      inv.paidAt?.toISOString().slice(0, 10) || "",
+    ].join(";");
+  });
+
+  return header + rows.join("\n");
+}
+
+// ──────────────────────────────────────────────
+// CONSUMPTION ALARM — check for excessive usage
+// ──────────────────────────────────────────────
+export async function checkConsumptionAlarms(): Promise<{
+  alerts: { unitId: number; unitName: string; type: "electricity" | "water"; usage: number; threshold: number }[];
+}> {
+  const settings = await getGlobalSettings();
+  if (settings.alarm_enabled !== "true") return { alerts: [] };
+
+  const kwhThreshold = parseFloat(settings.alarm_kwh_threshold || "10");
+  const waterThreshold = parseFloat(settings.alarm_water_threshold || "500");
+  const hoursWindow = parseInt(settings.alarm_hours_window || "24", 10);
+
+  const since = new Date();
+  since.setHours(since.getHours() - hoursWindow);
+
+  const units = await prisma.unit.findMany({ include: { hardware: true } });
+  const alerts: { unitId: number; unitName: string; type: "electricity" | "water"; usage: number; threshold: number }[] = [];
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
+  for (const unit of units) {
+    const logs = await prisma.consumptionLog.findMany({
+      where: { unitId: unit.id, recordedAt: { gte: since } },
+      orderBy: { recordedAt: "asc" },
+    });
+
+    if (logs.length < 2) continue;
+
+    const firstLog = logs[0];
+    const lastLog = logs[logs.length - 1];
+    const unitName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
+
+    if (firstLog.electricityKwh !== null && lastLog.electricityKwh !== null) {
+      const usage = lastLog.electricityKwh - firstLog.electricityKwh;
+      if (usage > kwhThreshold) {
+        alerts.push({ unitId: unit.id, unitName, type: "electricity", usage, threshold: kwhThreshold });
+      }
+    }
+
+    if (firstLog.waterLiters !== null && lastLog.waterLiters !== null) {
+      const usage = lastLog.waterLiters - firstLog.waterLiters;
+      if (usage > waterThreshold) {
+        alerts.push({ unitId: unit.id, unitName, type: "water", usage, threshold: waterThreshold });
+      }
+    }
+  }
+
+  return { alerts };
 }

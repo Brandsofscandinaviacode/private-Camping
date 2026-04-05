@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount } from "@/lib/actions";
+import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms } from "@/lib/actions";
 import { UnitCard } from "@/components/admin/cabin-card";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
-import { Tent, Home, Caravan, MapPin, Anchor, AlertCircle } from "lucide-react";
+import { ExportButton } from "@/components/admin/export-button";
+import { Tent, Home, Caravan, MapPin, Anchor, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,12 @@ const typeConfig = [
 ];
 
 export default async function AdminDashboard() {
-  const [units, unpaidCount] = await Promise.all([getUnits(), getUnpaidCount()]);
+  const [units, unpaidCount, totalUsage, alarmResult] = await Promise.all([
+    getUnits(),
+    getUnpaidCount(),
+    getTotalUsage().catch(() => null),
+    checkConsumptionAlarms().catch(() => ({ alerts: [] })),
+  ]);
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
@@ -52,10 +58,13 @@ export default async function AdminDashboard() {
             {units.length} enheder &middot; {occupiedCount} optaget &middot; {vacantCount} ledige
           </p>
         </div>
-        <AddUnitDialog />
+        <div className="flex items-center gap-3">
+          <ExportButton />
+          <AddUnitDialog />
+        </div>
       </div>
 
-      {/* Unpaid Alert */}
+      {/* Alerts */}
       {unpaidCount > 0 && (
         <Link href="/admin/bookings?filter=unpaid">
           <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 hover:bg-red-100 transition-colors cursor-pointer">
@@ -66,6 +75,54 @@ export default async function AdminDashboard() {
             </p>
           </div>
         </Link>
+      )}
+
+      {/* Consumption Alarms */}
+      {alarmResult.alerts.length > 0 && (
+        <div className="space-y-2">
+          {alarmResult.alerts.map((alert, i) => (
+            <Link key={i} href={`/admin/units/${alert.unitId}`}>
+              <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 hover:bg-amber-100 transition-colors cursor-pointer">
+                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+                <p className="text-sm text-amber-800">
+                  <span className="font-semibold">{alert.unitName}</span> bruger{" "}
+                  {alert.type === "electricity"
+                    ? `${alert.usage.toFixed(1)} kWh (grænse: ${alert.threshold} kWh)`
+                    : `${alert.usage.toFixed(0)} liter vand (grænse: ${alert.threshold} L)`
+                  }
+                </p>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {/* Total Usage Summary */}
+      {totalUsage && totalUsage.unitCount > 0 && (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="rounded-xl border bg-card shadow-sm p-5">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
+                <Zap className="h-5 w-5 text-yellow-500" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Total strøm (alle enheder)</p>
+                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalKwh.toFixed(1)} kWh</p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border bg-card shadow-sm p-5">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                <Droplets className="h-5 w-5 text-blue-500" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Total vand (alle enheder)</p>
+                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalWaterLiters.toFixed(0)} L</p>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Grouped Units */}

@@ -39,6 +39,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [open, setOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
+  const [guestPhone, setGuestPhone] = useState("");
   const [bookingRef, setBookingRef] = useState("");
   const [loading, setLoading] = useState(false);
   const [copyLabel, setCopyLabel] = useState("Kopiér");
@@ -51,7 +52,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     if (!guestName.trim()) return;
     setLoading(true);
     try {
-      const res = await checkIn(unitId, guestName.trim(), guestEmail.trim() || undefined, bookingRef.trim() || undefined);
+      const res = await checkIn(unitId, guestName.trim(), guestEmail.trim() || undefined, guestPhone.trim() || undefined, bookingRef.trim() || undefined);
       setResult(res);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Check-in fejlede");
@@ -64,6 +65,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     setOpen(false);
     setGuestName("");
     setGuestEmail("");
+    setGuestPhone("");
     setBookingRef("");
     setResult(null);
     setCopyLabel("Kopiér");
@@ -99,15 +101,6 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label htmlFor="booking-ref">Booking nr.</Label>
-                <Input
-                  id="booking-ref"
-                  value={bookingRef}
-                  onChange={(e) => setBookingRef(e.target.value)}
-                  placeholder="F.eks. BK-001"
-                />
-              </div>
-              <div>
                 <Label htmlFor="guest-email">Email</Label>
                 <Input
                   id="guest-email"
@@ -117,10 +110,29 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
                   placeholder="gæst@email.dk"
                 />
               </div>
+              <div>
+                <Label htmlFor="guest-phone">Telefon</Label>
+                <Input
+                  id="guest-phone"
+                  type="tel"
+                  value={guestPhone}
+                  onChange={(e) => setGuestPhone(e.target.value)}
+                  placeholder="+4512345678"
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="booking-ref">Booking nr.</Label>
+              <Input
+                id="booking-ref"
+                value={bookingRef}
+                onChange={(e) => setBookingRef(e.target.value)}
+                placeholder="F.eks. BK-001"
+              />
             </div>
             <p className="text-xs text-muted-foreground">
               Systemet tænder strøm, aflæser målere og opretter gæsteportal.
-              Email bruges til påmindelser om betaling.
+              Gæsten modtager et link via SMS og/eller email (hvis aktiveret).
             </p>
             <Button type="submit" disabled={loading || !guestName.trim()} className="w-full">
               {loading ? "Checker ind..." : "Bekræft check-in"}
