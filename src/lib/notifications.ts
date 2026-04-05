@@ -8,6 +8,13 @@ async function getSettings() {
 }
 
 // ──────────────────────────────────────────────
+// Template rendering
+// ──────────────────────────────────────────────
+function renderTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] || "");
+}
+
+// ──────────────────────────────────────────────
 // SMS via Twilio
 // ──────────────────────────────────────────────
 export async function sendSMS(to: string, body: string): Promise<{ ok: boolean; error?: string }> {
@@ -62,7 +69,7 @@ export async function sendEmail(
       from: `CampSense <${fromAddr}>`,
       to,
       subject,
-      html,
+      html: `<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">${html}<p style="color: #888; font-size: 13px; margin-top: 32px;">Drevet af CampSense</p></div>`,
     });
     return { ok: true };
   } catch (e) {
@@ -73,7 +80,7 @@ export async function sendEmail(
 }
 
 // ──────────────────────────────────────────────
-// Guest check-in notification
+// Guest check-in notification (uses templates)
 // ──────────────────────────────────────────────
 export async function sendCheckInNotification(
   guestName: string,
@@ -85,41 +92,39 @@ export async function sendCheckInNotification(
   const s = await getSettings();
   const results: { sms?: { ok: boolean; error?: string }; email?: { ok: boolean; error?: string } } = {};
 
-  const smsEnabled = s.notifications_sms_enabled === "true";
-  const emailEnabled = s.notifications_email_enabled === "true";
+  const vars: Record<string, string> = {
+    navn: guestName,
+    enhed: unitName,
+    link: portalUrl,
+    dato: new Date().toLocaleDateString("da-DK"),
+    email: guestEmail || "",
+    telefon: guestPhone || "",
+    beløb: "",
+    periode: "",
+  };
 
-  if (smsEnabled && guestPhone) {
-    results.sms = await sendSMS(
-      guestPhone,
-      `Hej ${guestName}! Velkommen til ${unitName}. Se dit forbrug og styr din enhed her: ${portalUrl}`
-    );
+  if (s.notifications_sms_enabled === "true" && guestPhone) {
+    const template = s.template_checkin_sms || "Hej {{navn}}! Velkommen til {{enhed}}. Se dit forbrug her: {{link}}";
+    results.sms = await sendSMS(guestPhone, renderTemplate(template, vars));
   }
 
-  if (emailEnabled && guestEmail) {
-    results.email = await sendEmail(
-      guestEmail,
-      `Velkommen til ${unitName} — CampSense`,
-      `
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-          <h2>Velkommen, ${guestName}!</h2>
-          <p>Du er nu checket ind på <strong>${unitName}</strong>.</p>
-          <p>Via din gæsteportal kan du se dit forbrug af strøm og vand i realtid:</p>
-          <p style="margin: 24px 0;">
-            <a href="${portalUrl}" style="background: #2d7a4f; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">
-              Åbn gæsteportal
-            </a>
-          </p>
-          <p style="color: #888; font-size: 13px;">Drevet af CampSense</p>
-        </div>
-      `
+  if (s.notifications_email_enabled === "true" && guestEmail) {
+    const subject = renderTemplate(
+      s.template_checkin_email_subject || "Velkommen til {{enhed}} — CampSense",
+      vars
     );
+    const body = renderTemplate(
+      s.template_checkin_email_body || "<h2>Velkommen, {{navn}}!</h2><p>Du er checket ind på <strong>{{enhed}}</strong>.</p><p><a href=\"{{link}}\">Åbn gæsteportal</a></p>",
+      vars
+    );
+    results.email = await sendEmail(guestEmail, subject, body);
   }
 
   return results;
 }
 
 // ──────────────────────────────────────────────
-// Invoice notification for long-term renters
+// Invoice notification (uses templates)
 // ──────────────────────────────────────────────
 export async function sendInvoiceNotification(
   guestName: string,
@@ -133,33 +138,32 @@ export async function sendInvoiceNotification(
   const s = await getSettings();
   const results: { sms?: { ok: boolean; error?: string }; email?: { ok: boolean; error?: string } } = {};
 
+  const vars: Record<string, string> = {
+    navn: guestName,
+    enhed: unitName,
+    link: portalUrl,
+    dato: new Date().toLocaleDateString("da-DK"),
+    email: guestEmail || "",
+    telefon: guestPhone || "",
+    beløb: totalAmount.toFixed(2),
+    periode: periodLabel,
+  };
+
   if (s.notifications_sms_enabled === "true" && guestPhone) {
-    results.sms = await sendSMS(
-      guestPhone,
-      `Hej ${guestName}, din faktura for ${periodLabel} på ${totalAmount.toFixed(2)} DKK er klar. Se detaljer: ${portalUrl}`
-    );
+    const template = s.template_invoice_sms || "Hej {{navn}}, din faktura for {{periode}} på {{beløb}} DKK er klar. Se detaljer: {{link}}";
+    results.sms = await sendSMS(guestPhone, renderTemplate(template, vars));
   }
 
   if (s.notifications_email_enabled === "true" && guestEmail) {
-    results.email = await sendEmail(
-      guestEmail,
-      `Faktura for ${periodLabel} — CampSense`,
-      `
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-          <h2>Faktura for ${periodLabel}</h2>
-          <p>Hej ${guestName},</p>
-          <p>Din månedlige faktura for <strong>${unitName}</strong> er klar.</p>
-          <p style="font-size: 24px; font-weight: bold; margin: 16px 0;">${totalAmount.toFixed(2)} DKK</p>
-          <p>Se forbrugsdetaljer og betal via din gæsteportal:</p>
-          <p style="margin: 24px 0;">
-            <a href="${portalUrl}" style="background: #2d7a4f; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">
-              Se faktura
-            </a>
-          </p>
-          <p style="color: #888; font-size: 13px;">Drevet af CampSense</p>
-        </div>
-      `
+    const subject = renderTemplate(
+      s.template_invoice_email_subject || "Faktura for {{periode}} — CampSense",
+      vars
     );
+    const body = renderTemplate(
+      s.template_invoice_email_body || "<h2>Faktura for {{periode}}</h2><p>Hej {{navn}},</p><p>Din faktura for <strong>{{enhed}}</strong>: <strong>{{beløb}} DKK</strong></p><p><a href=\"{{link}}\">Se faktura</a></p>",
+      vars
+    );
+    results.email = await sendEmail(guestEmail, subject, body);
   }
 
   return results;

@@ -603,6 +603,55 @@ export async function createMonthlyInvoice(unitId: number) {
   return invoice;
 }
 
+// ──────────────────────────────────────────────
+// AUTO INVOICING — cron-triggered for fastliggere
+// ──────────────────────────────────────────────
+export async function autoCreateAndSendInvoices(): Promise<{ created: number; sent: number }> {
+  const settings = await getGlobalSettings();
+  if (settings.invoice_email_enabled !== "true") return { created: 0, sent: 0 };
+
+  const targetDay = parseInt(settings.invoice_email_day || "1", 10);
+  const today = new Date();
+  if (today.getDate() !== targetDay) return { created: 0, sent: 0 };
+
+  // Check if already ran today (prevent duplicate invoices)
+  const todayStr = today.toISOString().slice(0, 10);
+  if (settings._last_auto_invoice_date === todayStr) return { created: 0, sent: 0 };
+
+  // Find all seasonal units with tenant info
+  const seasonalUnits = await prisma.unit.findMany({
+    where: { type: "SEASONAL", isLongTerm: true, longTermGuestName: { not: null } },
+    include: { hardware: true },
+  });
+
+  let created = 0;
+  let sent = 0;
+
+  for (const unit of seasonalUnits) {
+    try {
+      const invoice = await createMonthlyInvoice(unit.id);
+      created++;
+
+      // Send notification
+      if (unit.longTermGuestEmail || unit.longTermGuestPhone) {
+        await sendInvoiceToCustomer(invoice.id, unit.id);
+        sent++;
+      }
+    } catch (e) {
+      console.error(`Auto-faktura fejl for enhed ${unit.id}:`, e);
+    }
+  }
+
+  // Mark as done for today
+  await prisma.globalSetting.upsert({
+    where: { key: "_last_auto_invoice_date" },
+    update: { value: todayStr },
+    create: { key: "_last_auto_invoice_date", value: todayStr },
+  });
+
+  return { created, sent };
+}
+
 export async function getInvoiceByPaymentToken(token: string) {
   return prisma.invoice.findUnique({
     where: { paymentToken: token },
@@ -616,6 +665,52 @@ export async function markInvoicePaid(invoiceId: number, paymentId?: string) {
     data: { status: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
   });
   revalidatePath("/admin");
+}
+
+export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): Promise<{ ok: boolean; message: string }> {
+  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unit) return { ok: false, message: "Enhed ikke fundet" };
+
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) return { ok: false, message: "Faktura ikke fundet" };
+
+  const guestName = unit.longTermGuestName || "Lejer";
+  const guestEmail = unit.longTermGuestEmail;
+  const guestPhone = unit.longTermGuestPhone;
+
+  if (!guestEmail && !guestPhone) {
+    return { ok: false, message: "Ingen email eller telefon registreret på lejeren" };
+  }
+
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+  const portalUrl = unit.longTermPortalToken
+    ? `${baseUrl}/guest/${unit.longTermPortalToken}`
+    : baseUrl;
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const unitName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
+  const periodLabel = new Date(invoice.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" });
+
+  try {
+    const { sendInvoiceNotification } = await import("./notifications");
+    const result = await sendInvoiceNotification(
+      guestName, guestPhone, guestEmail, portalUrl, unitName, invoice.totalAmount, periodLabel
+    );
+
+    const parts: string[] = [];
+    if (result.sms?.ok) parts.push("SMS sendt");
+    if (result.email?.ok) parts.push("Email sendt");
+    if (result.sms && !result.sms.ok) parts.push(`SMS fejl: ${result.sms.error}`);
+    if (result.email && !result.email.ok) parts.push(`Email fejl: ${result.email.error}`);
+
+    return {
+      ok: parts.some((p) => p.includes("sendt")),
+      message: parts.length > 0 ? parts.join(". ") : "Ingen notifikationskanaler er aktiveret",
+    };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Uventet fejl" };
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -751,40 +846,50 @@ export async function getConsumptionLogs(unitId: number, days: number = 7) {
 }
 
 // ──────────────────────────────────────────────
-// TOTAL USAGE — aggregate across all units
+// TOTAL USAGE — current consumption rate per hour
 // ──────────────────────────────────────────────
 export async function getTotalUsage() {
-  const units = await prisma.unit.findMany({
-    include: { hardware: true },
-  });
+  const units = await prisma.unit.findMany({ select: { id: true, name: true, type: true } });
 
-  let totalKwh = 0;
-  let totalWaterLiters = 0;
+  let totalKwhPerHour = 0;
+  let totalWaterLitersPerHour = 0;
   let unitCount = 0;
-  const perUnit: { unitId: number; name: string; type: string; kwh: number | null; water: number | null }[] = [];
+  const perUnit: { unitId: number; name: string; type: string; kwhPerHour: number | null; waterPerHour: number | null }[] = [];
 
   for (const unit of units) {
-    const hw = unit.hardware;
-    if (!hw) continue;
+    // Get the 2 most recent logs to compute rate
+    const logs = await prisma.consumptionLog.findMany({
+      where: { unitId: unit.id },
+      orderBy: { recordedAt: "desc" },
+      take: 2,
+    });
 
-    let kwh: number | null = null;
-    let water: number | null = null;
-
-    if (hw.hasElectricity && hw.electricityMeterEntityId) {
-      try { kwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+    if (logs.length < 2) {
+      perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwhPerHour: null, waterPerHour: null });
+      continue;
     }
-    if (hw.hasWater && hw.waterMeterEntityId) {
-      try { water = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+
+    const [latest, previous] = logs;
+    const hoursDiff = (new Date(latest.recordedAt).getTime() - new Date(previous.recordedAt).getTime()) / 3600000;
+    if (hoursDiff <= 0) continue;
+
+    let kwhPerHour: number | null = null;
+    let waterPerHour: number | null = null;
+
+    if (latest.electricityKwh !== null && previous.electricityKwh !== null) {
+      kwhPerHour = Math.max(0, latest.electricityKwh - previous.electricityKwh) / hoursDiff;
+      totalKwhPerHour += kwhPerHour;
+    }
+    if (latest.waterLiters !== null && previous.waterLiters !== null) {
+      waterPerHour = Math.max(0, latest.waterLiters - previous.waterLiters) / hoursDiff;
+      totalWaterLitersPerHour += waterPerHour;
     }
 
-    if (kwh !== null) totalKwh += kwh;
-    if (water !== null) totalWaterLiters += water;
-    if (kwh !== null || water !== null) unitCount++;
-
-    perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwh, water });
+    if (kwhPerHour !== null || waterPerHour !== null) unitCount++;
+    perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwhPerHour, waterPerHour });
   }
 
-  return { totalKwh, totalWaterLiters, unitCount, perUnit };
+  return { totalKwhPerHour, totalWaterLitersPerHour, unitCount, perUnit };
 }
 
 // ──────────────────────────────────────────────

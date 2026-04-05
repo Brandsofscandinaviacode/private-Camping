@@ -97,7 +97,7 @@ export default async function AdminDashboard() {
         </div>
       )}
 
-      {/* Total Usage Summary */}
+      {/* Total Usage Summary — current rate per hour */}
       {totalUsage && totalUsage.unitCount > 0 && (
         <div className="grid grid-cols-2 gap-4">
           <div className="rounded-xl border bg-card shadow-sm p-5">
@@ -106,8 +106,9 @@ export default async function AdminDashboard() {
                 <Zap className="h-5 w-5 text-yellow-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Total strøm (alle enheder)</p>
-                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalKwh.toFixed(1)} kWh</p>
+                <p className="text-sm text-muted-foreground">Nuværende strømforbrug</p>
+                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalKwhPerHour.toFixed(2)} kWh/t</p>
+                <p className="text-xs text-muted-foreground">{(totalUsage.totalKwhPerHour * 1000).toFixed(0)} W — alle enheder</p>
               </div>
             </div>
           </div>
@@ -117,8 +118,9 @@ export default async function AdminDashboard() {
                 <Droplets className="h-5 w-5 text-blue-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Total vand (alle enheder)</p>
-                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalWaterLiters.toFixed(0)} L</p>
+                <p className="text-sm text-muted-foreground">Nuværende vandforbrug</p>
+                <p className="text-2xl font-bold tabular-nums">{totalUsage.totalWaterLitersPerHour.toFixed(1)} L/t</p>
+                <p className="text-xs text-muted-foreground">Alle enheder</p>
               </div>
             </div>
           </div>

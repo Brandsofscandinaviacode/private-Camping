@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, Undo2, ChevronDown, ChevronRight, Zap, Droplets } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Zap, Droplets, Send, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { markInvoicePaid } from "@/lib/actions";
+import { markInvoicePaid, sendInvoiceToCustomer } from "@/lib/actions";
 
 interface InvoiceRowProps {
   invoice: {
@@ -19,12 +19,16 @@ interface InvoiceRowProps {
     totalAmount: number;
     status: string;
     paidAt: Date | null;
+    paymentToken: string | null;
   };
+  unitId: number;
 }
 
-export function InvoiceRow({ invoice }: InvoiceRowProps) {
+export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const isPaid = invoice.status === "PAID";
   const usedKwh = (invoice.endKwh != null && invoice.startKwh != null)
@@ -35,6 +39,19 @@ export function InvoiceRow({ invoice }: InvoiceRowProps) {
   const statusLabel = invoice.status === "DRAFT" ? "Kladde" :
     invoice.status === "PENDING" ? "Afventer" :
     invoice.status === "PAID" ? "Betalt" : "Forfalden";
+
+  async function handleSendLink() {
+    setSending(true);
+    setSendResult(null);
+    try {
+      const result = await sendInvoiceToCustomer(invoice.id, unitId);
+      setSendResult(result);
+    } catch {
+      setSendResult({ ok: false, message: "Uventet fejl" });
+    } finally {
+      setSending(false);
+    }
+  }
 
   return (
     <div className="rounded-lg border bg-background">
@@ -113,19 +130,41 @@ export function InvoiceRow({ invoice }: InvoiceRowProps) {
             </p>
           )}
 
-          {/* Payment action */}
-          {!isPaid ? (
-            <Button
-              size="sm"
-              className="w-full"
-              disabled={isPending}
-              onClick={() => startTransition(async () => { await markInvoicePaid(invoice.id); })}
-            >
-              <Check className="h-4 w-4 mr-2" />
-              {isPending ? "Markerer..." : "Markér som betalt"}
-            </Button>
-          ) : (
-            <p className="text-xs text-center text-green-600 font-medium">Faktura er betalt</p>
+          {/* Actions */}
+          <div className="space-y-2">
+            {!isPaid && (
+              <>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  disabled={isPending}
+                  onClick={() => startTransition(async () => { await markInvoicePaid(invoice.id); })}
+                >
+                  <Check className="h-4 w-4 mr-2" />
+                  {isPending ? "Markerer..." : "Markér som betalt"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  disabled={sending}
+                  onClick={handleSendLink}
+                >
+                  {sending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                  {sending ? "Sender..." : "Send betalingslink til kunde"}
+                </Button>
+              </>
+            )}
+            {isPaid && (
+              <p className="text-xs text-center text-green-600 font-medium">Faktura er betalt</p>
+            )}
+          </div>
+
+          {/* Send result */}
+          {sendResult && (
+            <div className={`text-xs p-2.5 rounded-lg ${sendResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+              {sendResult.message}
+            </div>
           )}
         </div>
       )}

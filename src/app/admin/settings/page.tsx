@@ -1,9 +1,10 @@
 import { getGlobalSettings, getUnits } from "@/lib/actions";
 import { requireAuth } from "@/lib/auth";
-import { SettingsForm } from "@/components/admin/settings-form";
+import { GeneralSettings, HASettings, NotificationSettings } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
 import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SystemStatus } from "@/components/admin/system-status";
+import { SettingsTabs } from "@/components/admin/settings-tabs";
 import { Home, Anchor, Caravan, MapPin } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,6 @@ export default async function SettingsPage() {
     getUnits(),
   ]);
 
-  // Sort units by type order, then by name
   const sortedUnits = [...units].sort((a, b) => {
     const typeA = typeOrder.indexOf(a.type);
     const typeB = typeOrder.indexOf(b.type);
@@ -38,7 +38,6 @@ export default async function SettingsPage() {
     return a.name.localeCompare(b.name, "da-DK", { numeric: true });
   });
 
-  // Group by type
   const groupedUnits = typeOrder
     .map((type) => ({
       type,
@@ -48,23 +47,8 @@ export default async function SettingsPage() {
     }))
     .filter((g) => g.units.length > 0);
 
-  return (
-    <div className="p-8 lg:p-10 space-y-8 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Indstillinger</h1>
-        <p className="text-muted-foreground mt-1">
-          Home Assistant, priser og hardware konfiguration.
-        </p>
-      </div>
-
-      <SystemStatus />
-
-      <div className="border-t border-border" />
-
-      <SettingsForm settings={settings} />
-
-      <div className="border-t border-border" />
-
+  const hardwareContent = (
+    <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold mb-1">Hardware per enhed</h2>
         <p className="text-sm text-muted-foreground mb-5">
@@ -99,10 +83,35 @@ export default async function SettingsPage() {
           </div>
         )}
       </div>
+    </div>
+  );
 
+  const systemContent = (
+    <div className="space-y-6">
+      <SystemStatus />
       <div className="border-t border-border" />
-
       <ChangePasswordForm userId={session.userId!} />
+    </div>
+  );
+
+  return (
+    <div className="p-8 lg:p-10 max-w-3xl">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight">Indstillinger</h1>
+        <p className="text-muted-foreground mt-1">
+          Konfigurér priser, Home Assistant, notifikationer og hardware.
+        </p>
+      </div>
+
+      <SettingsTabs>
+        {{
+          general: <GeneralSettings settings={settings} />,
+          ha: <HASettings settings={settings} />,
+          notifications: <NotificationSettings settings={settings} />,
+          hardware: hardwareContent,
+          system: systemContent,
+        }}
+      </SettingsTabs>
     </div>
   );
 }

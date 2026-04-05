@@ -171,7 +171,7 @@ export default async function UnitDetailPage({
                 ) : (
                   <div className="space-y-2">
                     {unit.invoices.map((inv) => (
-                      <InvoiceRow key={inv.id} invoice={inv} />
+                      <InvoiceRow key={inv.id} invoice={inv} unitId={unit.id} />
                     ))}
                   </div>
                 )}
