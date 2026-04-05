@@ -10,7 +10,6 @@ import {
   WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { togglePower, toggleLock, setTemperature } from "@/lib/actions";
 
 interface UnitControlsProps {
@@ -41,39 +40,38 @@ export function CabinControls({
 
   if (!haStates?.haReachable) {
     return (
-      <Card>
-        <CardContent className="py-6">
-          <div className="flex items-center gap-2 text-orange-500">
-            <WifiOff className="h-5 w-5" />
-            <span>Home Assistant er utilgængelig</span>
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Hardware kan ikke styres lige nu. Prøv igen senere.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border bg-card p-4">
+        <div className="flex items-center gap-2 text-orange-400/80">
+          <WifiOff className="h-4 w-4" />
+          <span className="text-sm">Home Assistant utilgængelig</span>
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Prøv igen senere.
+        </p>
+      </div>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Hardware kontrol</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="rounded-lg border bg-card">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-medium">Hardware kontrol</h2>
+      </div>
+      <div className="p-4 space-y-3">
         {hardware.hasElectricity && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {haStates.powerOn ? (
-                <Zap className="h-5 w-5 text-yellow-500" />
+                <Zap className="h-4 w-4 text-yellow-400/80" />
               ) : (
-                <ZapOff className="h-5 w-5 text-gray-400" />
+                <ZapOff className="h-4 w-4 text-muted-foreground/40" />
               )}
-              <span>Strøm</span>
+              <span className="text-sm">Strøm</span>
             </div>
             <Button
               variant={haStates.powerOn ? "destructive" : "default"}
               size="sm"
+              className="h-7 text-xs"
               disabled={isPending}
               onClick={() =>
                 startTransition(() => togglePower(unitId, !haStates.powerOn))
@@ -88,15 +86,16 @@ export function CabinControls({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {haStates.locked ? (
-                <Lock className="h-5 w-5 text-red-500" />
+                <Lock className="h-4 w-4 text-muted-foreground/60" />
               ) : (
-                <Unlock className="h-5 w-5 text-green-500" />
+                <Unlock className="h-4 w-4 text-primary/70" />
               )}
-              <span>Lås</span>
+              <span className="text-sm">Lås</span>
             </div>
             <Button
               variant="outline"
               size="sm"
+              className="h-7 text-xs"
               disabled={isPending}
               onClick={() =>
                 startTransition(() => toggleLock(unitId, !haStates.locked))
@@ -110,12 +109,9 @@ export function CabinControls({
         {hardware.hasClimate && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Thermometer className="h-5 w-5 text-blue-500" />
-              <span>
-                Temperatur:{" "}
-                {haStates.temperature !== null
-                  ? `${haStates.temperature}°C`
-                  : "—"}
+              <Thermometer className="h-4 w-4 text-blue-400/80" />
+              <span className="text-sm">
+                {haStates.temperature !== null ? `${haStates.temperature}°C` : "—"}
               </span>
             </div>
             <div className="flex items-center gap-1">
@@ -125,11 +121,12 @@ export function CabinControls({
                 max="25"
                 value={tempValue}
                 onChange={(e) => setTempValue(e.target.value)}
-                className="w-16 h-8 text-sm border rounded px-2 bg-input"
+                className="w-14 h-7 text-xs border rounded-md px-2 bg-input border-border"
               />
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7 text-xs"
                 disabled={isPending}
                 onClick={() =>
                   startTransition(() =>
@@ -142,7 +139,7 @@ export function CabinControls({
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

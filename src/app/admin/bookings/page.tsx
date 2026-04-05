@@ -1,13 +1,11 @@
 import Link from "next/link";
 import { getAllSessions, getUnpaidCount } from "@/lib/actions";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BookingFilters } from "@/components/admin/booking-filters";
 import {
   AlertCircle,
   Calendar,
   CreditCard,
-  ExternalLink,
+  ChevronRight,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -27,19 +25,17 @@ export default async function BookingsPage({
   ]);
 
   return (
-    <div className="p-6 lg:p-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Bookinger</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {sessions.length} bookinger
-            {unpaidCount > 0 && (
-              <span className="text-destructive ml-2">
-                — {unpaidCount} afventer betaling
-              </span>
-            )}
-          </p>
-        </div>
+    <div className="p-6 lg:p-8 space-y-5 max-w-5xl">
+      <div>
+        <h1 className="text-lg font-semibold">Bookinger</h1>
+        <p className="text-muted-foreground text-xs mt-0.5">
+          {sessions.length} bookinger
+          {unpaidCount > 0 && (
+            <span className="text-destructive ml-1.5">
+              &middot; {unpaidCount} afventer betaling
+            </span>
+          )}
+        </p>
       </div>
 
       {/* Filter tabs */}
@@ -47,12 +43,12 @@ export default async function BookingsPage({
 
       {/* Booking list */}
       {sessions.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">
-          <Calendar className="h-10 w-10 mx-auto mb-3 opacity-50" />
-          <p>Ingen bookinger fundet</p>
+        <div className="text-center py-16 text-muted-foreground">
+          <Calendar className="h-8 w-8 mx-auto mb-3 opacity-40" />
+          <p className="text-sm">Ingen bookinger fundet</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="rounded-lg border bg-card divide-y divide-border">
           {sessions.map((s) => {
             const isActive = s.status === "ACTIVE";
             const isUnpaid = s.status === "COMPLETED" && s.paymentStatus === "UNPAID";
@@ -60,65 +56,58 @@ export default async function BookingsPage({
 
             return (
               <Link key={s.id} href={`/admin/bookings/${s.id}`}>
-                <Card className={`hover:border-primary/30 transition-colors cursor-pointer ${
-                  isUnpaid ? "border-l-4 border-l-destructive" :
-                  isActive ? "border-l-4 border-l-primary" :
-                  isPaid ? "border-l-4 border-l-primary/30" : ""
+                <div className={`flex items-center justify-between gap-4 px-4 py-3 hover:bg-accent/40 transition-colors cursor-pointer ${
+                  isUnpaid ? "border-l-2 border-l-destructive" :
+                  isActive ? "border-l-2 border-l-primary" : ""
                 }`}>
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-4 min-w-0">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium truncate">{s.guestName}</span>
-                            {s.bookingRef && (
-                              <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                                {s.bookingRef}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-                            <span>{s.unit.name}</span>
-                            <span className="opacity-50">·</span>
-                            <span>{typeLabels[s.unit.type] || s.unit.type}</span>
-                            <span className="opacity-50">·</span>
-                            <span>{new Date(s.checkInTime).toLocaleDateString("da-DK")}</span>
-                            {s.checkOutTime && (
-                              <>
-                                <span>→</span>
-                                <span>{new Date(s.checkOutTime).toLocaleDateString("da-DK")}</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 shrink-0">
-                        {s.totalCost !== null && (
-                          <span className="text-sm font-semibold">
-                            {s.totalCost.toFixed(2)} DKK
-                          </span>
-                        )}
-                        {isActive && (
-                          <Badge className="bg-primary/20 text-primary border-primary/30">Aktiv</Badge>
-                        )}
-                        {isUnpaid && (
-                          <Badge variant="destructive" className="bg-destructive/20 text-destructive border-destructive/30">
-                            <AlertCircle className="h-3 w-3 mr-1" />
-                            Ubetalt
-                          </Badge>
-                        )}
-                        {isPaid && (
-                          <Badge className="bg-primary/20 text-primary border-primary/30">
-                            <CreditCard className="h-3 w-3 mr-1" />
-                            Betalt
-                          </Badge>
-                        )}
-                        <ExternalLink className="h-4 w-4 text-muted-foreground/50" />
-                      </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium truncate">{s.guestName}</span>
+                      {s.bookingRef && (
+                        <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                          {s.bookingRef}
+                        </span>
+                      )}
                     </div>
-                  </CardContent>
-                </Card>
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+                      <span>{s.unit.name}</span>
+                      <span className="opacity-40">&middot;</span>
+                      <span>{typeLabels[s.unit.type] || s.unit.type}</span>
+                      <span className="opacity-40">&middot;</span>
+                      <span>{new Date(s.checkInTime).toLocaleDateString("da-DK")}</span>
+                      {s.checkOutTime && (
+                        <>
+                          <span className="opacity-40">&rarr;</span>
+                          <span>{new Date(s.checkOutTime).toLocaleDateString("da-DK")}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 shrink-0">
+                    {s.totalCost !== null && (
+                      <span className="text-sm tabular-nums">
+                        {s.totalCost.toFixed(2)} <span className="text-muted-foreground text-xs">DKK</span>
+                      </span>
+                    )}
+                    {isActive && (
+                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">Aktiv</span>
+                    )}
+                    {isUnpaid && (
+                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-destructive/10 text-destructive flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3" />
+                        Ubetalt
+                      </span>
+                    )}
+                    {isPaid && (
+                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-primary/10 text-primary flex items-center gap-1">
+                        <CreditCard className="h-3 w-3" />
+                        Betalt
+                      </span>
+                    )}
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/30" />
+                  </div>
+                </div>
               </Link>
             );
           })}

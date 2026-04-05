@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Zap, Droplets, DollarSign } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Zap, Droplets } from "lucide-react";
 import { getLiveConsumption } from "@/lib/actions";
 
 interface LiveConsumptionProps {
   sessionId: number;
-  refreshInterval?: number; // seconds, default 30
+  refreshInterval?: number;
 }
 
 interface ConsumptionData {
@@ -55,68 +54,61 @@ export function LiveConsumption({
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="py-6 text-center text-muted-foreground">
-          Henter forbrugsdata...
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border bg-card p-4 text-center">
+        <p className="text-xs text-muted-foreground">Henter forbrugsdata...</p>
+      </div>
     );
   }
 
   if (!data) {
     return (
-      <Card>
-        <CardContent className="py-6 text-center text-muted-foreground">
-          Ingen forbrugsdata tilgængelig
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border bg-card p-4 text-center">
+        <p className="text-xs text-muted-foreground">Ingen forbrugsdata</p>
+      </div>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Live forbrug</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <div className="rounded-lg border bg-card">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-medium">Live forbrug</h2>
+      </div>
+      <div className="p-4 space-y-2.5">
         {data.usedKwh !== null && (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <Zap className="h-4 w-4 text-yellow-500" />
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <Zap className="h-3.5 w-3.5 text-yellow-400/80" />
               <span>El: {formatNum(data.usedKwh)} kWh</span>
             </div>
-            <span className="text-sm font-medium">
+            <span className="tabular-nums">
               {formatNum(data.electricityCost)} {data.currency}
             </span>
           </div>
         )}
 
         {data.usedWaterLiters !== null && (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <Droplets className="h-4 w-4 text-blue-400" />
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <Droplets className="h-3.5 w-3.5 text-blue-400/80" />
               <span>Vand: {formatNum(data.usedWaterLiters, 0)} L</span>
             </div>
-            <span className="text-sm font-medium">
+            <span className="tabular-nums">
               {formatNum(data.waterCost)} {data.currency}
             </span>
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t pt-2">
-          <div className="flex items-center gap-2 text-sm font-bold">
-            <DollarSign className="h-4 w-4" />
-            <span>Total</span>
-          </div>
-          <span className="font-bold">
+        <div className="flex items-center justify-between border-t border-border pt-2 text-xs">
+          <span className="font-medium">Total</span>
+          <span className="font-medium tabular-nums">
             {formatNum(data.totalLiveCost)} {data.currency}
           </span>
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          Opdateres hvert {refreshInterval} sekund
+        <p className="text-[10px] text-muted-foreground">
+          Opdateres hvert {refreshInterval}s
         </p>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

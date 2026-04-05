@@ -16,20 +16,20 @@ const filters = [
 
 export function BookingFilters({ activeFilter, unpaidCount }: BookingFiltersProps) {
   return (
-    <div className="flex gap-1 bg-muted p-1 rounded-lg w-fit">
+    <div className="flex gap-0.5 bg-muted/50 p-0.5 rounded-md w-fit">
       {filters.map((f) => (
         <Link
           key={f.value}
           href={`/admin/bookings${f.value === "all" ? "" : `?filter=${f.value}`}`}
-          className={`px-3 py-1.5 text-sm rounded-md transition-colors relative ${
+          className={`px-3 py-1.5 text-xs rounded transition-colors relative ${
             activeFilter === f.value
-              ? "bg-background text-foreground shadow-sm"
+              ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
           {f.label}
           {f.value === "unpaid" && unpaidCount > 0 && (
-            <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 text-[10px] font-bold rounded-full bg-destructive text-destructive-foreground">
+            <span className="ml-1 inline-flex items-center justify-center h-3.5 min-w-3.5 px-1 text-[9px] font-semibold rounded-full bg-destructive/80 text-white">
               {unpaidCount}
             </span>
           )}
