@@ -25,6 +25,14 @@ echo "    Copying static assets to standalone..."
 cp -r public .next/standalone/public
 cp -r .next/static .next/standalone/.next/static
 
+# Ensure uploads directory exists in standalone
+mkdir -p .next/standalone/public/uploads
+
+# Preserve uploaded files (site map etc.)
+if [ -d "public/uploads" ]; then
+  cp -r public/uploads/* .next/standalone/public/uploads/ 2>/dev/null || true
+fi
+
 echo "6/6 Restarting service..."
 sudo systemctl restart campsense
 

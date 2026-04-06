@@ -711,7 +711,7 @@ export function GuestPortalSettings({ settings }: SettingsFormProps) {
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Praktiske oplysninger</h2>
-          <p className="text-xs text-muted-foreground mt-1">Vises på gæstesiden. Forskellige tekster pr. enhedstype.</p>
+          <p className="text-xs text-muted-foreground mt-1">Vises på gæstesiden. Forskellige tekster pr. enhedstype. HTML understøttes (&lt;b&gt;, &lt;ul&gt;, &lt;a&gt;, &lt;h3&gt; osv.)</p>
         </div>
         <div className="p-5 space-y-4">
           {(["cabin", "seasonal", "caravan", "pitch"] as const).map((type) => (

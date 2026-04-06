@@ -430,9 +430,10 @@ export function GuestPortalClient({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-sm text-muted-foreground whitespace-pre-line leading-relaxed">
-                {practicalInfo}
-              </div>
+              <div
+                className="text-sm text-muted-foreground leading-relaxed prose prose-sm max-w-none [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h3]:text-foreground [&_h3]:font-semibold [&_h3]:text-base [&_h4]:text-foreground [&_h4]:font-medium [&_p]:my-1"
+                dangerouslySetInnerHTML={{ __html: practicalInfo }}
+              />
             </CardContent>
           </Card>
         )}

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Zap, Droplets, Calendar, Mail, Hash } from "lucide-react";
+import { ArrowLeft, Zap, Droplets, Calendar, Mail, Hash, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { getSessionById, getPricing } from "@/lib/actions";
@@ -86,6 +86,13 @@ export default async function BookingDetailPage({
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-muted-foreground">
+                  <Phone className="h-4 w-4" />
+                  Telefon
+                </div>
+                <span>{session.guestPhone || "—"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-muted-foreground">
                   <Calendar className="h-4 w-4" />
                   Check-in
                 </div>
@@ -98,6 +105,15 @@ export default async function BookingDetailPage({
                 </div>
                 <span>{session.checkOutTime ? new Date(session.checkOutTime).toLocaleString("da-DK") : "—"}</span>
               </div>
+              {session.expectedCheckOut && (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Calendar className="h-4 w-4" />
+                    Forventet checkout
+                  </div>
+                  <span>{new Date(session.expectedCheckOut).toLocaleDateString("da-DK")}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Gæsteportal</span>
                 <CopyButton text={`/guest/${session.guestPortalToken}`} label="Kopiér link" />
@@ -118,8 +134,15 @@ export default async function BookingDetailPage({
             sessionId={session.id}
             guestName={session.guestName}
             guestEmail={session.guestEmail || ""}
+            guestPhone={session.guestPhone || ""}
             bookingRef={session.bookingRef || ""}
             notes={session.notes || ""}
+            expectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : ""}
+            startKwh={session.startKwh}
+            endKwh={session.endKwh}
+            startWaterLiters={session.startWaterLiters}
+            endWaterLiters={session.endWaterLiters}
+            isActive={isActive}
           />
         </div>
 

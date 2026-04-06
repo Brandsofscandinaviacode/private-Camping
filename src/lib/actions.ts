@@ -835,19 +835,84 @@ export async function markSessionUnpaid(sessionId: number) {
 
 export async function updateSessionDetails(
   sessionId: number,
-  data: { guestName?: string; guestEmail?: string; bookingRef?: string; notes?: string }
+  data: {
+    guestName?: string;
+    guestEmail?: string;
+    guestPhone?: string;
+    bookingRef?: string;
+    notes?: string;
+    expectedCheckOut?: string;
+    startKwh?: number | null;
+    endKwh?: number | null;
+    startWaterLiters?: number | null;
+    endWaterLiters?: number | null;
+  }
 ) {
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: {
-      ...(data.guestName !== undefined && { guestName: data.guestName }),
-      ...(data.guestEmail !== undefined && { guestEmail: data.guestEmail || null }),
-      ...(data.bookingRef !== undefined && { bookingRef: data.bookingRef || null }),
-      ...(data.notes !== undefined && { notes: data.notes || null }),
-    },
-  });
+  const updateData: Record<string, unknown> = {};
+  if (data.guestName !== undefined) updateData.guestName = data.guestName;
+  if (data.guestEmail !== undefined) updateData.guestEmail = data.guestEmail || null;
+  if (data.guestPhone !== undefined) updateData.guestPhone = data.guestPhone || null;
+  if (data.bookingRef !== undefined) updateData.bookingRef = data.bookingRef || null;
+  if (data.notes !== undefined) updateData.notes = data.notes || null;
+  if (data.expectedCheckOut !== undefined) updateData.expectedCheckOut = data.expectedCheckOut ? new Date(data.expectedCheckOut) : null;
+  if (data.startKwh !== undefined) updateData.startKwh = data.startKwh;
+  if (data.endKwh !== undefined) updateData.endKwh = data.endKwh;
+  if (data.startWaterLiters !== undefined) updateData.startWaterLiters = data.startWaterLiters;
+  if (data.endWaterLiters !== undefined) updateData.endWaterLiters = data.endWaterLiters;
+
+  // If consumption was manually edited, recalculate costs
+  if (data.startKwh !== undefined || data.endKwh !== undefined || data.startWaterLiters !== undefined || data.endWaterLiters !== undefined) {
+    const session = await prisma.session.findUnique({ where: { id: sessionId } });
+    if (session) {
+      const pricing = await getPricing();
+      const startKwh = data.startKwh !== undefined ? data.startKwh : session.startKwh;
+      const endKwh = data.endKwh !== undefined ? data.endKwh : session.endKwh;
+      const startWater = data.startWaterLiters !== undefined ? data.startWaterLiters : session.startWaterLiters;
+      const endWater = data.endWaterLiters !== undefined ? data.endWaterLiters : session.endWaterLiters;
+
+      if (startKwh != null && endKwh != null) {
+        const usedKwh = Math.max(0, endKwh - startKwh);
+        updateData.totalElectricityCost = parseFloat((usedKwh * pricing.pricePerKwh).toFixed(2));
+      }
+      if (startWater != null && endWater != null) {
+        const usedWater = Math.max(0, endWater - startWater);
+        updateData.totalWaterCost = parseFloat((usedWater * pricing.pricePerLiterWater).toFixed(2));
+      }
+      const elCost = (updateData.totalElectricityCost as number | undefined) ?? session.totalElectricityCost ?? 0;
+      const waterCost = (updateData.totalWaterCost as number | undefined) ?? session.totalWaterCost ?? 0;
+      updateData.totalCost = parseFloat(((elCost as number) + (waterCost as number)).toFixed(2));
+    }
+  }
+
+  await prisma.session.update({ where: { id: sessionId }, data: updateData });
   revalidatePath("/admin/bookings");
   revalidatePath(`/admin/bookings/${sessionId}`);
+}
+
+export async function resendGuestNotification(sessionId: number) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: true },
+  });
+  if (!session) throw new Error("Session ikke fundet");
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const unitDisplayName = `${typeLabels[session.unit.type] || ""} ${session.unit.name}`.trim();
+
+  const { sendCheckInNotification } = await import("./notifications");
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+  const portalUrl = `${baseUrl}/guest/${session.guestPortalToken}`;
+
+  await sendCheckInNotification(
+    session.guestName,
+    session.guestPhone || undefined,
+    session.guestEmail || undefined,
+    portalUrl,
+    unitDisplayName,
+  );
+
+  return { ok: true };
 }
 
 export async function getUnpaidCount() {
