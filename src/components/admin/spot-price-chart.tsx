@@ -336,7 +336,7 @@ export function SpotPriceChart() {
             {pricingInfo?.mode !== "fixed" && (
               <Line
                 yAxisId="price"
-                type="stepAfter"
+                type="step"
                 dataKey="effektivPris"
                 name="Gæstepris"
                 stroke="#f59e0b"
@@ -348,7 +348,7 @@ export function SpotPriceChart() {
             {pricingInfo?.mode === "fixed" && (
               <Line
                 yAxisId="price"
-                type="stepAfter"
+                type="step"
                 dataKey="effektivPris"
                 name="Fast pris"
                 stroke="#f59e0b"
