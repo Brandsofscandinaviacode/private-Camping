@@ -25,8 +25,8 @@ export function LoginForm() {
       if (result.error) {
         setError(result.error);
       } else {
-        router.push("/admin");
-        router.refresh();
+        // Full page navigation ensures the cookie is sent on the next request
+        window.location.href = "/admin";
       }
     } catch {
       setError("Der opstod en fejl. Prøv igen.");
