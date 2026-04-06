@@ -76,7 +76,7 @@ export function LoginForm() {
           <Button
             type="submit"
             className="w-full"
-            disabled={loading || !username || !password}
+            disabled={loading}
           >
             <LogIn className="h-4 w-4 mr-2" />
             {loading ? "Logger ind..." : "Log ind"}
