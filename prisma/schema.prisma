@@ -133,6 +133,7 @@ model Session {
 
   checkInTime  DateTime  @default(now())
   checkOutTime DateTime?
+  expectedCheckOut DateTime?  // Optional planned checkout date
 
   // Baseline readings captured from HA
   startKwh         Float?

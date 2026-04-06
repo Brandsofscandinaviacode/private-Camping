@@ -41,6 +41,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
   const [bookingRef, setBookingRef] = useState("");
+  const [expectedCheckOut, setExpectedCheckOut] = useState("");
   const [loading, setLoading] = useState(false);
   const [copyLabel, setCopyLabel] = useState("Kopiér");
   const [result, setResult] = useState<{
@@ -52,7 +53,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     if (!guestName.trim()) return;
     setLoading(true);
     try {
-      const res = await checkIn(unitId, guestName.trim(), guestEmail.trim() || undefined, guestPhone.trim() || undefined, bookingRef.trim() || undefined);
+      const res = await checkIn(unitId, guestName.trim(), guestEmail.trim() || undefined, guestPhone.trim() || undefined, bookingRef.trim() || undefined, expectedCheckOut || undefined);
       setResult(res);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Check-in fejlede");
@@ -67,6 +68,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     setGuestEmail("");
     setGuestPhone("");
     setBookingRef("");
+    setExpectedCheckOut("");
     setResult(null);
     setCopyLabel("Kopiér");
   }
@@ -121,14 +123,25 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
                 />
               </div>
             </div>
-            <div>
-              <Label htmlFor="booking-ref">Booking nr.</Label>
-              <Input
-                id="booking-ref"
-                value={bookingRef}
-                onChange={(e) => setBookingRef(e.target.value)}
-                placeholder="F.eks. BK-001"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="booking-ref">Booking nr.</Label>
+                <Input
+                  id="booking-ref"
+                  value={bookingRef}
+                  onChange={(e) => setBookingRef(e.target.value)}
+                  placeholder="F.eks. BK-001"
+                />
+              </div>
+              <div>
+                <Label htmlFor="expected-checkout">Forventet checkout</Label>
+                <Input
+                  id="expected-checkout"
+                  type="date"
+                  value={expectedCheckOut}
+                  onChange={(e) => setExpectedCheckOut(e.target.value)}
+                />
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
               Systemet tænder strøm, aflæser målere og opretter gæsteportal.

@@ -9,6 +9,9 @@ import {
   DoorOpen,
   CreditCard,
   Receipt,
+  Globe,
+  Info,
+  Map,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +24,7 @@ import {
   createSessionPayment,
   createInvoicePayment,
 } from "@/lib/actions";
+import { type Locale, localeLabels, getTranslations } from "@/lib/guest-translations";
 
 interface InvoiceData {
   id: number;
@@ -41,6 +45,7 @@ interface GuestPortalClientProps {
   status: string;
   checkInTime: string;
   checkOutTime: string | null;
+  expectedCheckOut: string | null;
   hasClimate: boolean;
   hasSmartLock: boolean;
   hasElectricity: boolean;
@@ -54,6 +59,9 @@ interface GuestPortalClientProps {
   isLongTerm: boolean;
   invoices: InvoiceData[];
   quickpayEnabled: boolean;
+  unitType: string;
+  practicalInfo: string | null;
+  siteMapUrl: string | null;
 }
 
 interface ConsumptionData {
@@ -73,6 +81,7 @@ export function GuestPortalClient({
   status,
   checkInTime,
   checkOutTime,
+  expectedCheckOut,
   hasClimate,
   hasSmartLock,
   hasElectricity,
@@ -86,7 +95,27 @@ export function GuestPortalClient({
   isLongTerm,
   invoices,
   quickpayEnabled,
+  unitType,
+  practicalInfo,
+  siteMapUrl,
 }: GuestPortalClientProps) {
+  const [locale, setLocale] = useState<Locale>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("campsense-lang") as Locale;
+      if (saved && (saved === "da" || saved === "en" || saved === "de")) return saved;
+      const browserLang = navigator.language.slice(0, 2);
+      if (browserLang === "de") return "de";
+      if (browserLang === "en") return "en";
+    }
+    return "da";
+  });
+  const tx = getTranslations(locale);
+
+  function changeLocale(l: Locale) {
+    setLocale(l);
+    localStorage.setItem("campsense-lang", l);
+  }
+
   const [consumption, setConsumption] = useState<ConsumptionData | null>(null);
   const [tempValue, setTempValue] = useState("21");
   const [isPending, startTransition] = useTransition();
@@ -158,15 +187,39 @@ export function GuestPortalClient({
     <div className="min-h-screen bg-background">
       {/* Header */}
       <div className="bg-gradient-to-br from-primary/20 via-primary/10 to-background px-4 py-10 text-center">
+        {/* Language switcher */}
+        <div className="flex justify-end px-2 -mt-4 mb-2">
+          <div className="flex items-center gap-1 bg-background/80 rounded-full px-2 py-1 text-xs">
+            <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+            {(["da", "en", "de"] as Locale[]).map((l) => (
+              <button
+                key={l}
+                onClick={() => changeLocale(l)}
+                className={`px-2 py-0.5 rounded-full transition-colors ${
+                  locale === l ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {localeLabels[l]}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="h-12 w-12 rounded-2xl bg-primary/20 flex items-center justify-center mx-auto mb-4">
           <Tent className="h-6 w-6 text-primary" />
         </div>
-        <h1 className="text-2xl font-bold">Velkommen, {guestName}!</h1>
+        <h1 className="text-2xl font-bold">{tx.welcome}, {guestName}!</h1>
         <p className="text-muted-foreground mt-1">{unitName}</p>
         <p className="text-muted-foreground/70 text-sm mt-1">
-          {isLongTerm ? "Langtidsleje" : `Ankomst: ${new Date(checkInTime).toLocaleDateString("da-DK", {
+          {isLongTerm ? tx.longTermRental : `${tx.arrival}: ${new Date(checkInTime).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
             weekday: "long", day: "numeric", month: "long",
           })}`}
+          {!isLongTerm && expectedCheckOut && (
+            <span className="block text-muted-foreground/70 text-sm mt-0.5">
+              {tx.departure}: {new Date(expectedCheckOut).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
+                weekday: "long", day: "numeric", month: "long",
+              })}
+            </span>
+          )}
         </p>
       </div>
 
@@ -176,10 +229,10 @@ export function GuestPortalClient({
           <Card>
             <CardContent className="py-6 text-center space-y-4">
               <div>
-                <p className="font-medium">Dit ophold er afsluttet</p>
+                <p className="font-medium">{tx.stayCompleted}</p>
                 {checkOutTime && (
                   <p className="text-sm text-muted-foreground mt-1">
-                    Afrejse: {new Date(checkOutTime).toLocaleDateString("da-DK", {
+                    {tx.departureDate}: {new Date(checkOutTime).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
                       weekday: "long", day: "numeric", month: "long",
                     })}
                   </p>
@@ -187,35 +240,34 @@ export function GuestPortalClient({
               </div>
               {totalCost !== null && (
                 <div className="space-y-1 text-sm">
-                  {totalElectricityCost !== null && totalElectricityCost > 0 && <p>El: {formatDKK(totalElectricityCost)}</p>}
-                  {totalWaterCost !== null && totalWaterCost > 0 && <p>Vand: {formatDKK(totalWaterCost)}</p>}
+                  {totalElectricityCost !== null && totalElectricityCost > 0 && <p>{tx.electricity}: {formatDKK(totalElectricityCost)}</p>}
+                  {totalWaterCost !== null && totalWaterCost > 0 && <p>{tx.water}: {formatDKK(totalWaterCost)}</p>}
                   {externalPrice !== null && externalPrice > 0 && (
-                    <p>{externalDescription || "Ophold"}: {formatDKK(externalPrice)}</p>
+                    <p>{externalDescription || tx.stay}: {formatDKK(externalPrice)}</p>
                   )}
                   <Separator className="my-2" />
                   <p className="text-xl font-bold">
-                    Total: {formatDKK((totalCost || 0) + (externalPrice || 0))}
+                    {tx.total}: {formatDKK((totalCost || 0) + (externalPrice || 0))}
                   </p>
                 </div>
               )}
 
-              {/* Payment status */}
               {paymentStatus === "PAID" ? (
                 <div className="bg-green-50 text-green-700 rounded-lg p-3 text-sm font-medium">
-                  Betalt — tak for dit ophold!
+                  {tx.thankYou}
                 </div>
               ) : (
                 <div className="space-y-2">
                   <div className="bg-amber-50 text-amber-700 rounded-lg p-3 text-sm">
-                    Afventer betaling
+                    {tx.awaitingPayment}
                   </div>
                   {quickpayEnabled ? (
                     <Button onClick={handlePaySession} disabled={payingSession} className="w-full">
                       <CreditCard className="h-4 w-4 mr-2" />
-                      {payingSession ? "Opretter betaling..." : "Betal online"}
+                      {payingSession ? tx.creatingPayment : tx.payOnline}
                     </Button>
                   ) : (
-                    <p className="text-xs text-muted-foreground text-center">Kontakt campingpladsen for betaling</p>
+                    <p className="text-xs text-muted-foreground text-center">{tx.contactCampsite}</p>
                   )}
                   {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
                 </div>
@@ -228,7 +280,7 @@ export function GuestPortalClient({
         {isActive && sessionId && (hasElectricity || hasWater) && (
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Dit forbrug</CardTitle>
+              <CardTitle className="text-base">{tx.yourConsumption}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {hasElectricity && (
@@ -238,10 +290,10 @@ export function GuestPortalClient({
                       <Zap className="h-4 w-4 text-yellow-400" />
                     </div>
                     <div>
-                      <p className="text-sm font-medium">Elektricitet</p>
+                      <p className="text-sm font-medium">{tx.electricity}</p>
                       <p className="text-xs text-muted-foreground">
                         {consumption?.usedKwh != null
-                          ? `${consumption.usedKwh.toFixed(2)} kWh` : "Afventer data..."}
+                          ? `${consumption.usedKwh.toFixed(2)} kWh` : tx.awaitingData}
                       </p>
                     </div>
                   </div>
@@ -255,10 +307,10 @@ export function GuestPortalClient({
                       <Droplets className="h-4 w-4 text-blue-400" />
                     </div>
                     <div>
-                      <p className="text-sm font-medium">Vand</p>
+                      <p className="text-sm font-medium">{tx.water}</p>
                       <p className="text-xs text-muted-foreground">
                         {consumption?.usedWaterLiters != null
-                          ? `${consumption.usedWaterLiters.toFixed(0)} liter` : "Afventer data..."}
+                          ? `${consumption.usedWaterLiters.toFixed(0)} liter` : tx.awaitingData}
                       </p>
                     </div>
                   </div>
@@ -267,12 +319,12 @@ export function GuestPortalClient({
               )}
               <Separator />
               <div className="flex items-center justify-between">
-                <span className="font-bold">Total</span>
+                <span className="font-bold">{tx.total}</span>
                 <span className="text-xl font-bold text-primary">
                   {formatDKK(consumption?.totalLiveCost ?? null)}
                 </span>
               </div>
-              <p className="text-xs text-center text-muted-foreground">Opdateres hvert 30. sekund</p>
+              <p className="text-xs text-center text-muted-foreground">{tx.updatesEvery30s}</p>
             </CardContent>
           </Card>
         )}
@@ -283,7 +335,7 @@ export function GuestPortalClient({
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <Thermometer className="h-4 w-4 text-blue-400" />
-                Temperatur
+                {tx.temperature}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -295,7 +347,7 @@ export function GuestPortalClient({
               </div>
               <Button onClick={handleSetTemp} disabled={isPending}
                 className="w-full mt-3" variant="outline">
-                {isPending ? "Indstiller..." : "Sæt temperatur"}
+                {isPending ? tx.setting : tx.setTemperature}
               </Button>
             </CardContent>
           </Card>
@@ -307,14 +359,14 @@ export function GuestPortalClient({
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <DoorOpen className="h-4 w-4 text-primary" />
-                Dør
+                {tx.door}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <Button onClick={handleUnlock} disabled={isPending} className="w-full">
-                {isPending ? "Åbner..." : "Lås op"}
+                {isPending ? tx.opening : tx.unlock}
               </Button>
-              {unlockMsg && <p className="text-sm text-primary text-center mt-2">{unlockMsg}</p>}
+              {unlockMsg && <p className="text-sm text-primary text-center mt-2">{tx.doorUnlocked}</p>}
             </CardContent>
           </Card>
         )}
@@ -325,7 +377,7 @@ export function GuestPortalClient({
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <Receipt className="h-4 w-4" />
-                Dine fakturaer
+                {tx.yourInvoices}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -334,10 +386,10 @@ export function GuestPortalClient({
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium">
-                        {new Date(inv.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" })}
+                        {new Date(inv.periodStart).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", { month: "long", year: "numeric" })}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        El: {inv.electricityCost.toFixed(2)} · Vand: {inv.waterCost.toFixed(2)}
+                        {tx.electricity}: {inv.electricityCost.toFixed(2)} · {tx.water}: {inv.waterCost.toFixed(2)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -345,9 +397,9 @@ export function GuestPortalClient({
                       <Badge variant={inv.status === "PAID" ? "default" : "secondary"}
                         className={inv.status === "PAID" ? "bg-primary/20 text-primary" :
                           inv.status === "OVERDUE" ? "bg-destructive/20 text-destructive" : ""}>
-                        {inv.status === "PENDING" ? "Afventer" :
-                         inv.status === "PAID" ? "Betalt" :
-                         inv.status === "OVERDUE" ? "Forfalden" : "Kladde"}
+                        {inv.status === "PENDING" ? tx.pending :
+                         inv.status === "PAID" ? tx.paid :
+                         inv.status === "OVERDUE" ? tx.overdue : tx.draft}
                       </Badge>
                     </div>
                   </div>
@@ -359,11 +411,43 @@ export function GuestPortalClient({
                       className="w-full text-xs"
                     >
                       <CreditCard className="h-3.5 w-3.5 mr-1.5" />
-                      {payingInvoiceId === inv.id ? "Opretter betaling..." : "Betal faktura"}
+                      {payingInvoiceId === inv.id ? tx.creatingPayment : tx.payInvoice}
                     </Button>
                   )}
                 </div>
               ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Practical info */}
+        {practicalInfo && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Info className="h-4 w-4 text-blue-500" />
+                {tx.practicalInfo}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-sm text-muted-foreground whitespace-pre-line leading-relaxed">
+                {practicalInfo}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Site map */}
+        {siteMapUrl && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Map className="h-4 w-4 text-green-600" />
+                {tx.siteMap}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <img src={siteMapUrl} alt={tx.siteMap} className="w-full rounded-lg" />
             </CardContent>
           </Card>
         )}
@@ -373,12 +457,12 @@ export function GuestPortalClient({
           <Card className="border-dashed border-border/50">
             <CardContent className="py-6 text-center">
               <CreditCard className="h-8 w-8 mx-auto mb-2 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">Betaling sker ved check-ud</p>
+              <p className="text-sm text-muted-foreground">{tx.paymentAtCheckout}</p>
             </CardContent>
           </Card>
         )}
 
-        <p className="text-[11px] text-center text-muted-foreground/50 pt-4">Drevet af CampSense</p>
+        <p className="text-[11px] text-center text-muted-foreground/50 pt-4">{tx.poweredBy}</p>
       </div>
     </div>
   );

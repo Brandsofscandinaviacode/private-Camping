@@ -97,6 +97,12 @@ export default async function UnitDetailPage({
                   <span className="text-muted-foreground">Check-in</span>
                   <span>{new Date(activeSession.checkInTime).toLocaleString("da-DK")}</span>
                 </div>
+                {activeSession.expectedCheckOut && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Forventet checkout</span>
+                    <span>{new Date(activeSession.expectedCheckOut).toLocaleDateString("da-DK")}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-muted-foreground">Gæsteportal</span>
                   <CopyButton text={`/guest/${activeSession.guestPortalToken}`} label="Kopiér link" />

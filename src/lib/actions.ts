@@ -258,7 +258,7 @@ export async function updateMultipleSettings(
 // ──────────────────────────────────────────────
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
-export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string) {
+export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string, expectedCheckOut?: string) {
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -295,7 +295,7 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
+    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
   });
 
   await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
@@ -1231,6 +1231,57 @@ export async function getHourlyConsumptionForDate(date: string) {
   return Array.from(hourlyMap.entries())
     .map(([hour, { totalKwh }]) => ({ hour, kwhPerHour: parseFloat(totalKwh.toFixed(3)) }))
     .sort((a, b) => a.hour.localeCompare(b.hour));
+}
+
+// Get average hourly consumption over last N days (for estimated overlay)
+export async function getAverageHourlyConsumption(days: number = 7) {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  const logs = await prisma.consumptionLog.findMany({
+    where: {
+      recordedAt: { gte: startDate, lte: endDate },
+    },
+    orderBy: { recordedAt: "asc" },
+  });
+
+  // Group by unit, compute hourly rates, then average by hour-of-day
+  const byUnit = new Map<number, typeof logs>();
+  for (const log of logs) {
+    const arr = byUnit.get(log.unitId) || [];
+    arr.push(log);
+    byUnit.set(log.unitId, arr);
+  }
+
+  // hourOfDay -> { totalKwh, count } across all days
+  const hourlyAvg = new Map<number, { totalKwh: number; count: number }>();
+
+  for (const [, unitLogs] of byUnit) {
+    for (let i = 1; i < unitLogs.length; i++) {
+      const prev = unitLogs[i - 1];
+      const curr = unitLogs[i];
+      if (prev.electricityKwh === null || curr.electricityKwh === null) continue;
+
+      const diffHours = (curr.recordedAt.getTime() - prev.recordedAt.getTime()) / 3600000;
+      if (diffHours <= 0 || diffHours > 2) continue;
+
+      const kwhRate = Math.max(0, (curr.electricityKwh - prev.electricityKwh) / diffHours);
+      const hour = curr.recordedAt.getHours();
+
+      const existing = hourlyAvg.get(hour) || { totalKwh: 0, count: 0 };
+      existing.totalKwh += kwhRate;
+      existing.count++;
+      hourlyAvg.set(hour, existing);
+    }
+  }
+
+  return Array.from(hourlyAvg.entries())
+    .map(([hour, { totalKwh, count }]) => ({
+      hour,
+      avgKwhPerHour: parseFloat((totalKwh / count).toFixed(3)),
+    }))
+    .sort((a, b) => a.hour - b.hour);
 }
 
 // ──────────────────────────────────────────────

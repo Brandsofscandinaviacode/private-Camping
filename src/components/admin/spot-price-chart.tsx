@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getSpotPricesForDate, getHourlyConsumptionForDate, getLatestSpotPriceDate, testEdsApi } from "@/lib/actions";
+import { getSpotPricesForDate, getHourlyConsumptionForDate, getLatestSpotPriceDate, testEdsApi, getAverageHourlyConsumption } from "@/lib/actions";
 
 interface ChartEntry {
   hour: string;
@@ -23,6 +23,7 @@ interface ChartEntry {
   spotPris: number | null;
   effektivPris: number | null;
   forbrug: number | null;
+  estForbrug: number | null;
 }
 
 function formatDate(date: Date): string {
@@ -58,9 +59,10 @@ export function SpotPriceChart() {
     setLoading(true);
     setError(null);
     try {
-      const [priceData, consumptionData] = await Promise.all([
+      const [priceData, consumptionData, avgConsumption] = await Promise.all([
         getSpotPricesForDate(date),
         getHourlyConsumptionForDate(date),
+        getAverageHourlyConsumption(7),
       ]);
 
       setPricingInfo({
@@ -73,9 +75,14 @@ export function SpotPriceChart() {
       // Build consumption lookup by hour
       const consumptionMap = new Map<string, number>();
       for (const c of consumptionData) {
-        // Normalize hour key to match
         const hourKey = c.hour.slice(11, 13);
         consumptionMap.set(hourKey, c.kwhPerHour);
+      }
+
+      // Build average consumption lookup by hour-of-day
+      const avgMap = new Map<number, number>();
+      for (const a of avgConsumption) {
+        avgMap.set(a.hour, a.avgKwhPerHour);
       }
 
       // Build 24 hour slots
@@ -111,6 +118,7 @@ export function SpotPriceChart() {
           spotPris: spotPrice !== null ? parseFloat(spotPrice.toFixed(4)) : null,
           effektivPris: effectivePrice !== null ? parseFloat(effectivePrice.toFixed(4)) : null,
           forbrug: consumptionMap.get(hourStr) ?? null,
+          estForbrug: avgMap.get(h) ?? null,
         });
       }
 
@@ -320,7 +328,7 @@ export function SpotPriceChart() {
               }}
               formatter={(value, name) => {
                 const v = Number(value);
-                if (name === "Forbrug") return [`${v.toFixed(2)} kWh/t`, name];
+                if (name === "Forbrug" || name === "Gns. forbrug (7d)") return [`${v.toFixed(2)} kWh/t`, name];
                 return [`${v.toFixed(4)} kr/kWh`, name];
               }}
             />
@@ -365,6 +373,17 @@ export function SpotPriceChart() {
               stroke="#22c55e"
               strokeWidth={2.5}
               dot={{ fill: "#22c55e", r: 3 }}
+              connectNulls={false}
+            />
+            <Line
+              yAxisId="consumption"
+              type="monotone"
+              dataKey="estForbrug"
+              name="Gns. forbrug (7d)"
+              stroke="#a855f7"
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+              dot={false}
               connectNulls={false}
             />
           </ComposedChart>

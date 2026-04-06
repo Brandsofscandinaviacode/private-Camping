@@ -12,11 +12,14 @@ export default async function GuestPortalPage({
   const { token } = await params;
   const globalSettings = await getGlobalSettings();
   const quickpayEnabled = globalSettings.quickpay_enabled === "true";
+  const siteMapUrl = globalSettings.site_map_url || null;
 
   // Try session-based token first
   const session = await getSessionByToken(token);
   if (session) {
     const hw = session.unit.hardware;
+    const practicalInfoKey = `practical_info_${session.unit.type.toLowerCase()}`;
+    const practicalInfo = globalSettings[practicalInfoKey] || null;
     return (
       <GuestPortalClient
         token={token}
@@ -26,6 +29,7 @@ export default async function GuestPortalPage({
         status={session.status}
         checkInTime={session.checkInTime.toISOString()}
         checkOutTime={session.checkOutTime?.toISOString() ?? null}
+        expectedCheckOut={session.expectedCheckOut?.toISOString() ?? null}
         hasClimate={hw?.hasClimate ?? false}
         hasSmartLock={hw?.hasSmartLock ?? false}
         hasElectricity={hw?.hasElectricity ?? false}
@@ -39,6 +43,9 @@ export default async function GuestPortalPage({
         isLongTerm={false}
         invoices={[]}
         quickpayEnabled={quickpayEnabled}
+        unitType={session.unit.type}
+        practicalInfo={practicalInfo}
+        siteMapUrl={siteMapUrl}
       />
     );
   }
@@ -48,6 +55,8 @@ export default async function GuestPortalPage({
   if (unit) {
     const activeSession = await getActiveSession(unit.id);
     const hw = unit.hardware;
+    const practicalInfoKey = `practical_info_${unit.type.toLowerCase()}`;
+    const practicalInfo = globalSettings[practicalInfoKey] || null;
 
     return (
       <GuestPortalClient
@@ -58,6 +67,7 @@ export default async function GuestPortalPage({
         status={activeSession?.status ?? "ACTIVE"}
         checkInTime={activeSession?.checkInTime?.toISOString() ?? new Date().toISOString()}
         checkOutTime={null}
+        expectedCheckOut={null}
         hasClimate={hw?.hasClimate ?? false}
         hasSmartLock={hw?.hasSmartLock ?? false}
         hasElectricity={hw?.hasElectricity ?? false}
@@ -80,6 +90,9 @@ export default async function GuestPortalPage({
           paymentToken: inv.paymentToken,
         }))}
         quickpayEnabled={quickpayEnabled}
+        unitType={unit.type}
+        practicalInfo={practicalInfo}
+        siteMapUrl={siteMapUrl}
       />
     );
   }

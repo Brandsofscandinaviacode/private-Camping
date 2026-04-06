@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Save, Wifi, WifiOff, Loader2 } from "lucide-react";
+import { useState, useTransition, useRef } from "react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -654,6 +654,113 @@ export function PaymentSettings({ settings }: SettingsFormProps) {
           <p>3. Når betalingen er gennemført, sender QuickPay en callback til CampSense</p>
           <p>4. Betalingsstatus opdateres automatisk til &quot;Betalt&quot;</p>
           <p className="pt-2 text-xs">Callback URL: <code className="bg-muted px-1.5 py-0.5 rounded">{"{site_url}"}/api/quickpay/callback</code></p>
+        </div>
+      </div>
+
+      <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+    </div>
+  );
+}
+
+// ─── GUEST PORTAL TAB ───
+const unitTypeLabels: Record<string, string> = {
+  cabin: "Hytte",
+  seasonal: "Fastligger",
+  caravan: "Campingvogn",
+  pitch: "Plads",
+};
+
+export function GuestPortalSettings({ settings }: SettingsFormProps) {
+  const [values, setValues] = useState({
+    practical_info_cabin: settings.practical_info_cabin || "",
+    practical_info_seasonal: settings.practical_info_seasonal || "",
+    practical_info_caravan: settings.practical_info_caravan || "",
+    practical_info_pitch: settings.practical_info_pitch || "",
+    site_map_url: settings.site_map_url || "",
+  });
+  const { isPending, saved, handleSave } = useSave(values);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function h(key: string, value: string) {
+    setValues((v) => ({ ...v, [key]: value }));
+  }
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload/site-map", { method: "POST", body: formData });
+      const data = await res.json();
+      if (data.url) {
+        h("site_map_url", data.url);
+      }
+    } catch {
+      alert("Upload fejlede");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Practical info per unit type */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Praktiske oplysninger</h2>
+          <p className="text-xs text-muted-foreground mt-1">Vises på gæstesiden. Forskellige tekster pr. enhedstype.</p>
+        </div>
+        <div className="p-5 space-y-4">
+          {(["cabin", "seasonal", "caravan", "pitch"] as const).map((type) => (
+            <div key={type}>
+              <Label className="text-sm font-medium">{unitTypeLabels[type]}</Label>
+              <textarea
+                value={values[`practical_info_${type}` as keyof typeof values]}
+                onChange={(e) => h(`practical_info_${type}`, e.target.value)}
+                placeholder={`Praktisk info for ${unitTypeLabels[type].toLowerCase()}...`}
+                rows={4}
+                className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Site map */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Pladskort</h2>
+          <p className="text-xs text-muted-foreground mt-1">Upload et billede af campingpladsen. Vises på gæstesiden.</p>
+        </div>
+        <div className="p-5 space-y-3">
+          {values.site_map_url ? (
+            <div className="space-y-3">
+              <img src={values.site_map_url} alt="Pladskort" className="w-full max-h-64 object-contain rounded-lg border" />
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                  <Upload className="h-4 w-4 mr-2" />
+                  {uploading ? "Uploader..." : "Erstat billede"}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => h("site_map_url", "")}>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Fjern
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="border-2 border-dashed rounded-lg p-8 text-center">
+              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground mb-3">Intet pladskort uploadet</p>
+              <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                {uploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                {uploading ? "Uploader..." : "Upload billede"}
+              </Button>
+            </div>
+          )}
+          <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUpload} className="hidden" />
         </div>
       </div>
 
