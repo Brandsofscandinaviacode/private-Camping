@@ -600,7 +600,12 @@ export async function getLiveConsumption(sessionId: number) {
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-    if (currentKwh !== null && session.startKwh !== null) {
+    if (currentKwh !== null && session.startKwh === null) {
+      // Auto-capture baseline if it was missing at check-in
+      await prisma.session.update({ where: { id: sessionId }, data: { startKwh: currentKwh } });
+      usedKwh = 0;
+      electricityCost = 0;
+    } else if (currentKwh !== null && session.startKwh !== null) {
       usedKwh = Math.max(0, currentKwh - session.startKwh);
       electricityCost = usedKwh * effectiveElPrice;
     }
@@ -608,7 +613,12 @@ export async function getLiveConsumption(sessionId: number) {
 
   if (hw?.hasWater && hw.waterMeterEntityId) {
     currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
-    if (currentWaterLiters !== null && session.startWaterLiters !== null) {
+    if (currentWaterLiters !== null && session.startWaterLiters === null) {
+      // Auto-capture baseline if it was missing at check-in
+      await prisma.session.update({ where: { id: sessionId }, data: { startWaterLiters: currentWaterLiters } });
+      usedWaterLiters = 0;
+      waterCost = 0;
+    } else if (currentWaterLiters !== null && session.startWaterLiters !== null) {
       usedWaterLiters = Math.max(0, currentWaterLiters - session.startWaterLiters);
       waterCost = usedWaterLiters * pricing.pricePerLiterWater;
     }
