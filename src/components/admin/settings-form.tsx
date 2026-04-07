@@ -740,16 +740,32 @@ const unitTypeLabels: Record<string, string> = {
   pitch: "Plads",
 };
 
+const langLabels: Record<string, string> = {
+  da: "Dansk",
+  en: "English",
+  de: "Deutsch",
+};
+
+const unitTypes = ["cabin", "seasonal", "caravan", "pitch"] as const;
+const langs = ["da", "en", "de"] as const;
+
+function buildPracticalInfoState(settings: Record<string, string>) {
+  const state: Record<string, string> = { site_map_url: settings.site_map_url || "" };
+  for (const type of unitTypes) {
+    for (const lang of langs) {
+      const key = `practical_info_${type}_${lang}`;
+      // Fallback: if per-lang key doesn't exist, use the old non-lang key for DA
+      state[key] = settings[key] || (lang === "da" ? settings[`practical_info_${type}`] || "" : "");
+    }
+  }
+  return state;
+}
+
 export function GuestPortalSettings({ settings }: SettingsFormProps) {
-  const [values, setValues] = useState({
-    practical_info_cabin: settings.practical_info_cabin || "",
-    practical_info_seasonal: settings.practical_info_seasonal || "",
-    practical_info_caravan: settings.practical_info_caravan || "",
-    practical_info_pitch: settings.practical_info_pitch || "",
-    site_map_url: settings.site_map_url || "",
-  });
+  const [values, setValues] = useState(buildPracticalInfoState(settings));
   const { isPending, saved, handleSave } = useSave(values);
   const [uploading, setUploading] = useState(false);
+  const [activeLang, setActiveLang] = useState<string>("da");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function h(key: string, value: string) {
@@ -777,25 +793,42 @@ export function GuestPortalSettings({ settings }: SettingsFormProps) {
 
   return (
     <div className="space-y-5">
-      {/* Practical info per unit type */}
+      {/* Practical info per unit type per language */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Praktiske oplysninger</h2>
-          <p className="text-xs text-muted-foreground mt-1">Vises på gæstesiden. Forskellige tekster pr. enhedstype. HTML understøttes (&lt;b&gt;, &lt;ul&gt;, &lt;a&gt;, &lt;h3&gt; osv.)</p>
+          <p className="text-xs text-muted-foreground mt-1">Vises på gæstesiden pr. enhedstype og sprog. HTML understøttes (&lt;b&gt;, &lt;ul&gt;, &lt;a&gt;, &lt;h3&gt; osv.)</p>
         </div>
         <div className="p-5 space-y-4">
-          {(["cabin", "seasonal", "caravan", "pitch"] as const).map((type) => (
-            <div key={type}>
-              <Label className="text-sm font-medium">{unitTypeLabels[type]}</Label>
-              <textarea
-                value={values[`practical_info_${type}` as keyof typeof values]}
-                onChange={(e) => h(`practical_info_${type}`, e.target.value)}
-                placeholder={`Praktisk info for ${unitTypeLabels[type].toLowerCase()}...`}
-                rows={4}
-                className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </div>
-          ))}
+          {/* Language tabs */}
+          <div className="flex gap-1 border-b border-border pb-0">
+            {langs.map((lang) => (
+              <button
+                key={lang}
+                onClick={() => setActiveLang(lang)}
+                className={`px-3 py-1.5 text-sm font-medium border-b-2 transition-colors ${
+                  activeLang === lang ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {langLabels[lang]}
+              </button>
+            ))}
+          </div>
+          {unitTypes.map((type) => {
+            const key = `practical_info_${type}_${activeLang}`;
+            return (
+              <div key={`${type}-${activeLang}`}>
+                <Label className="text-sm font-medium">{unitTypeLabels[type]}</Label>
+                <textarea
+                  value={values[key] || ""}
+                  onChange={(e) => h(key, e.target.value)}
+                  placeholder={`Praktisk info for ${unitTypeLabels[type].toLowerCase()} (${langLabels[activeLang]})...`}
+                  rows={4}
+                  className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 

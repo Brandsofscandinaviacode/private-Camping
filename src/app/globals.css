@@ -100,9 +100,9 @@
     @apply font-sans;
     font-size: 16px;
   }
-  /* Make text-xs less tiny on mobile */
+  /* Override text-xs to match text-sm (14px) — 12px is too small */
   .text-xs {
-    font-size: 0.8125rem; /* 13px instead of 12px */
+    font-size: 0.875rem;
     line-height: 1.25rem;
   }
 }

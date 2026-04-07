@@ -60,7 +60,7 @@ interface GuestPortalClientProps {
   invoices: InvoiceData[];
   quickpayEnabled: boolean;
   unitType: string;
-  practicalInfo: string | null;
+  practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
 }
 
@@ -123,6 +123,7 @@ export function GuestPortalClient({
   const [payingSession, setPayingSession] = useState(false);
   const [payingInvoiceId, setPayingInvoiceId] = useState<number | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
+  const [mapExpanded, setMapExpanded] = useState(false);
 
   const isActive = status === "ACTIVE";
 
@@ -421,22 +422,26 @@ export function GuestPortalClient({
         )}
 
         {/* Practical info */}
-        {practicalInfo && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Info className="h-4 w-4 text-blue-500" />
-                {tx.practicalInfo}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div
-                className="text-sm text-muted-foreground leading-relaxed prose prose-sm max-w-none [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h3]:text-foreground [&_h3]:font-semibold [&_h3]:text-base [&_h4]:text-foreground [&_h4]:font-medium [&_p]:my-1"
-                dangerouslySetInnerHTML={{ __html: practicalInfo }}
-              />
-            </CardContent>
-          </Card>
-        )}
+        {(() => {
+          const info = practicalInfo[locale] || practicalInfo.da;
+          if (!info) return null;
+          return (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Info className="h-4 w-4 text-blue-500" />
+                  {tx.practicalInfo}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div
+                  className="text-sm text-muted-foreground leading-relaxed prose prose-sm max-w-none [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h3]:text-foreground [&_h3]:font-semibold [&_h3]:text-base [&_h4]:text-foreground [&_h4]:font-medium [&_p]:my-1"
+                  dangerouslySetInnerHTML={{ __html: info }}
+                />
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* Site map */}
         {siteMapUrl && (
@@ -448,9 +453,34 @@ export function GuestPortalClient({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <img src={siteMapUrl} alt={tx.siteMap} className="w-full rounded-lg" />
+              <img
+                src={siteMapUrl}
+                alt={tx.siteMap}
+                className="w-full rounded-lg cursor-zoom-in"
+                onClick={() => setMapExpanded(true)}
+              />
             </CardContent>
           </Card>
+        )}
+
+        {/* Fullscreen map overlay */}
+        {mapExpanded && siteMapUrl && (
+          <div
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+            onClick={() => setMapExpanded(false)}
+          >
+            <img
+              src={siteMapUrl}
+              alt={tx.siteMap}
+              className="max-w-full max-h-full object-contain"
+            />
+            <button
+              className="absolute top-4 right-4 text-white bg-black/50 rounded-full w-10 h-10 flex items-center justify-center text-xl"
+              onClick={() => setMapExpanded(false)}
+            >
+              &times;
+            </button>
+          </div>
         )}
 
         {/* Payment info — only for short-term stays */}

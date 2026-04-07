@@ -61,9 +61,9 @@ export function UnitCard({ unit, haStates, activeGuestName }: UnitCardProps) {
   const displayGuest = activeGuestName || unit.longTermGuestName;
 
   return (
-    <Link href={`/admin/units/${unit.id}`}>
+    <Link href={`/admin/units/${unit.id}`} className="h-full block">
       <div
-        className={`group rounded-xl border bg-card p-5 hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full flex flex-col ${
+        className={`group rounded-xl border bg-card p-5 hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full min-h-[160px] flex flex-col ${
           isOccupied ? "border-l-[3px] border-l-primary" : ""
         }`}
       >

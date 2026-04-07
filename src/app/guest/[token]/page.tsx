@@ -18,8 +18,12 @@ export default async function GuestPortalPage({
   const session = await getSessionByToken(token);
   if (session) {
     const hw = session.unit.hardware;
-    const practicalInfoKey = `practical_info_${session.unit.type.toLowerCase()}`;
-    const practicalInfo = globalSettings[practicalInfoKey] || null;
+    const typeKey = session.unit.type.toLowerCase();
+    const practicalInfo = {
+      da: globalSettings[`practical_info_${typeKey}_da`] || globalSettings[`practical_info_${typeKey}`] || null,
+      en: globalSettings[`practical_info_${typeKey}_en`] || null,
+      de: globalSettings[`practical_info_${typeKey}_de`] || null,
+    };
     return (
       <GuestPortalClient
         token={token}
@@ -55,8 +59,12 @@ export default async function GuestPortalPage({
   if (unit) {
     const activeSession = await getActiveSession(unit.id);
     const hw = unit.hardware;
-    const practicalInfoKey = `practical_info_${unit.type.toLowerCase()}`;
-    const practicalInfo = globalSettings[practicalInfoKey] || null;
+    const typeKey = unit.type.toLowerCase();
+    const practicalInfo = {
+      da: globalSettings[`practical_info_${typeKey}_da`] || globalSettings[`practical_info_${typeKey}`] || null,
+      en: globalSettings[`practical_info_${typeKey}_en`] || null,
+      de: globalSettings[`practical_info_${typeKey}_de`] || null,
+    };
 
     return (
       <GuestPortalClient
