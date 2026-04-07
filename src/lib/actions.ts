@@ -2013,11 +2013,11 @@ export async function getGuestLaundryMachines() {
   });
 }
 
-// Guest starts a laundry machine — turns on Shelly relay
-export async function startLaundryMachine(
+// Guest initiates laundry — creates payment, then starts after payment
+export async function createLaundryPayment(
   machineId: number,
   guestPortalToken: string,
-): Promise<{ ok: boolean; message: string; paymentRequired?: boolean }> {
+): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   const machine = await prisma.laundryMachine.findUnique({
     where: { id: machineId },
     include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
@@ -2048,29 +2048,127 @@ export async function startLaundryMachine(
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
 
-  // Create laundry session
-  await prisma.laundrySess.create({
+  // Create laundry session in PENDING state (waiting for payment)
+  const laundrySess = await prisma.laundrySess.create({
     data: {
       machineId,
       sessionId: guestSession?.id || null,
       guestPortalToken,
       endsAt,
       pricePaid: machine.pricePerUse,
+      status: "PENDING",
       paymentStatus: "UNPAID",
     },
   });
 
-  // Turn on the Shelly relay
-  try {
-    await ha.turnOn(machine.switchEntityId);
-  } catch (e) {
-    console.error("Failed to turn on laundry machine:", e);
-    return { ok: false, message: "Kunne ikke tænde maskinen — tjek HA-forbindelsen" };
+  // Create QuickPay payment
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+
+  if (settings.quickpay_enabled !== "true") {
+    // No payment configured — start directly
+    await prisma.laundrySess.update({
+      where: { id: laundrySess.id },
+      data: { status: "ACTIVE", paymentStatus: "PAID" },
+    });
+    try { await ha.turnOn(machine.switchEntityId); } catch (e) { console.error("HA laundry:", e); }
+    return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
   }
 
-  // Schedule auto-off (we'll use the cron job to check)
-  revalidatePath("/guest");
-  return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
+  try {
+    const { createPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("L", laundrySess.id);
+
+    const { paymentId, paymentLink } = await createPaymentLink({
+      orderId,
+      amount: machine.pricePerUse,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}/guest/${guestPortalToken}?laundry_paid=1`,
+      cancelUrl: `${baseUrl}/guest/${guestPortalToken}?laundry_cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    await prisma.laundrySess.update({
+      where: { id: laundrySess.id },
+      data: { paymentId: String(paymentId) },
+    });
+
+    return { ok: true, message: "Videresendes til betaling...", paymentLink };
+  } catch (e) {
+    // Payment creation failed — clean up
+    await prisma.laundrySess.delete({ where: { id: laundrySess.id } });
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// Start a laundry machine after payment is confirmed (called from callback)
+export async function activateLaundrySession(laundrySessionId: number) {
+  const sess = await prisma.laundrySess.findUnique({
+    where: { id: laundrySessionId },
+    include: { machine: true },
+  });
+  if (!sess || sess.status !== "PENDING") return;
+
+  // Recalculate endsAt from now (since guest just paid)
+  const endsAt = new Date();
+  endsAt.setMinutes(endsAt.getMinutes() + sess.machine.durationMinutes);
+
+  await prisma.laundrySess.update({
+    where: { id: laundrySessionId },
+    data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
+  });
+
+  // Turn on the Shelly relay
+  try {
+    await ha.turnOn(sess.machine.switchEntityId);
+  } catch (e) {
+    console.error("Failed to turn on laundry machine:", e);
+  }
+}
+
+// Prepaid top-up: guest buys extra power
+export async function createPrepaidTopUp(
+  sessionId: number,
+  portalToken: string,
+  amount: number,
+): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!session) return { ok: false, message: "Session ikke fundet" };
+  if (session.guestPortalToken !== portalToken) return { ok: false, message: "Ugyldigt token" };
+  if (session.billingMode !== "PREPAID") return { ok: false, message: "Kun for forudbetalte ophold" };
+  if (amount <= 0) return { ok: false, message: "Ugyldigt beløb" };
+
+  const settings = await getGlobalSettings();
+  if (settings.quickpay_enabled !== "true") {
+    return { ok: false, message: "Online betaling er ikke aktiveret" };
+  }
+
+  const baseUrl = settings.site_url || "http://localhost:3000";
+
+  try {
+    const { createPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("T", sessionId); // T for Top-up
+
+    const { paymentId, paymentLink } = await createPaymentLink({
+      orderId,
+      amount,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}/guest/${portalToken}?topup_paid=1`,
+      cancelUrl: `${baseUrl}/guest/${portalToken}?topup_cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    // Store the top-up payment ID temporarily in notes (we'll process in callback)
+    // We prefix with TOPUP: so callback can identify it
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { notes: `${session.notes || ""}${session.notes ? "\n" : ""}TOPUP:${paymentId}:${amount}` },
+    });
+
+    return { ok: true, message: "Videresendes til betaling...", paymentLink };
+  } catch (e) {
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 // Called by cron to turn off expired laundry machines

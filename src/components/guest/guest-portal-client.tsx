@@ -26,7 +26,8 @@ import {
   guestUnlockDoor,
   createSessionPayment,
   createInvoicePayment,
-  startLaundryMachine,
+  createLaundryPayment,
+  createPrepaidTopUp,
   getGuestLaundryMachines,
 } from "@/lib/actions";
 import { type Locale, localeLabels, getTranslations } from "@/lib/guest-translations";
@@ -381,6 +382,11 @@ export function GuestPortalClient({
           </Card>
         )}
 
+        {/* Prepaid Top-up */}
+        {isActive && billingMode === "PREPAID" && sessionId && quickpayEnabled && (
+          <TopUpSection sessionId={sessionId} token={token} locale={locale} />
+        )}
+
         {/* Laundry Machines */}
         {isActive && laundryMachines.length > 0 && (
           <LaundrySection machines={laundryMachines} token={token} locale={locale} />
@@ -539,8 +545,8 @@ export function GuestPortalClient({
           </div>
         )}
 
-        {/* Payment info — only for short-term stays */}
-        {isActive && !isLongTerm && quickpayEnabled && (
+        {/* Payment info — only for short-term postpaid stays */}
+        {isActive && !isLongTerm && quickpayEnabled && billingMode !== "PREPAID" && (
           <Card className="border-dashed border-border/50">
             <CardContent className="py-6 text-center">
               <CreditCard className="h-8 w-8 mx-auto mb-2 text-muted-foreground/50" />
@@ -584,12 +590,12 @@ function LaundrySection({
     setStartingId(machineId);
     setMessage(null);
     try {
-      const res = await startLaundryMachine(machineId, token);
-      setMessage({ ok: res.ok, text: res.message });
-      if (res.ok) {
-        const updated = await getGuestLaundryMachines();
-        setMachines(updated);
+      const res = await createLaundryPayment(machineId, token);
+      if (res.ok && res.paymentLink) {
+        window.location.href = res.paymentLink;
+        return;
       }
+      setMessage({ ok: res.ok, text: res.message });
     } catch {
       setMessage({ ok: false, text: "Fejl" });
     } finally {
@@ -602,7 +608,7 @@ function LaundrySection({
     available: locale === "en" ? "Available" : locale === "de" ? "Verfügbar" : "Ledig",
     inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
     minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
-    start: locale === "en" ? "Start" : locale === "de" ? "Starten" : "Start",
+    start: locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start",
     perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
   };
 
@@ -648,6 +654,95 @@ function LaundrySection({
             {message.text}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Top-up Section for Prepaid Guests ──
+function TopUpSection({
+  sessionId,
+  token,
+  locale,
+}: {
+  sessionId: number;
+  token: string;
+  locale: string;
+}) {
+  const [amount, setAmount] = useState("100");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const presets = [50, 100, 200, 500];
+
+  async function handleTopUp() {
+    const val = parseFloat(amount);
+    if (!val || val <= 0) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await createPrepaidTopUp(sessionId, token, val);
+      if (res.ok && res.paymentLink) {
+        window.location.href = res.paymentLink;
+        return;
+      }
+      setError(res.message);
+    } catch {
+      setError("Fejl ved oprettelse af betaling");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const labels = {
+    title: locale === "en" ? "Buy extra power" : locale === "de" ? "Extra Strom kaufen" : "Køb ekstra strøm",
+    description: locale === "en" ? "Top up your prepaid balance" : locale === "de" ? "Guthaben aufladen" : "Oplad din forudbetalte saldo",
+    buy: locale === "en" ? "Buy" : locale === "de" ? "Kaufen" : "Køb",
+    processing: locale === "en" ? "Processing..." : locale === "de" ? "Verarbeitung..." : "Behandler...",
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Wallet className="h-4 w-4 text-green-500" />
+          {labels.title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">{labels.description}</p>
+        <div className="flex gap-2 flex-wrap">
+          {presets.map((p) => (
+            <button
+              key={p}
+              onClick={() => setAmount(String(p))}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                amount === String(p)
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {p} DKK
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <input
+              type="number"
+              min="10"
+              step="10"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2 text-sm pr-12"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">DKK</span>
+          </div>
+          <Button onClick={handleTopUp} disabled={loading || !amount || parseFloat(amount) <= 0}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : labels.buy}
+          </Button>
+        </div>
+        {error && <p className="text-xs text-red-600">{error}</p>}
       </CardContent>
     </Card>
   );
