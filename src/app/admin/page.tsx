@@ -2,7 +2,6 @@ import Link from "next/link";
 import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
 import { UnitCard } from "@/components/admin/cabin-card";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
-import { ExportButton } from "@/components/admin/export-button";
 import { Tent, Home, Caravan, MapPin, Anchor, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -60,7 +59,6 @@ export default async function AdminDashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
-          <ExportButton />
           <AddUnitDialog />
         </div>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import Link from "next/link";
 import {
   Download,
@@ -12,11 +12,23 @@ import {
   FileSpreadsheet,
   ChevronDown,
   ChevronRight,
+  BarChart3,
 } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+} from "recharts";
 import { Button } from "@/components/ui/button";
 import {
   exportSessionsCSV,
   exportInvoicesCSV,
+  getTotalConsumptionHistory,
   type MonthlyEconomySummary,
 } from "@/lib/actions";
 
@@ -255,6 +267,9 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
         </div>
       </div>
 
+      {/* Consumption chart */}
+      <TotalConsumptionChart />
+
       {/* Export buttons */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
@@ -292,6 +307,126 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
             Fakturaer (CSV)
           </Button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Total Consumption Chart ──
+const weekMonthNames: Record<string, string> = {
+  "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
+  "05": "Maj", "06": "Jun", "07": "Jul", "08": "Aug",
+  "09": "Sep", "10": "Okt", "11": "Nov", "12": "Dec",
+};
+
+function formatPeriodLabel(key: string, period: "week" | "month") {
+  if (period === "month") {
+    const [year, m] = key.split("-");
+    return `${weekMonthNames[m] || m} ${year.slice(2)}`;
+  }
+  // Week: key is the Monday date
+  const d = new Date(key);
+  return `${d.getDate()}/${d.getMonth() + 1}`;
+}
+
+function TotalConsumptionChart() {
+  const [period, setPeriod] = useState<"week" | "month">("week");
+  const [data, setData] = useState<{ period: string; el: number; water: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getTotalConsumptionHistory(period)
+      .then(setData)
+      .catch(() => setData([]))
+      .finally(() => setLoading(false));
+  }, [period]);
+
+  return (
+    <div className="rounded-xl border bg-card shadow-sm">
+      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+        <h2 className="font-semibold flex items-center gap-2">
+          <BarChart3 className="h-4 w-4" />
+          Samlet forbrug
+        </h2>
+        <div className="flex gap-1">
+          {(["week", "month"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                period === p
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {p === "week" ? "Uge" : "Måned"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="p-5">
+        {loading ? (
+          <div className="flex items-center justify-center h-64 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : data.length === 0 ? (
+          <div className="flex items-center justify-center h-64 text-sm text-muted-foreground">
+            Ikke nok data til graf endnu.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Electricity */}
+            <div>
+              <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5" />
+                Elforbrug (kWh)
+              </h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={data}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                  <XAxis
+                    dataKey="period"
+                    tickFormatter={(v) => formatPeriodLabel(v, period)}
+                    tick={{ fontSize: 11 }}
+                    stroke="var(--muted-foreground)"
+                  />
+                  <YAxis tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                  <Tooltip
+                    formatter={(value) => [`${Number(value).toFixed(1)} kWh`, "El"]}
+                    labelFormatter={(v) => formatPeriodLabel(v as string, period)}
+                  />
+                  <Bar dataKey="el" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Water */}
+            <div>
+              <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-1.5">
+                <Droplets className="h-3.5 w-3.5" />
+                Vandforbrug (liter)
+              </h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={data}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                  <XAxis
+                    dataKey="period"
+                    tickFormatter={(v) => formatPeriodLabel(v, period)}
+                    tick={{ fontSize: 11 }}
+                    stroke="var(--muted-foreground)"
+                  />
+                  <YAxis tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                  <Tooltip
+                    formatter={(value) => [`${Number(value)} L`, "Vand"]}
+                    labelFormatter={(v) => formatPeriodLabel(v as string, period)}
+                  />
+                  <Bar dataKey="water" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

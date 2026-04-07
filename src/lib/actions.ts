@@ -433,7 +433,15 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
     data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
   });
 
-  await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
+  // Update unit status; for long-term units also store tenant info for invoicing/portal
+  const updateData: Record<string, unknown> = { status: "OCCUPIED" };
+  if (unit.isLongTerm) {
+    updateData.longTermGuestName = guestName;
+    updateData.longTermGuestEmail = guestEmail || null;
+    updateData.longTermGuestPhone = guestPhone || null;
+    updateData.longTermPortalToken = guestPortalToken;
+  }
+  await prisma.unit.update({ where: { id: unitId }, data: updateData });
 
   // Send notifications (non-blocking)
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
@@ -1167,6 +1175,75 @@ export async function getConsumptionLogs(unitId: number, days: number = 7) {
     where: { unitId, recordedAt: { gte: since } },
     orderBy: { recordedAt: "asc" },
   });
+}
+
+// ──────────────────────────────────────────────
+// TOTAL CONSUMPTION HISTORY — aggregated across all units
+// ──────────────────────────────────────────────
+export async function getTotalConsumptionHistory(period: "week" | "month" = "week") {
+  const since = new Date();
+  if (period === "week") {
+    since.setDate(since.getDate() - 90); // last ~13 weeks
+  } else {
+    since.setFullYear(since.getFullYear() - 1); // last 12 months
+  }
+
+  const logs = await prisma.consumptionLog.findMany({
+    where: { recordedAt: { gte: since } },
+    orderBy: { recordedAt: "asc" },
+    select: { unitId: true, electricityKwh: true, waterLiters: true, recordedAt: true },
+  });
+
+  // We need to calculate delta (consumption used) per unit between readings
+  // Group logs by unitId first
+  const byUnit = new Map<number, { electricityKwh: number | null; waterLiters: number | null; recordedAt: Date }[]>();
+  for (const log of logs) {
+    if (!byUnit.has(log.unitId)) byUnit.set(log.unitId, []);
+    byUnit.get(log.unitId)!.push(log);
+  }
+
+  // Calculate deltas for each unit, grouped by period bucket
+  const buckets = new Map<string, { el: number; water: number }>();
+
+  for (const [, unitLogs] of byUnit) {
+    for (let i = 1; i < unitLogs.length; i++) {
+      const prev = unitLogs[i - 1];
+      const curr = unitLogs[i];
+      const date = curr.recordedAt;
+
+      let bucketKey: string;
+      if (period === "week") {
+        // ISO week: get Monday of the week
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        bucketKey = d.toISOString().slice(0, 10);
+      } else {
+        bucketKey = date.toISOString().slice(0, 7);
+      }
+
+      if (!buckets.has(bucketKey)) buckets.set(bucketKey, { el: 0, water: 0 });
+      const b = buckets.get(bucketKey)!;
+
+      if (curr.electricityKwh !== null && prev.electricityKwh !== null) {
+        const delta = curr.electricityKwh - prev.electricityKwh;
+        if (delta >= 0 && delta < 10000) b.el += delta; // sanity check
+      }
+      if (curr.waterLiters !== null && prev.waterLiters !== null) {
+        const delta = curr.waterLiters - prev.waterLiters;
+        if (delta >= 0 && delta < 100000) b.water += delta;
+      }
+    }
+  }
+
+  return [...buckets.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, val]) => ({
+      period: key,
+      el: Math.round(val.el * 100) / 100,
+      water: Math.round(val.water),
+    }));
 }
 
 // ──────────────────────────────────────────────

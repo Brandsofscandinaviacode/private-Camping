@@ -13,7 +13,6 @@ import { CheckInDialog } from "@/components/admin/check-in-dialog";
 import { CheckOutDialog } from "@/components/admin/check-out-dialog";
 import { CabinControls } from "@/components/admin/cabin-controls";
 import { LiveConsumption } from "@/components/admin/live-consumption";
-import { LongTermTenantForm } from "@/components/admin/long-term-tenant-form";
 import { CopyButton } from "@/components/admin/copy-button";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
@@ -75,8 +74,8 @@ export default async function UnitDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Actions & Guest Info */}
         <div className="space-y-5">
-          {/* Short-term: Check-in / Check-out */}
-          {!isOccupied && !unit.isLongTerm ? (
+          {/* Check-in / Check-out — works for all unit types */}
+          {!isOccupied && !activeSession ? (
             <CheckInDialog unitId={unit.id} unitName={unitDisplayName} />
           ) : activeSession ? (
             <div className="rounded-xl border bg-card shadow-sm">
@@ -118,25 +117,6 @@ export default async function UnitDetailPage({
               </div>
             </div>
           ) : null}
-
-          {/* Long-term: Register / Edit tenant */}
-          {unit.isLongTerm && (
-            <LongTermTenantForm
-              unitId={unit.id}
-              unitName={unitDisplayName}
-              tenant={unit.longTermGuestName ? {
-                name: unit.longTermGuestName,
-                email: unit.longTermGuestEmail,
-                phone: unit.longTermGuestPhone,
-              } : null}
-            />
-          )}
-          {unit.isLongTerm && unit.longTermPortalToken && unit.longTermGuestName && (
-            <div className="flex items-center justify-between text-sm px-1">
-              <span className="text-muted-foreground">Gæsteportal</span>
-              <CopyButton text={`/guest/${unit.longTermPortalToken}`} label="Kopiér link" />
-            </div>
-          )}
 
           {/* Live Consumption */}
           {activeSession && <LiveConsumption sessionId={activeSession.id} />}
