@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { ChevronDown, ChevronRight, Save, Loader2 } from "lucide-react";
+import { useState, useTransition, useEffect, useMemo } from "react";
+import { ChevronDown, ChevronRight, Save, Loader2, Search, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { updateUnitHardware, testEntityId } from "@/lib/actions";
+import { updateUnitHardware, browseHAEntities, type BrowsableEntity, type EntityCategory } from "@/lib/actions";
 
 const typeLabels: Record<string, string> = {
   CABIN: "Hytte",
@@ -21,6 +21,10 @@ interface CabinHardwareFormProps {
     hasElectricity: boolean;
     electricitySwitchEntityId: string | null;
     electricityMeterEntityId: string | null;
+    hasHeating: boolean;
+    heatingSwitchEntityId: string | null;
+    heatingMeterEntityId: string | null;
+    winterModeEnabled: boolean;
     hasWater: boolean;
     waterMeterEntityId: string | null;
     hasClimate: boolean;
@@ -30,59 +34,128 @@ interface CabinHardwareFormProps {
   } | null;
 }
 
-interface TestResult {
-  ok: boolean;
+// Entity picker with search and "used by" indicator
+function EntityPicker({
+  value,
+  onChange,
+  entities,
+  loading,
+  filterCategory,
+  placeholder,
+}: {
   value: string;
-  message: string;
-}
+  onChange: (v: string) => void;
+  entities: BrowsableEntity[];
+  loading: boolean;
+  filterCategory?: EntityCategory[];
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
-function EntityTestButton({ entityId }: { entityId: string }) {
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<TestResult | null>(null);
+  const filtered = useMemo(() => {
+    let list = entities;
+    if (filterCategory?.length) {
+      list = list.filter((e) => filterCategory.includes(e.category));
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (e) =>
+          e.entity_id.toLowerCase().includes(q) ||
+          e.friendly_name.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [entities, filterCategory, search]);
 
-  async function handleTest() {
-    if (!entityId.trim()) {
-      setResult({ ok: false, value: "", message: "Udfyld entity ID først" });
-      return;
-    }
-    setTesting(true);
-    setResult(null);
-    try {
-      const res = await testEntityId(entityId.trim());
-      setResult(res);
-    } catch {
-      setResult({ ok: false, value: "", message: "Uventet fejl" });
-    } finally {
-      setTesting(false);
-    }
-  }
+  const selectedEntity = entities.find((e) => e.entity_id === value);
 
   return (
-    <div className="mt-1">
-      <button
-        type="button"
-        onClick={handleTest}
-        disabled={testing}
-        className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 flex items-center gap-1"
+    <div className="relative">
+      <div
+        className="flex items-center border rounded-md bg-background cursor-pointer"
+        onClick={() => setOpen(!open)}
       >
-        {testing ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <span className="inline-block h-3 w-3 text-center">▶</span>
-        )}
-        {testing ? "Tester..." : "Test sensor"}
-      </button>
-      {result && (
-        <div className={`mt-1.5 text-xs px-3 py-1.5 rounded-md ${
-          result.ok
-            ? "bg-green-50 text-green-700"
-            : "bg-red-50 text-red-600"
-        }`}>
-          {result.ok ? (
-            <span><strong>{result.value}</strong> — {result.message}</span>
+        <div className="flex-1 px-3 py-2 text-sm truncate">
+          {value ? (
+            <span>
+              <span className="font-medium">{selectedEntity?.friendly_name || value}</span>
+              <span className="text-muted-foreground ml-1.5 text-xs">({value})</span>
+            </span>
           ) : (
-            <span>{result.message}</span>
+            <span className="text-muted-foreground">{placeholder || "Vælg entity..."}</span>
           )}
+        </div>
+        <div className="px-2 text-muted-foreground">
+          <ChevronDown className="h-3.5 w-3.5" />
+        </div>
+      </div>
+
+      {value && (
+        <button
+          type="button"
+          className="absolute right-8 top-2.5 text-xs text-muted-foreground hover:text-foreground"
+          onClick={(e) => { e.stopPropagation(); onChange(""); }}
+        >
+          ✕
+        </button>
+      )}
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-background border rounded-md shadow-lg max-h-64 overflow-hidden">
+          <div className="p-2 border-b">
+            <div className="flex items-center gap-1.5 px-2 border rounded-md bg-muted/30">
+              <Search className="h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Søg entity..."
+                className="flex-1 py-1.5 text-sm bg-transparent outline-none"
+                autoFocus
+              />
+            </div>
+          </div>
+          <div className="overflow-y-auto max-h-48">
+            {loading ? (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" />
+                Henter entities fra HA...
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                Ingen entities fundet
+              </div>
+            ) : (
+              filtered.map((e) => (
+                <button
+                  key={e.entity_id}
+                  type="button"
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-muted/50 transition-colors flex items-center justify-between ${
+                    e.entity_id === value ? "bg-primary/5" : ""
+                  }`}
+                  onClick={() => {
+                    onChange(e.entity_id);
+                    setOpen(false);
+                    setSearch("");
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium truncate">{e.friendly_name}</div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {e.entity_id} — {e.state}{e.unit_of_measurement ? ` ${e.unit_of_measurement}` : ""}
+                    </div>
+                  </div>
+                  {e.usedBy && (
+                    <span className="ml-2 flex-shrink-0 text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 whitespace-nowrap">
+                      Brugt af: {e.usedBy}
+                    </span>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -93,11 +166,17 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
   const [isPending, startTransition] = useTransition();
   const [expanded, setExpanded] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [entities, setEntities] = useState<BrowsableEntity[]>([]);
+  const [entitiesLoading, setEntitiesLoading] = useState(false);
 
   const [values, setValues] = useState({
     hasElectricity: hardware?.hasElectricity ?? false,
     electricitySwitchEntityId: hardware?.electricitySwitchEntityId ?? "",
     electricityMeterEntityId: hardware?.electricityMeterEntityId ?? "",
+    hasHeating: hardware?.hasHeating ?? false,
+    heatingSwitchEntityId: hardware?.heatingSwitchEntityId ?? "",
+    heatingMeterEntityId: hardware?.heatingMeterEntityId ?? "",
+    winterModeEnabled: hardware?.winterModeEnabled ?? false,
     hasWater: hardware?.hasWater ?? false,
     waterMeterEntityId: hardware?.waterMeterEntityId ?? "",
     hasClimate: hardware?.hasClimate ?? false,
@@ -106,12 +185,27 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
     lockEntityId: hardware?.lockEntityId ?? "",
   });
 
+  // Fetch entities when expanding
+  useEffect(() => {
+    if (expanded && entities.length === 0 && !entitiesLoading) {
+      setEntitiesLoading(true);
+      browseHAEntities()
+        .then(setEntities)
+        .catch(() => {})
+        .finally(() => setEntitiesLoading(false));
+    }
+  }, [expanded, entities.length, entitiesLoading]);
+
   function handleSave() {
     startTransition(async () => {
       await updateUnitHardware(cabin.id, {
         hasElectricity: values.hasElectricity,
         electricitySwitchEntityId: values.electricitySwitchEntityId || null,
         electricityMeterEntityId: values.electricityMeterEntityId || null,
+        hasHeating: values.hasHeating,
+        heatingSwitchEntityId: values.heatingSwitchEntityId || null,
+        heatingMeterEntityId: values.heatingMeterEntityId || null,
+        winterModeEnabled: values.winterModeEnabled,
         hasWater: values.hasWater,
         waterMeterEntityId: values.waterMeterEntityId || null,
         hasClimate: values.hasClimate,
@@ -126,6 +220,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
 
   const capabilities = [
     hardware?.hasElectricity && "El",
+    hardware?.hasHeating && "Varme",
     hardware?.hasWater && "Vand",
     hardware?.hasClimate && "Klima",
     hardware?.hasSmartLock && "Lås",
@@ -144,6 +239,11 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
               ({capabilities.join(", ")})
             </span>
           )}
+          {hardware?.winterModeEnabled && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+              Vinterdrift
+            </span>
+          )}
         </div>
         {expanded ? (
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
@@ -157,7 +257,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
           {/* Electricity */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-medium">Elektricitet</Label>
+              <Label className="text-sm font-medium">Elektricitet (hovedrelæ)</Label>
               <Switch
                 checked={values.hasElectricity}
                 onCheckedChange={(checked) =>
@@ -166,31 +266,86 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
               />
             </div>
             {values.hasElectricity && (
-              <div className="space-y-2 pl-3 border-l-2 border-border">
+              <div className="space-y-3 pl-3 border-l-2 border-border">
                 <div>
-                  <Label className="text-xs text-muted-foreground">Switch Entity ID</Label>
-                  <Input
+                  <Label className="text-xs text-muted-foreground">Relæ (tænd/sluk strøm)</Label>
+                  <EntityPicker
                     value={values.electricitySwitchEntityId}
-                    onChange={(e) =>
-                      setValues((v) => ({ ...v, electricitySwitchEntityId: e.target.value }))
-                    }
-                    placeholder="switch.cabin_1_power"
-                    className="mt-1"
+                    onChange={(v) => setValues((s) => ({ ...s, electricitySwitchEntityId: v }))}
+                    entities={entities}
+                    loading={entitiesLoading}
+                    filterCategory={["switch"]}
+                    placeholder="Vælg switch entity..."
                   />
-                  <EntityTestButton entityId={values.electricitySwitchEntityId} />
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground">Meter Entity ID (kWh)</Label>
-                  <Input
+                  <Label className="text-xs text-muted-foreground">Elmåler (kWh)</Label>
+                  <EntityPicker
                     value={values.electricityMeterEntityId}
-                    onChange={(e) =>
-                      setValues((v) => ({ ...v, electricityMeterEntityId: e.target.value }))
-                    }
-                    placeholder="sensor.cabin_1_energy"
-                    className="mt-1"
+                    onChange={(v) => setValues((s) => ({ ...s, electricityMeterEntityId: v }))}
+                    entities={entities}
+                    loading={entitiesLoading}
+                    filterCategory={["sensor_energy"]}
+                    placeholder="Vælg energi-sensor..."
                   />
-                  <EntityTestButton entityId={values.electricityMeterEntityId} />
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Heating (separate relay) */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-medium">Varme (separat relæ)</Label>
+              <Switch
+                checked={values.hasHeating}
+                onCheckedChange={(checked) =>
+                  setValues((v) => ({ ...v, hasHeating: checked }))
+                }
+              />
+            </div>
+            {values.hasHeating && (
+              <div className="space-y-3 pl-3 border-l-2 border-border">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Varmerelæ (tænd/sluk el-radiatorer)</Label>
+                  <EntityPicker
+                    value={values.heatingSwitchEntityId}
+                    onChange={(v) => setValues((s) => ({ ...s, heatingSwitchEntityId: v }))}
+                    entities={entities}
+                    loading={entitiesLoading}
+                    filterCategory={["switch"]}
+                    placeholder="Vælg switch entity..."
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Varmemåler (valgfri, separat kWh)</Label>
+                  <EntityPicker
+                    value={values.heatingMeterEntityId}
+                    onChange={(v) => setValues((s) => ({ ...s, heatingMeterEntityId: v }))}
+                    entities={entities}
+                    loading={entitiesLoading}
+                    filterCategory={["sensor_energy"]}
+                    placeholder="Vælg energi-sensor (valgfri)..."
+                  />
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <Label className="text-sm">Vinterdrift</Label>
+                    <p className="text-xs text-muted-foreground">Hold varmen tændt når enheden er ledig</p>
+                  </div>
+                  <Switch
+                    checked={values.winterModeEnabled}
+                    onCheckedChange={(checked) =>
+                      setValues((v) => ({ ...v, winterModeEnabled: checked }))
+                    }
+                  />
+                </div>
+                {values.winterModeEnabled && (
+                  <div className="flex items-start gap-2 text-xs text-blue-600 bg-blue-50 px-3 py-2 rounded-md">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                    <span>Varmen slukkes ikke ved checkout — hytterne beskyttes mod frost</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -208,16 +363,15 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             </div>
             {values.hasWater && (
               <div className="pl-3 border-l-2 border-border">
-                <Label className="text-xs text-muted-foreground">Meter Entity ID (liter)</Label>
-                <Input
+                <Label className="text-xs text-muted-foreground">Vandmåler (liter)</Label>
+                <EntityPicker
                   value={values.waterMeterEntityId}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, waterMeterEntityId: e.target.value }))
-                  }
-                  placeholder="sensor.cabin_1_water"
-                  className="mt-1"
+                  onChange={(v) => setValues((s) => ({ ...s, waterMeterEntityId: v }))}
+                  entities={entities}
+                  loading={entitiesLoading}
+                  filterCategory={["sensor_water"]}
+                  placeholder="Vælg vand-sensor..."
                 />
-                <EntityTestButton entityId={values.waterMeterEntityId} />
               </div>
             )}
           </div>
@@ -225,7 +379,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
           {/* Climate */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-medium">Klima</Label>
+              <Label className="text-sm font-medium">Klima (wifi-termostat)</Label>
               <Switch
                 checked={values.hasClimate}
                 onCheckedChange={(checked) =>
@@ -236,15 +390,14 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             {values.hasClimate && (
               <div className="pl-3 border-l-2 border-border">
                 <Label className="text-xs text-muted-foreground">Climate Entity ID</Label>
-                <Input
+                <EntityPicker
                   value={values.climateEntityId}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, climateEntityId: e.target.value }))
-                  }
-                  placeholder="climate.cabin_1_hvac"
-                  className="mt-1"
+                  onChange={(v) => setValues((s) => ({ ...s, climateEntityId: v }))}
+                  entities={entities}
+                  loading={entitiesLoading}
+                  filterCategory={["climate"]}
+                  placeholder="Vælg climate entity..."
                 />
-                <EntityTestButton entityId={values.climateEntityId} />
               </div>
             )}
           </div>
@@ -263,15 +416,14 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             {values.hasSmartLock && (
               <div className="pl-3 border-l-2 border-border">
                 <Label className="text-xs text-muted-foreground">Lock Entity ID</Label>
-                <Input
+                <EntityPicker
                   value={values.lockEntityId}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, lockEntityId: e.target.value }))
-                  }
-                  placeholder="lock.cabin_1_door"
-                  className="mt-1"
+                  onChange={(v) => setValues((s) => ({ ...s, lockEntityId: v }))}
+                  entities={entities}
+                  loading={entitiesLoading}
+                  filterCategory={["lock"]}
+                  placeholder="Vælg lock entity..."
                 />
-                <EntityTestButton entityId={values.lockEntityId} />
               </div>
             )}
           </div>

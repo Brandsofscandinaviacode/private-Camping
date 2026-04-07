@@ -5,24 +5,29 @@ import { useRouter } from "next/navigation";
 import {
   Zap,
   ZapOff,
+  Flame,
   Lock,
   Unlock,
   Thermometer,
   WifiOff,
+  Snowflake,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { togglePower, toggleLock, setTemperature } from "@/lib/actions";
+import { togglePower, toggleHeating, toggleLock, setTemperature, toggleWinterMode } from "@/lib/actions";
 
 interface UnitControlsProps {
   unitId: number;
   hardware: {
     hasElectricity: boolean;
+    hasHeating: boolean;
     hasWater: boolean;
     hasClimate: boolean;
     hasSmartLock: boolean;
   };
   haStates: {
     powerOn: boolean | null;
+    heatingOn: boolean | null;
+    winterModeEnabled: boolean;
     temperature: number | null;
     locked: boolean | null;
     haReachable: boolean;
@@ -37,7 +42,9 @@ export function CabinControls({
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const [localPowerOn, setLocalPowerOn] = useState(haStates?.powerOn ?? false);
+  const [localHeatingOn, setLocalHeatingOn] = useState(haStates?.heatingOn ?? false);
   const [localLocked, setLocalLocked] = useState(haStates?.locked ?? true);
+  const [localWinterMode, setLocalWinterMode] = useState(haStates?.winterModeEnabled ?? false);
   const [tempValue, setTempValue] = useState(
     haStates?.temperature?.toString() ?? "21"
   );
@@ -87,6 +94,57 @@ export function CabinControls({
             >
               {localPowerOn ? "Sluk" : "Tænd"}
             </Button>
+          </div>
+        )}
+
+        {hardware.hasHeating && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Flame className={`h-5 w-5 ${localHeatingOn ? "text-orange-500" : "text-muted-foreground/40"}`} />
+                <span>Varme</span>
+                {localWinterMode && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 flex items-center gap-1">
+                    <Snowflake className="h-3 w-3" />
+                    Vinterdrift
+                  </span>
+                )}
+              </div>
+              <Button
+                variant={localHeatingOn ? "destructive" : "default"}
+                size="sm"
+                disabled={isPending}
+                onClick={() => {
+                  const newState = !localHeatingOn;
+                  setLocalHeatingOn(newState);
+                  startTransition(async () => {
+                    await toggleHeating(unitId, newState);
+                    router.refresh();
+                  });
+                }}
+              >
+                {localHeatingOn ? "Sluk" : "Tænd"}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between pl-7">
+              <span className="text-sm text-muted-foreground">Vinterdrift (hold varme ved checkout)</span>
+              <Button
+                variant={localWinterMode ? "default" : "outline"}
+                size="sm"
+                disabled={isPending}
+                onClick={() => {
+                  const newState = !localWinterMode;
+                  setLocalWinterMode(newState);
+                  startTransition(async () => {
+                    await toggleWinterMode(unitId, newState);
+                    router.refresh();
+                  });
+                }}
+              >
+                <Snowflake className="h-3.5 w-3.5 mr-1" />
+                {localWinterMode ? "Aktiv" : "Inaktiv"}
+              </Button>
+            </div>
           </div>
         )}
 

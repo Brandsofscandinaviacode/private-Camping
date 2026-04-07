@@ -193,6 +193,7 @@ export default async function UnitDetailPage({
               unitId={unit.id}
               hardware={{
                 hasElectricity: hw.hasElectricity,
+                hasHeating: hw.hasHeating,
                 hasWater: hw.hasWater,
                 hasClimate: hw.hasClimate,
                 hasSmartLock: hw.hasSmartLock,

@@ -104,6 +104,94 @@ export async function testEntityId(entityId: string): Promise<{ ok: boolean; val
 }
 
 // ──────────────────────────────────────────────
+// HA Entity Browser
+// ──────────────────────────────────────────────
+export type EntityCategory = "switch" | "sensor_energy" | "sensor_water" | "sensor_other" | "climate" | "lock" | "other";
+
+export interface BrowsableEntity {
+  entity_id: string;
+  friendly_name: string;
+  state: string;
+  unit_of_measurement: string | null;
+  category: EntityCategory;
+  usedBy: string | null; // unit name if already assigned, null if free
+}
+
+export async function browseHAEntities(): Promise<BrowsableEntity[]> {
+  const allEntities = await ha.getAllEntities();
+  const usedMap = await getUsedEntityMap();
+
+  return allEntities
+    .filter((e) => {
+      // Only show relevant domains
+      const d = e.domain;
+      return ["switch", "sensor", "climate", "lock", "input_boolean", "light"].includes(d);
+    })
+    .filter((e) => {
+      // Exclude HA internal entities
+      return !e.entity_id.startsWith("sensor.sun_") && e.state !== "unavailable";
+    })
+    .map((e) => {
+      let category: EntityCategory = "other";
+      if (e.domain === "switch" || e.domain === "input_boolean" || e.domain === "light") {
+        category = "switch";
+      } else if (e.domain === "sensor") {
+        if (e.device_class === "energy" || e.unit_of_measurement === "kWh" || e.unit_of_measurement === "Wh") {
+          category = "sensor_energy";
+        } else if (e.device_class === "water" || e.unit_of_measurement === "L" || e.unit_of_measurement === "m³") {
+          category = "sensor_water";
+        } else if (e.device_class === "power" || e.unit_of_measurement === "W") {
+          category = "sensor_energy";
+        } else {
+          category = "sensor_other";
+        }
+      } else if (e.domain === "climate") {
+        category = "climate";
+      } else if (e.domain === "lock") {
+        category = "lock";
+      }
+
+      return {
+        entity_id: e.entity_id,
+        friendly_name: e.friendly_name,
+        state: e.state,
+        unit_of_measurement: e.unit_of_measurement,
+        category,
+        usedBy: usedMap.get(e.entity_id) || null,
+      };
+    })
+    .sort((a, b) => a.friendly_name.localeCompare(b.friendly_name));
+}
+
+async function getUsedEntityMap(): Promise<Map<string, string>> {
+  const allHw = await prisma.unitHardware.findMany({
+    include: { unit: true },
+  });
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const map = new Map<string, string>();
+
+  for (const hw of allHw) {
+    const unitName = `${typeLabels[hw.unit.type] || ""} ${hw.unit.name}`.trim();
+    const ids = [
+      hw.electricitySwitchEntityId,
+      hw.electricityMeterEntityId,
+      hw.heatingSwitchEntityId,
+      hw.heatingMeterEntityId,
+      hw.waterMeterEntityId,
+      hw.climateEntityId,
+      hw.lockEntityId,
+    ].filter(Boolean) as string[];
+
+    for (const id of ids) {
+      map.set(id, unitName);
+    }
+  }
+
+  return map;
+}
+
+// ──────────────────────────────────────────────
 // SMS / Email Test
 // ──────────────────────────────────────────────
 export async function testSMS(toNumber: string): Promise<{ ok: boolean; message: string }> {
@@ -191,6 +279,10 @@ export async function updateUnitHardware(
     hasElectricity: boolean;
     electricitySwitchEntityId: string | null;
     electricityMeterEntityId: string | null;
+    hasHeating: boolean;
+    heatingSwitchEntityId: string | null;
+    heatingMeterEntityId: string | null;
+    winterModeEnabled: boolean;
     hasWater: boolean;
     waterMeterEntityId: string | null;
     hasClimate: boolean;
@@ -204,6 +296,30 @@ export async function updateUnitHardware(
     update: data,
     create: { unitId, ...data },
   });
+  revalidatePath("/admin");
+  revalidatePath(`/admin/units/${unitId}`);
+  revalidatePath("/admin/settings");
+}
+
+export async function toggleWinterMode(unitId: number, enabled: boolean) {
+  await prisma.unitHardware.update({
+    where: { unitId },
+    data: { winterModeEnabled: enabled },
+  });
+
+  // If enabling winter mode, turn on heating immediately
+  const hw = await prisma.unitHardware.findUnique({ where: { unitId } });
+  if (hw?.heatingSwitchEntityId) {
+    try {
+      if (enabled) {
+        await ha.turnOn(hw.heatingSwitchEntityId);
+      }
+      // Don't turn off here — that's handled by check-out logic
+    } catch (e) {
+      console.error("Winter mode toggle HA error:", e);
+    }
+  }
+
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unitId}`);
 }
@@ -283,6 +399,10 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   // Turn on electricity
   if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
     try { await ha.turnOn(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
+  }
+  // Turn on heating relay
+  if (hw?.hasHeating && hw.heatingSwitchEntityId) {
+    try { await ha.turnOn(hw.heatingSwitchEntityId); } catch (e) { console.error("HA:", e); }
   }
   // Set climate
   if (hw?.hasClimate && hw.climateEntityId) {
@@ -382,6 +502,10 @@ export async function checkOut(sessionId: number) {
     if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
       try { await ha.turnOff(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
     }
+    // Turn off heating unless winter mode is enabled (protect cabin from frost)
+    if (hw?.hasHeating && hw.heatingSwitchEntityId && !hw.winterModeEnabled) {
+      try { await ha.turnOff(hw.heatingSwitchEntityId); } catch (e) { console.error("HA:", e); }
+    }
     if (hw?.hasSmartLock && hw.lockEntityId) {
       try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
     }
@@ -478,6 +602,7 @@ export async function getUnitHAStates(unitId: number) {
   const hw = unit.hardware;
 
   let powerOn: boolean | null = null;
+  let heatingOn: boolean | null = null;
   let temperature: number | null = null;
   let locked: boolean | null = null;
   let anySuccess = false;
@@ -486,6 +611,13 @@ export async function getUnitHAStates(unitId: number) {
     try {
       const state = await ha.getEntityState(hw.electricitySwitchEntityId);
       powerOn = state.state === "on";
+      anySuccess = true;
+    } catch { /* entity unavailable */ }
+  }
+  if (hw.hasHeating && hw.heatingSwitchEntityId) {
+    try {
+      const state = await ha.getEntityState(hw.heatingSwitchEntityId);
+      heatingOn = state.state === "on";
       anySuccess = true;
     } catch { /* entity unavailable */ }
   }
@@ -508,10 +640,10 @@ export async function getUnitHAStates(unitId: number) {
   // If no entities are configured, check basic HA connectivity
   if (!anySuccess) {
     const reachable = await ha.checkHAConnection();
-    return { powerOn, temperature, locked, haReachable: reachable };
+    return { powerOn, heatingOn, winterModeEnabled: hw.winterModeEnabled, temperature, locked, haReachable: reachable };
   }
 
-  return { powerOn, temperature, locked, haReachable: true };
+  return { powerOn, heatingOn, winterModeEnabled: hw.winterModeEnabled, temperature, locked, haReachable: true };
 }
 
 // ──────────────────────────────────────────────
@@ -522,6 +654,14 @@ export async function togglePower(unitId: number, turnOn: boolean) {
   if (!unit?.hardware?.electricitySwitchEntityId) return;
   if (turnOn) { await ha.turnOn(unit.hardware.electricitySwitchEntityId); }
   else { await ha.turnOff(unit.hardware.electricitySwitchEntityId); }
+  revalidatePath(`/admin/units/${unitId}`);
+}
+
+export async function toggleHeating(unitId: number, turnOn: boolean) {
+  const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
+  if (!unit?.hardware?.heatingSwitchEntityId) return;
+  if (turnOn) { await ha.turnOn(unit.hardware.heatingSwitchEntityId); }
+  else { await ha.turnOff(unit.hardware.heatingSwitchEntityId); }
   revalidatePath(`/admin/units/${unitId}`);
 }
 

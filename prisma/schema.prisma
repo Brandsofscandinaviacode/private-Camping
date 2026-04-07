@@ -82,16 +82,22 @@ model UnitHardware {
   unitId Int  @unique
   unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
-  // Electricity (Shelly Pro 4PM or similar)
+  // Electricity — main power relay + meter
   hasElectricity           Boolean @default(false)
-  electricitySwitchEntityId String?
-  electricityMeterEntityId  String?
+  electricitySwitchEntityId String?   // Relay: turns power on/off at check-in/out
+  electricityMeterEntityId  String?   // Meter: measures total kWh consumption
+
+  // Heating — separate relay for electric radiators (no wifi thermostat)
+  hasHeating              Boolean @default(false)
+  heatingSwitchEntityId   String?   // Relay: controls heating independently
+  heatingMeterEntityId    String?   // Optional: separate meter for heating
+  winterModeEnabled       Boolean @default(false)  // Keep heating on when vacant (protect cabin)
 
   // Water (LoRaWAN meter or similar)
   hasWater            Boolean @default(false)
   waterMeterEntityId  String?
 
-  // Climate (thermostat / heat pump)
+  // Climate (wifi thermostat / heat pump — different from dumb radiator relay)
   hasClimate      Boolean @default(false)
   climateEntityId String?
 

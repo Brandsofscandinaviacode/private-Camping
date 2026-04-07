@@ -126,3 +126,31 @@ export async function getEntityHistory(entityId: string, hours: number): Promise
   // HA returns array of arrays, first array is the entity's history
   return (data[0] || []) as { state: string; last_changed: string }[];
 }
+
+export interface HAEntityInfo {
+  entity_id: string;
+  state: string;
+  friendly_name: string;
+  device_class: string | null;
+  unit_of_measurement: string | null;
+  domain: string; // switch, sensor, climate, lock, etc.
+}
+
+export async function getAllEntities(): Promise<HAEntityInfo[]> {
+  const res = await haFetch("/states");
+  if (!res.ok) throw new Error(`HA error: ${res.status}`);
+  const states = await res.json() as {
+    entity_id: string;
+    state: string;
+    attributes: Record<string, unknown>;
+  }[];
+
+  return states.map((s) => ({
+    entity_id: s.entity_id,
+    state: s.state,
+    friendly_name: (s.attributes.friendly_name as string) || s.entity_id,
+    device_class: (s.attributes.device_class as string) || null,
+    unit_of_measurement: (s.attributes.unit_of_measurement as string) || null,
+    domain: s.entity_id.split(".")[0],
+  }));
+}
