@@ -13,6 +13,7 @@ import { CheckInDialog } from "@/components/admin/check-in-dialog";
 import { CheckOutDialog } from "@/components/admin/check-out-dialog";
 import { CabinControls } from "@/components/admin/cabin-controls";
 import { LiveConsumption } from "@/components/admin/live-consumption";
+import { LongTermTenantForm } from "@/components/admin/long-term-tenant-form";
 import { CopyButton } from "@/components/admin/copy-button";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
@@ -118,36 +119,22 @@ export default async function UnitDetailPage({
             </div>
           ) : null}
 
-          {/* Long-term tenant info */}
-          {unit.isLongTerm && unit.longTermGuestName && (
-            <div className="rounded-xl border bg-card shadow-sm">
-              <div className="px-5 py-4 border-b border-border">
-                <h2 className="font-semibold">Langtidslejer</h2>
-              </div>
-              <div className="p-5 space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Navn</span>
-                  <span className="font-medium">{unit.longTermGuestName}</span>
-                </div>
-                {unit.longTermGuestEmail && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Email</span>
-                    <span>{unit.longTermGuestEmail}</span>
-                  </div>
-                )}
-                {unit.longTermGuestPhone && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Telefon</span>
-                    <span>{unit.longTermGuestPhone}</span>
-                  </div>
-                )}
-                {unit.longTermPortalToken && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Portal</span>
-                    <CopyButton text={`/guest/${unit.longTermPortalToken}`} label="Kopiér link" />
-                  </div>
-                )}
-              </div>
+          {/* Long-term: Register / Edit tenant */}
+          {unit.isLongTerm && (
+            <LongTermTenantForm
+              unitId={unit.id}
+              unitName={unitDisplayName}
+              tenant={unit.longTermGuestName ? {
+                name: unit.longTermGuestName,
+                email: unit.longTermGuestEmail,
+                phone: unit.longTermGuestPhone,
+              } : null}
+            />
+          )}
+          {unit.isLongTerm && unit.longTermPortalToken && unit.longTermGuestName && (
+            <div className="flex items-center justify-between text-sm px-1">
+              <span className="text-muted-foreground">Gæsteportal</span>
+              <CopyButton text={`/guest/${unit.longTermPortalToken}`} label="Kopiér link" />
             </div>
           )}
 
@@ -169,7 +156,7 @@ export default async function UnitDetailPage({
             <div className="rounded-xl border bg-card shadow-sm">
               <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h2 className="font-semibold">Månedlige fakturaer</h2>
-                <CreateInvoiceButton unitId={unit.id} />
+                {unit.longTermGuestName && <CreateInvoiceButton unitId={unit.id} />}
               </div>
               <div className="p-5">
                 {unit.invoices.length === 0 ? (

@@ -355,6 +355,21 @@ export async function updateLongTermTenant(
   return portalToken;
 }
 
+export async function removeLongTermTenant(unitId: number) {
+  await prisma.unit.update({
+    where: { id: unitId },
+    data: {
+      longTermGuestName: null,
+      longTermGuestEmail: null,
+      longTermGuestPhone: null,
+      longTermPortalToken: null,
+      status: "VACANT",
+    },
+  });
+  revalidatePath("/admin");
+  revalidatePath(`/admin/units/${unitId}`);
+}
+
 // ──────────────────────────────────────────────
 // Global Settings
 // ──────────────────────────────────────────────
