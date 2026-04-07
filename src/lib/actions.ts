@@ -1747,16 +1747,19 @@ export interface MonthlyEconomySummary {
   totalWater: number;
   totalKwhUsed: number;
   totalWaterUsed: number;
+  totalLaundry: number;
+  laundryCount: number;
 }
 
 export async function getEconomySummary(): Promise<{
   months: MonthlyEconomySummary[];
   unpaidSessions: { id: number; unitName: string; guestName: string; total: number; checkOut: string }[];
   unpaidInvoices: { id: number; unitName: string; total: number; periodEnd: string }[];
+  laundryTotals: { total: number; count: number; paid: number };
 }> {
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
 
-  const [sessions, invoices] = await Promise.all([
+  const [sessions, invoices, laundrySessions] = await Promise.all([
     prisma.session.findMany({
       where: { status: "COMPLETED" },
       include: { unit: true },
@@ -1765,6 +1768,10 @@ export async function getEconomySummary(): Promise<{
     prisma.invoice.findMany({
       include: { unit: true },
       orderBy: { periodEnd: "desc" },
+    }),
+    prisma.laundrySess.findMany({
+      where: { status: { in: ["ACTIVE", "COMPLETED"] } },
+      include: { machine: true },
     }),
   ]);
 
@@ -1784,6 +1791,8 @@ export async function getEconomySummary(): Promise<{
         totalWater: 0,
         totalKwhUsed: 0,
         totalWaterUsed: 0,
+        totalLaundry: 0,
+        laundryCount: 0,
       });
     }
     return monthMap.get(month)!;
@@ -1817,6 +1826,20 @@ export async function getEconomySummary(): Promise<{
     if (inv.endWaterLiters !== null && inv.startWaterLiters !== null) m.totalWaterUsed += Math.max(0, inv.endWaterLiters - inv.startWaterLiters);
   }
 
+  // Laundry revenue
+  for (const ls of laundrySessions) {
+    const date = ls.startedAt || ls.createdAt;
+    if (!date) continue;
+    const month = (date instanceof Date ? date : new Date(date)).toISOString().slice(0, 7);
+    const m = getOrCreate(month);
+    m.laundryCount++;
+    const price = ls.pricePaid ?? 0;
+    m.totalLaundry += price;
+    m.totalRevenue += price;
+    if (ls.paymentStatus === "PAID") m.totalPaid += price;
+    else m.totalUnpaid += price;
+  }
+
   const months = [...monthMap.values()].sort((a, b) => b.month.localeCompare(a.month));
 
   // Unpaid sessions
@@ -1840,7 +1863,13 @@ export async function getEconomySummary(): Promise<{
       periodEnd: inv.periodEnd.toISOString().slice(0, 10),
     }));
 
-  return { months, unpaidSessions, unpaidInvoices };
+  const laundryTotals = {
+    total: laundrySessions.reduce((sum, ls) => sum + (ls.pricePaid ?? 0), 0),
+    count: laundrySessions.length,
+    paid: laundrySessions.filter((ls) => ls.paymentStatus === "PAID").reduce((sum, ls) => sum + (ls.pricePaid ?? 0), 0),
+  };
+
+  return { months, unpaidSessions, unpaidInvoices, laundryTotals };
 }
 
 // ──────────────────────────────────────────────

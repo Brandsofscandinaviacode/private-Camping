@@ -13,6 +13,7 @@ export default async function GuestPortalPage({
   const globalSettings = await getGlobalSettings();
   const quickpayEnabled = globalSettings.quickpay_enabled === "true";
   const siteMapUrl = globalSettings.site_map_url || null;
+  const invoiceDay = globalSettings.invoice_email_day ? parseInt(globalSettings.invoice_email_day, 10) || null : null;
 
   // Try session-based token first
   const laundryMachines = await getGuestLaundryMachines();
@@ -56,6 +57,7 @@ export default async function GuestPortalPage({
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
+        nextInvoiceDay={null}
       />
     );
   }
@@ -110,6 +112,7 @@ export default async function GuestPortalPage({
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
+        nextInvoiceDay={invoiceDay}
       />
     );
   }

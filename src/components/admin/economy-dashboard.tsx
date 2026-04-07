@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronRight,
   BarChart3,
+  WashingMachine,
 } from "lucide-react";
 import {
   BarChart,
@@ -52,11 +53,12 @@ interface EconomyDashboardProps {
     months: MonthlyEconomySummary[];
     unpaidSessions: { id: number; unitName: string; guestName: string; total: number; checkOut: string }[];
     unpaidInvoices: { id: number; unitName: string; total: number; periodEnd: string }[];
+    laundryTotals: { total: number; count: number; paid: number };
   };
 }
 
 export function EconomyDashboard({ data }: EconomyDashboardProps) {
-  const { months, unpaidSessions, unpaidInvoices } = data;
+  const { months, unpaidSessions, unpaidInvoices, laundryTotals } = data;
   const [isPending, startTransition] = useTransition();
   const [exportType, setExportType] = useState<string | null>(null);
   const [expandedMonth, setExpandedMonth] = useState<string | null>(
@@ -111,7 +113,7 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="rounded-xl border bg-card shadow-sm p-4">
           <div className="flex items-center gap-2 text-muted-foreground mb-1">
             <TrendingUp className="h-4 w-4" />
@@ -139,6 +141,14 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
             <span className="text-xs font-medium">Total vandforbrug</span>
           </div>
           <div className="text-xl font-bold">{totals.water.toFixed(0)} L</div>
+        </div>
+        <div className="rounded-xl border bg-card shadow-sm p-4">
+          <div className="flex items-center gap-2 text-muted-foreground mb-1">
+            <WashingMachine className="h-4 w-4" />
+            <span className="text-xs font-medium">Vaskerum</span>
+          </div>
+          <div className="text-xl font-bold">{fmt(laundryTotals.total)} DKK</div>
+          <p className="text-xs text-muted-foreground mt-0.5">{laundryTotals.count} vaske</p>
         </div>
       </div>
 
@@ -258,6 +268,12 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
                         <span className="text-muted-foreground">Vandforbrug</span>
                         <div className="font-medium">{m.totalWaterUsed.toFixed(0)} L</div>
                       </div>
+                      {m.laundryCount > 0 && (
+                        <div>
+                          <span className="text-muted-foreground">Vaskerum</span>
+                          <div className="font-medium">{fmt(m.totalLaundry)} DKK ({m.laundryCount} vaske)</div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
