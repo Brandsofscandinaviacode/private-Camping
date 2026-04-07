@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getSessionByToken, getUnitByPortalToken, getActiveSession, getLiveConsumption, getGlobalSettings } from "@/lib/actions";
+import { getSessionByToken, getUnitByPortalToken, getActiveSession, getLiveConsumption, getGlobalSettings, getGuestLaundryMachines } from "@/lib/actions";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,9 @@ export default async function GuestPortalPage({
   const globalSettings = await getGlobalSettings();
   const quickpayEnabled = globalSettings.quickpay_enabled === "true";
   const siteMapUrl = globalSettings.site_map_url || null;
+
+  // Try session-based token first
+  const laundryMachines = await getGuestLaundryMachines();
 
   // Try session-based token first
   const session = await getSessionByToken(token);
@@ -44,12 +47,15 @@ export default async function GuestPortalPage({
         externalPrice={session.externalPrice}
         externalDescription={session.externalDescription}
         paymentStatus={session.paymentStatus}
+        billingMode={(session.billingMode as "PREPAID" | "POSTPAID") || "POSTPAID"}
+        prepaidAmount={session.prepaidAmount}
         isLongTerm={false}
         invoices={[]}
         quickpayEnabled={quickpayEnabled}
         unitType={session.unit.type}
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
+        laundryMachines={laundryMachines}
       />
     );
   }
@@ -97,10 +103,13 @@ export default async function GuestPortalPage({
           status: inv.status,
           paymentToken: inv.paymentToken,
         }))}
+        billingMode="POSTPAID"
+        prepaidAmount={null}
         quickpayEnabled={quickpayEnabled}
         unitType={unit.type}
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
+        laundryMachines={laundryMachines}
       />
     );
   }

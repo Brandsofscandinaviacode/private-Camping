@@ -12,6 +12,9 @@ import {
   Globe,
   Info,
   Map,
+  WashingMachine,
+  Wallet,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +26,8 @@ import {
   guestUnlockDoor,
   createSessionPayment,
   createInvoicePayment,
+  startLaundryMachine,
+  getGuestLaundryMachines,
 } from "@/lib/actions";
 import { type Locale, localeLabels, getTranslations } from "@/lib/guest-translations";
 
@@ -56,12 +61,15 @@ interface GuestPortalClientProps {
   externalPrice: number | null;
   externalDescription: string | null;
   paymentStatus: string;
+  billingMode: "PREPAID" | "POSTPAID";
+  prepaidAmount: number | null;
   isLongTerm: boolean;
   invoices: InvoiceData[];
   quickpayEnabled: boolean;
   unitType: string;
   practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
+  laundryMachines: { id: number; name: string; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null }[];
 }
 
 interface ConsumptionData {
@@ -92,12 +100,15 @@ export function GuestPortalClient({
   externalPrice,
   externalDescription,
   paymentStatus,
+  billingMode,
+  prepaidAmount,
   isLongTerm,
   invoices,
   quickpayEnabled,
   unitType,
   practicalInfo,
   siteMapUrl,
+  laundryMachines,
 }: GuestPortalClientProps) {
   const [locale, setLocale] = useState<Locale>(() => {
     if (typeof window !== "undefined") {
@@ -326,8 +337,53 @@ export function GuestPortalClient({
                 </span>
               </div>
               <p className="text-xs text-center text-muted-foreground">{tx.updatesEvery30s}</p>
+
+              {/* Prepaid balance */}
+              {billingMode === "PREPAID" && prepaidAmount != null && (
+                <>
+                  <Separator />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Wallet className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-medium">
+                        {locale === "en" ? "Prepaid balance" : locale === "de" ? "Vorauszahlung" : "Forudbetalt"}
+                      </span>
+                    </div>
+                    <span className="font-semibold">{formatDKK(prepaidAmount)}</span>
+                  </div>
+                  {consumption?.totalLiveCost != null && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        {locale === "en" ? "Remaining" : locale === "de" ? "Verbleibend" : "Resterende"}
+                      </span>
+                      <span className={`font-bold ${prepaidAmount - consumption.totalLiveCost < 0 ? "text-red-600" : "text-green-600"}`}>
+                        {formatDKK(prepaidAmount - consumption.totalLiveCost)}
+                      </span>
+                    </div>
+                  )}
+                  {consumption?.totalLiveCost != null && (
+                    <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          (consumption.totalLiveCost / prepaidAmount) > 0.9 ? "bg-red-500" :
+                          (consumption.totalLiveCost / prepaidAmount) > 0.7 ? "bg-yellow-500" : "bg-green-500"
+                        }`}
+                        style={{ width: `${Math.min(100, (consumption.totalLiveCost / prepaidAmount) * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                  <p className="text-xs text-center text-muted-foreground">
+                    {locale === "en" ? "No refund for unused amount" : locale === "de" ? "Keine Erstattung für ungenutzten Betrag" : "Ubrugt beløb refunderes ikke"}
+                  </p>
+                </>
+              )}
             </CardContent>
           </Card>
+        )}
+
+        {/* Laundry Machines */}
+        {isActive && laundryMachines.length > 0 && (
+          <LaundrySection machines={laundryMachines} token={token} locale={locale} />
         )}
 
         {/* Climate Control */}
@@ -496,5 +552,103 @@ export function GuestPortalClient({
         <p className="text-[11px] text-center text-muted-foreground/50 pt-4">{tx.poweredBy}</p>
       </div>
     </div>
+  );
+}
+
+// ── Laundry Section ──
+function LaundrySection({
+  machines: initialMachines,
+  token,
+  locale,
+}: {
+  machines: GuestPortalClientProps["laundryMachines"];
+  token: string;
+  locale: string;
+}) {
+  const [machines, setMachines] = useState(initialMachines);
+  const [startingId, setStartingId] = useState<number | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Refresh machine status periodically
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const updated = await getGuestLaundryMachines();
+        setMachines(updated);
+      } catch { /* ignore */ }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function handleStart(machineId: number) {
+    setStartingId(machineId);
+    setMessage(null);
+    try {
+      const res = await startLaundryMachine(machineId, token);
+      setMessage({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        const updated = await getGuestLaundryMachines();
+        setMachines(updated);
+      }
+    } catch {
+      setMessage({ ok: false, text: "Fejl" });
+    } finally {
+      setStartingId(null);
+    }
+  }
+
+  const labels = {
+    title: locale === "en" ? "Laundry" : locale === "de" ? "Waschraum" : "Vaskerum",
+    available: locale === "en" ? "Available" : locale === "de" ? "Verfügbar" : "Ledig",
+    inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
+    minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
+    start: locale === "en" ? "Start" : locale === "de" ? "Starten" : "Start",
+    perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <WashingMachine className="h-4 w-4 text-blue-500" />
+          {labels.title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {machines.map((m) => (
+          <div key={m.id} className="flex items-center justify-between py-2 border-b last:border-0">
+            <div>
+              <p className="text-sm font-medium">{m.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {m.available ? (
+                  <span className="text-green-600">{labels.available}</span>
+                ) : (
+                  <span className="text-orange-600">
+                    {labels.inUse} — {m.minutesLeft} {labels.minutesLeft}
+                  </span>
+                )}
+                {" · "}{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              disabled={!m.available || startingId !== null}
+              onClick={() => handleStart(m.id)}
+            >
+              {startingId === m.id ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                labels.start
+              )}
+            </Button>
+          </div>
+        ))}
+        {message && (
+          <div className={`text-sm p-3 rounded-lg ${message.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+            {message.text}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

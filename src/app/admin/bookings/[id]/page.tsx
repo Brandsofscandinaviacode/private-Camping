@@ -115,6 +115,18 @@ export default async function BookingDetailPage({
                 </div>
               )}
               <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Afregning</span>
+                <span>
+                  {session.billingMode === "PREPAID" ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                      Forudbetalt {session.prepaidAmount ? `(${session.prepaidAmount.toFixed(2)} DKK)` : ""}
+                    </span>
+                  ) : (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Bagudbetalt</span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Gæsteportal</span>
                 <CopyButton text={`/guest/${session.guestPortalToken}`} label="Kopiér link" />
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +42,8 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [guestPhone, setGuestPhone] = useState("");
   const [bookingRef, setBookingRef] = useState("");
   const [expectedCheckOut, setExpectedCheckOut] = useState("");
+  const [billingMode, setBillingMode] = useState<"PREPAID" | "POSTPAID">("POSTPAID");
+  const [prepaidAmount, setPrepaidAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [copyLabel, setCopyLabel] = useState("Kopiér");
   const [result, setResult] = useState<{
@@ -53,7 +55,16 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     if (!guestName.trim()) return;
     setLoading(true);
     try {
-      const res = await checkIn(unitId, guestName.trim(), guestEmail.trim() || undefined, guestPhone.trim() || undefined, bookingRef.trim() || undefined, expectedCheckOut || undefined);
+      const res = await checkIn(
+        unitId,
+        guestName.trim(),
+        guestEmail.trim() || undefined,
+        guestPhone.trim() || undefined,
+        bookingRef.trim() || undefined,
+        expectedCheckOut || undefined,
+        billingMode,
+        billingMode === "PREPAID" ? parseFloat(prepaidAmount) || 0 : undefined,
+      );
       setResult(res);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Check-in fejlede");
@@ -69,6 +80,8 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
     setGuestPhone("");
     setBookingRef("");
     setExpectedCheckOut("");
+    setBillingMode("POSTPAID");
+    setPrepaidAmount("");
     setResult(null);
     setCopyLabel("Kopiér");
   }
@@ -143,6 +156,56 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
                 />
               </div>
             </div>
+
+            {/* Billing mode */}
+            <div className="space-y-2">
+              <Label>Afregning</Label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBillingMode("POSTPAID")}
+                  className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
+                    billingMode === "POSTPAID"
+                      ? "border-primary bg-primary/5 text-primary font-medium"
+                      : "border-border text-muted-foreground hover:border-foreground/20"
+                  }`}
+                >
+                  Bagudbetalt
+                  <span className="block text-xs mt-0.5 font-normal opacity-70">Betaler ved checkout</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBillingMode("PREPAID")}
+                  className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
+                    billingMode === "PREPAID"
+                      ? "border-primary bg-primary/5 text-primary font-medium"
+                      : "border-border text-muted-foreground hover:border-foreground/20"
+                  }`}
+                >
+                  Forudbetalt
+                  <span className="block text-xs mt-0.5 font-normal opacity-70">Allerede betalt i kassen</span>
+                </button>
+              </div>
+              {billingMode === "PREPAID" && (
+                <div>
+                  <Label htmlFor="prepaid-amount">Forudbetalt beløb (DKK)</Label>
+                  <Input
+                    id="prepaid-amount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={prepaidAmount}
+                    onChange={(e) => setPrepaidAmount(e.target.value)}
+                    placeholder="F.eks. 500"
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Gæsten kan følge forbruget mod dette beløb. Ubrugt beløb refunderes ikke.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <p className="text-xs text-muted-foreground">
               Systemet tænder strøm, aflæser målere og opretter gæsteportal.
               Gæsten modtager et link via SMS og/eller email (hvis aktiveret).

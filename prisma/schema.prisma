@@ -141,6 +141,10 @@ model Session {
   checkOutTime DateTime?
   expectedCheckOut DateTime?  // Optional planned checkout date
 
+  // Billing mode: POSTPAID = pay at checkout, PREPAID = paid upfront in DKK
+  billingMode    String  @default("POSTPAID")  // "PREPAID" or "POSTPAID"
+  prepaidAmount  Float?  // DKK amount paid upfront (for PREPAID mode)
+
   // Baseline readings captured from HA
   startKwh         Float?
   startWaterLiters Float?
@@ -159,6 +163,8 @@ model Session {
   externalDescription String?
 
   notes String?   // Admin-bemærkninger
+
+  laundrySessions LaundrySess[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -223,4 +229,48 @@ model ConsumptionLog {
   recordedAt DateTime @default(now())
 
   @@map("consumption_logs")
+}
+
+// ──────────────────────────────────────────────
+// Laundry Machine (shared facility with Shelly relay)
+// ──────────────────────────────────────────────
+model LaundryMachine {
+  id               Int     @id @default(autoincrement())
+  name             String                           // "Vaskemaskine 1", "Tørretumbler"
+  switchEntityId   String                           // HA switch entity to control
+  durationMinutes  Int     @default(60)             // How long it runs per use
+  pricePerUse      Float   @default(25)             // DKK per use
+  enabled          Boolean @default(true)           // Admin can disable
+
+  sessions LaundrySess[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("laundry_machines")
+}
+
+// ──────────────────────────────────────────────
+// Laundry Session (one wash/dry cycle)
+// ──────────────────────────────────────────────
+model LaundrySess {
+  id              Int      @id @default(autoincrement())
+  machineId       Int
+  machine         LaundryMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  // Link to guest session (who started it)
+  sessionId       Int?
+  session         Session?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  guestPortalToken String?  // To identify the guest if session is null
+
+  startedAt       DateTime @default(now())
+  endsAt          DateTime                         // When the machine should turn off
+  status          String   @default("ACTIVE")      // ACTIVE, COMPLETED, CANCELLED
+  pricePaid       Float    @default(0)
+  paymentStatus   String   @default("UNPAID")      // UNPAID, PAID
+  paymentId       String?                           // QuickPay transaction ID
+
+  createdAt DateTime @default(now())
+
+  @@map("laundry_sessions")
 }

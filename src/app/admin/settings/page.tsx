@@ -1,10 +1,11 @@
-import { getGlobalSettings, getUnits } from "@/lib/actions";
+import { getGlobalSettings, getUnits, getLaundryMachines } from "@/lib/actions";
 import { requireAuth } from "@/lib/auth";
 import { GeneralSettings, HASettings, NotificationSettings, PaymentSettings, GuestPortalSettings } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
 import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SystemStatus } from "@/components/admin/system-status";
 import { SettingsTabs } from "@/components/admin/settings-tabs";
+import { LaundrySettings } from "@/components/admin/laundry-settings";
 import { Home, Anchor, Caravan, MapPin } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -26,9 +27,10 @@ const typeIcons: Record<string, typeof Home> = {
 
 export default async function SettingsPage() {
   const session = await requireAuth();
-  const [settings, units] = await Promise.all([
+  const [settings, units, laundryMachines] = await Promise.all([
     getGlobalSettings(),
     getUnits(),
+    getLaundryMachines(),
   ]);
 
   const sortedUnits = [...units].sort((a, b) => {
@@ -111,6 +113,7 @@ export default async function SettingsPage() {
           payment: <PaymentSettings settings={settings} />,
           guest: <GuestPortalSettings settings={settings} />,
           hardware: hardwareContent,
+          laundry: <LaundrySettings machines={laundryMachines.map((m) => ({ id: m.id, name: m.name, switchEntityId: m.switchEntityId, durationMinutes: m.durationMinutes, pricePerUse: m.pricePerUse, enabled: m.enabled }))} />,
           system: systemContent,
         }}
       </SettingsTabs>

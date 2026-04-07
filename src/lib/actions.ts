@@ -389,7 +389,7 @@ export async function updateMultipleSettings(
 // ──────────────────────────────────────────────
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
-export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string, expectedCheckOut?: string) {
+export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string, expectedCheckOut?: string, billingMode?: "PREPAID" | "POSTPAID", prepaidAmount?: number) {
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -430,7 +430,7 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
+    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
   });
 
   // Update unit status; for long-term units also store tenant info for invoicing/portal
@@ -538,10 +538,23 @@ export async function checkOut(sessionId: number) {
     try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { console.error("HA:", e); }
   }
 
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { status: "COMPLETED", checkOutTime: new Date(), endKwh, endWaterLiters, totalElectricityCost, totalWaterCost, totalCost },
-  });
+  // For prepaid: mark as PAID since amount was collected upfront, no refund
+  const isPrepaid = session.billingMode === "PREPAID";
+  const updateData: Record<string, unknown> = {
+    status: "COMPLETED",
+    checkOutTime: new Date(),
+    endKwh,
+    endWaterLiters,
+    totalElectricityCost,
+    totalWaterCost,
+    totalCost,
+  };
+  if (isPrepaid) {
+    updateData.paymentStatus = "PAID";
+    updateData.paidAt = new Date();
+  }
+
+  await prisma.session.update({ where: { id: sessionId }, data: updateData });
 
   // Only mark vacant for non-long-term
   if (!session.unit.isLongTerm) {
@@ -550,7 +563,7 @@ export async function checkOut(sessionId: number) {
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${session.unitId}`);
-  return { totalElectricityCost, totalWaterCost, totalCost };
+  return { totalElectricityCost, totalWaterCost, totalCost, isPrepaid, prepaidAmount: session.prepaidAmount };
 }
 
 // ──────────────────────────────────────────────
@@ -1922,4 +1935,168 @@ async function getHAConfigInternal(): Promise<{ url: string; token: string }> {
     throw new Error("Home Assistant URL or Token not configured");
   }
   return { url: urlSetting.value, token: tokenSetting.value };
+}
+
+// ──────────────────────────────────────────────
+// LAUNDRY MACHINES — shared facility management
+// ──────────────────────────────────────────────
+export async function getLaundryMachines() {
+  return prisma.laundryMachine.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      sessions: {
+        where: { status: "ACTIVE" },
+        take: 1,
+      },
+    },
+  });
+}
+
+export async function createLaundryMachine(data: {
+  name: string;
+  switchEntityId: string;
+  durationMinutes: number;
+  pricePerUse: number;
+}) {
+  await prisma.laundryMachine.create({ data });
+  revalidatePath("/admin/settings");
+}
+
+export async function updateLaundryMachine(id: number, data: {
+  name: string;
+  switchEntityId: string;
+  durationMinutes: number;
+  pricePerUse: number;
+  enabled: boolean;
+}) {
+  await prisma.laundryMachine.update({ where: { id }, data });
+  revalidatePath("/admin/settings");
+}
+
+export async function deleteLaundryMachine(id: number) {
+  await prisma.laundryMachine.delete({ where: { id } });
+  revalidatePath("/admin/settings");
+}
+
+// Get laundry machines with status for guest portal
+export async function getGuestLaundryMachines() {
+  const machines = await prisma.laundryMachine.findMany({
+    where: { enabled: true },
+    orderBy: { name: "asc" },
+    include: {
+      sessions: {
+        where: { status: "ACTIVE" },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+      },
+    },
+  });
+
+  return machines.map((m) => {
+    const activeSession = m.sessions[0] || null;
+    const now = new Date();
+    // Check if active session has expired
+    const isRunning = activeSession && new Date(activeSession.endsAt) > now;
+    const minutesLeft = isRunning
+      ? Math.max(0, Math.round((new Date(activeSession.endsAt).getTime() - now.getTime()) / 60000))
+      : 0;
+
+    return {
+      id: m.id,
+      name: m.name,
+      durationMinutes: m.durationMinutes,
+      pricePerUse: m.pricePerUse,
+      available: !isRunning,
+      minutesLeft,
+      endsAt: isRunning ? activeSession.endsAt.toISOString() : null,
+    };
+  });
+}
+
+// Guest starts a laundry machine — turns on Shelly relay
+export async function startLaundryMachine(
+  machineId: number,
+  guestPortalToken: string,
+): Promise<{ ok: boolean; message: string; paymentRequired?: boolean }> {
+  const machine = await prisma.laundryMachine.findUnique({
+    where: { id: machineId },
+    include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
+  });
+
+  if (!machine) return { ok: false, message: "Maskine ikke fundet" };
+  if (!machine.enabled) return { ok: false, message: "Maskine er deaktiveret" };
+
+  // Check if currently running
+  const activeSession = machine.sessions[0];
+  if (activeSession && new Date(activeSession.endsAt) > new Date()) {
+    return { ok: false, message: "Maskinen er allerede i brug" };
+  }
+
+  // If old active session expired, mark it completed
+  if (activeSession) {
+    await prisma.laundrySess.update({
+      where: { id: activeSession.id },
+      data: { status: "COMPLETED" },
+    });
+  }
+
+  // Find guest session
+  const guestSession = await prisma.session.findUnique({
+    where: { guestPortalToken },
+  });
+
+  const endsAt = new Date();
+  endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
+
+  // Create laundry session
+  await prisma.laundrySess.create({
+    data: {
+      machineId,
+      sessionId: guestSession?.id || null,
+      guestPortalToken,
+      endsAt,
+      pricePaid: machine.pricePerUse,
+      paymentStatus: "UNPAID",
+    },
+  });
+
+  // Turn on the Shelly relay
+  try {
+    await ha.turnOn(machine.switchEntityId);
+  } catch (e) {
+    console.error("Failed to turn on laundry machine:", e);
+    return { ok: false, message: "Kunne ikke tænde maskinen — tjek HA-forbindelsen" };
+  }
+
+  // Schedule auto-off (we'll use the cron job to check)
+  revalidatePath("/guest");
+  return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
+}
+
+// Called by cron to turn off expired laundry machines
+export async function checkLaundryMachines() {
+  const expired = await prisma.laundrySess.findMany({
+    where: {
+      status: "ACTIVE",
+      endsAt: { lte: new Date() },
+    },
+    include: { machine: true },
+  });
+
+  for (const session of expired) {
+    // Turn off relay
+    try {
+      await ha.turnOff(session.machine.switchEntityId);
+    } catch (e) {
+      console.error(`Failed to turn off laundry machine ${session.machine.name}:`, e);
+    }
+
+    // Mark completed
+    await prisma.laundrySess.update({
+      where: { id: session.id },
+      data: { status: "COMPLETED" },
+    });
+  }
+
+  return { turned_off: expired.length };
 }
