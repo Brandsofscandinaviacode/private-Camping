@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useEffect, useMemo } from "react";
+import { useState, useTransition, useEffect, useMemo, useRef } from "react";
 import { ChevronDown, ChevronRight, Save, Loader2, Search, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,19 @@ function EntityPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setSearch("");
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
 
   const filtered = useMemo(() => {
     let list = entities;
@@ -72,7 +85,7 @@ function EntityPicker({
   const selectedEntity = entities.find((e) => e.entity_id === value);
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <div
         className="flex items-center border rounded-md bg-background cursor-pointer"
         onClick={() => setOpen(!open)}

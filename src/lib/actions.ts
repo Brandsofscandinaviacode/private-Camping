@@ -1627,3 +1627,207 @@ export async function testQuickPay() {
   const { testQuickPayConnection } = await import("./quickpay");
   return testQuickPayConnection();
 }
+
+// ──────────────────────────────────────────────
+// ECONOMY — Monthly overview
+// ──────────────────────────────────────────────
+export interface MonthlyEconomySummary {
+  month: string; // "2026-01"
+  sessionsCount: number;
+  invoicesCount: number;
+  totalRevenue: number;
+  totalPaid: number;
+  totalUnpaid: number;
+  totalElectricity: number;
+  totalWater: number;
+  totalKwhUsed: number;
+  totalWaterUsed: number;
+}
+
+export async function getEconomySummary(): Promise<{
+  months: MonthlyEconomySummary[];
+  unpaidSessions: { id: number; unitName: string; guestName: string; total: number; checkOut: string }[];
+  unpaidInvoices: { id: number; unitName: string; total: number; periodEnd: string }[];
+}> {
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
+  const [sessions, invoices] = await Promise.all([
+    prisma.session.findMany({
+      where: { status: "COMPLETED" },
+      include: { unit: true },
+      orderBy: { checkOutTime: "desc" },
+    }),
+    prisma.invoice.findMany({
+      include: { unit: true },
+      orderBy: { periodEnd: "desc" },
+    }),
+  ]);
+
+  // Group by month
+  const monthMap = new Map<string, MonthlyEconomySummary>();
+
+  function getOrCreate(month: string): MonthlyEconomySummary {
+    if (!monthMap.has(month)) {
+      monthMap.set(month, {
+        month,
+        sessionsCount: 0,
+        invoicesCount: 0,
+        totalRevenue: 0,
+        totalPaid: 0,
+        totalUnpaid: 0,
+        totalElectricity: 0,
+        totalWater: 0,
+        totalKwhUsed: 0,
+        totalWaterUsed: 0,
+      });
+    }
+    return monthMap.get(month)!;
+  }
+
+  for (const s of sessions) {
+    const date = s.checkOutTime || s.checkInTime;
+    const month = date.toISOString().slice(0, 7);
+    const m = getOrCreate(month);
+    m.sessionsCount++;
+    const cost = s.totalCost ?? 0;
+    m.totalRevenue += cost;
+    if (s.paymentStatus === "PAID") m.totalPaid += cost;
+    else m.totalUnpaid += cost;
+    m.totalElectricity += s.totalElectricityCost ?? 0;
+    m.totalWater += s.totalWaterCost ?? 0;
+    if (s.endKwh !== null && s.startKwh !== null) m.totalKwhUsed += Math.max(0, s.endKwh - s.startKwh);
+    if (s.endWaterLiters !== null && s.startWaterLiters !== null) m.totalWaterUsed += Math.max(0, s.endWaterLiters - s.startWaterLiters);
+  }
+
+  for (const inv of invoices) {
+    const month = inv.periodEnd.toISOString().slice(0, 7);
+    const m = getOrCreate(month);
+    m.invoicesCount++;
+    m.totalRevenue += inv.totalAmount;
+    if (inv.status === "PAID") m.totalPaid += inv.totalAmount;
+    else m.totalUnpaid += inv.totalAmount;
+    m.totalElectricity += inv.electricityCost;
+    m.totalWater += inv.waterCost;
+    if (inv.endKwh !== null && inv.startKwh !== null) m.totalKwhUsed += Math.max(0, inv.endKwh - inv.startKwh);
+    if (inv.endWaterLiters !== null && inv.startWaterLiters !== null) m.totalWaterUsed += Math.max(0, inv.endWaterLiters - inv.startWaterLiters);
+  }
+
+  const months = [...monthMap.values()].sort((a, b) => b.month.localeCompare(a.month));
+
+  // Unpaid sessions
+  const unpaidSessions = sessions
+    .filter((s) => s.paymentStatus === "UNPAID" && (s.totalCost ?? 0) > 0)
+    .map((s) => ({
+      id: s.id,
+      unitName: `${typeLabels[s.unit.type] || ""} ${s.unit.name}`.trim(),
+      guestName: s.guestName,
+      total: s.totalCost ?? 0,
+      checkOut: s.checkOutTime?.toISOString().slice(0, 10) || "",
+    }));
+
+  // Unpaid invoices
+  const unpaidInvoices = invoices
+    .filter((inv) => inv.status !== "PAID" && inv.totalAmount > 0)
+    .map((inv) => ({
+      id: inv.id,
+      unitName: `${typeLabels[inv.unit.type] || ""} ${inv.unit.name}`.trim(),
+      total: inv.totalAmount,
+      periodEnd: inv.periodEnd.toISOString().slice(0, 10),
+    }));
+
+  return { months, unpaidSessions, unpaidInvoices };
+}
+
+// ──────────────────────────────────────────────
+// ADD SHELLY DEVICE via HA Config Flow
+// ──────────────────────────────────────────────
+export async function addShellyDevice(host: string, port: number = 80): Promise<{ ok: boolean; message: string }> {
+  if (!host.trim()) return { ok: false, message: "Angiv en IP-adresse eller hostname" };
+
+  try {
+    const { url, token } = await getHAConfigInternal();
+
+    // Step 1: Initiate config flow for Shelly integration
+    const initRes = await fetch(`${url}/api/config/config_entries/flow`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        handler: "shelly",
+        show_advanced_options: false,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!initRes.ok) {
+      const errText = await initRes.text();
+      return { ok: false, message: `HA svarede med fejl: ${initRes.status} — ${errText}` };
+    }
+
+    const initData = await initRes.json();
+    const flowId = initData.flow_id;
+
+    if (!flowId) return { ok: false, message: "Kunne ikke starte Shelly config flow" };
+
+    // Step 2: Submit host/port to the flow
+    const submitRes = await fetch(`${url}/api/config/config_entries/flow/${flowId}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ host: host.trim(), port }),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!submitRes.ok) {
+      const errText = await submitRes.text();
+      return { ok: false, message: `Kunne ikke tilføje enhed: ${submitRes.status} — ${errText}` };
+    }
+
+    const result = await submitRes.json();
+
+    if (result.type === "create_entry") {
+      return { ok: true, message: `Shelly enhed tilføjet: ${result.title || host}` };
+    }
+
+    if (result.type === "form") {
+      // Maybe needs more info or auth
+      if (result.errors && Object.keys(result.errors).length > 0) {
+        const errMsg = Object.values(result.errors).join(", ");
+        return { ok: false, message: `Fejl: ${errMsg}` };
+      }
+      // Might need additional step (e.g. firmware update or auth)
+      return { ok: false, message: result.description_placeholders?.message || "Enheden kræver yderligere konfiguration i Home Assistant" };
+    }
+
+    if (result.type === "abort") {
+      const reason = result.reason || "ukendt";
+      if (reason === "already_configured") {
+        return { ok: false, message: "Denne Shelly enhed er allerede konfigureret i Home Assistant" };
+      }
+      return { ok: false, message: `Afbrudt: ${reason}` };
+    }
+
+    return { ok: true, message: `Enhed tilføjet` };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("timeout") || msg.includes("AbortError")) {
+      return { ok: false, message: "Timeout — enheden svarer ikke. Tjek at IP-adressen er korrekt og enheden er på netværket." };
+    }
+    return { ok: false, message: `Fejl: ${msg}` };
+  }
+}
+
+async function getHAConfigInternal(): Promise<{ url: string; token: string }> {
+  const [urlSetting, tokenSetting] = await Promise.all([
+    prisma.globalSetting.findUnique({ where: { key: "ha_url" } }),
+    prisma.globalSetting.findUnique({ where: { key: "ha_token" } }),
+  ]);
+  if (!urlSetting?.value || !tokenSetting?.value) {
+    throw new Error("Home Assistant URL or Token not configured");
+  }
+  return { url: urlSetting.value, token: tokenSetting.value };
+}

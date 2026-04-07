@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -377,6 +377,77 @@ export function HASettings({ settings }: SettingsFormProps) {
         </div>
       </div>
       <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+
+      {/* Add Shelly Device */}
+      <AddShellyDevice />
+    </div>
+  );
+}
+
+function AddShellyDevice() {
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("80");
+  const [adding, setAdding] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  async function handleAdd() {
+    setAdding(true);
+    setResult(null);
+    try {
+      const res = await addShellyDevice(host.trim(), parseInt(port, 10) || 80);
+      setResult(res);
+      if (res.ok) setHost("");
+    } catch {
+      setResult({ ok: false, message: "Uventet fejl" });
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border bg-card shadow-sm">
+      <div className="px-5 py-4 border-b border-border">
+        <h2 className="font-semibold">Tilføj Shelly enhed</h2>
+      </div>
+      <div className="p-5 space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Tilføj en ny Shelly enhed til Home Assistant. Enheden skal være på samme netværk.
+        </p>
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <Label className="text-sm text-muted-foreground">Host (IP-adresse)</Label>
+            <Input
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder="192.168.1.100"
+              className="mt-1"
+            />
+          </div>
+          <div className="w-24">
+            <Label className="text-sm text-muted-foreground">Port</Label>
+            <Input
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              placeholder="80"
+              className="mt-1"
+            />
+          </div>
+        </div>
+        <Button
+          variant="default"
+          size="sm"
+          disabled={adding || !host.trim()}
+          onClick={handleAdd}
+        >
+          {adding ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+          {adding ? "Tilføjer..." : "Tilføj enhed"}
+        </Button>
+        {result && (
+          <div className={`text-sm p-3 rounded-lg ${result.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+            {result.message}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

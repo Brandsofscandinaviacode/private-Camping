@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { LayoutDashboard, Settings, Tent, BookOpen, Zap } from "lucide-react";
+import { LayoutDashboard, Settings, Tent, BookOpen, Zap, Wallet } from "lucide-react";
 import { requireAuth } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { MobileSidebar } from "@/components/admin/mobile-sidebar";
@@ -68,6 +68,13 @@ export default async function AdminLayout({
             System
           </p>
           <div className="space-y-0.5">
+            <Link
+              href="/admin/economy"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+            >
+              <Wallet className="h-[18px] w-[18px]" />
+              Økonomi
+            </Link>
             <Link
               href="/admin/settings"
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
