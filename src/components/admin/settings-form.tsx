@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useTransition, useRef } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2 } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -40,6 +40,8 @@ function SaveButton({ isPending, saved, onClick }: { isPending: boolean; saved: 
 
 // ─── GENERAL TAB ───
 export function GeneralSettings({ settings }: SettingsFormProps) {
+  const [invoiceTestLoading, setInvoiceTestLoading] = useState(false);
+  const [invoiceTestResult, setInvoiceTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [values, setValues] = useState({
     site_url: settings.site_url || "http://localhost:3000",
     price_per_kwh: settings.price_per_kwh || "2.50",
@@ -57,6 +59,11 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
     alarm_kwh_threshold: settings.alarm_kwh_threshold || "10",
     alarm_water_threshold: settings.alarm_water_threshold || "500",
     alarm_hours_window: settings.alarm_hours_window || "24",
+    main_meter_water_entity: settings.main_meter_water_entity || "",
+    main_meter_el_entity: settings.main_meter_el_entity || "",
+    main_meter_leak_enabled: settings.main_meter_leak_enabled || "false",
+    main_meter_leak_threshold_liters: settings.main_meter_leak_threshold_liters || "10",
+    main_meter_leak_hours: settings.main_meter_leak_hours || "3",
   });
   const { isPending, saved, handleSave } = useSave(values);
 
@@ -199,13 +206,38 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
             </div>
           </label>
           {values.invoice_email_enabled === "true" && (
-            <div>
-              <Label className="text-sm text-muted-foreground">Send faktura den</Label>
-              <select value={values.invoice_email_day} onChange={(e) => h("invoice_email_day", e.target.value)} className="mt-1 h-9 rounded-md border border-input bg-background px-3 text-sm">
-                <option value="1">1. i måneden</option>
-                <option value="14">14. i måneden</option>
-              </select>
-              <p className="text-xs text-muted-foreground mt-1.5">Fakturaen dækker forbruget fra den foregående måned</p>
+            <div className="space-y-3">
+              <div>
+                <Label className="text-sm text-muted-foreground">Send faktura den</Label>
+                <select value={values.invoice_email_day} onChange={(e) => h("invoice_email_day", e.target.value)} className="mt-1 h-9 rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="1">1. i måneden</option>
+                  <option value="14">14. i måneden</option>
+                  <option value="last">Sidste dag i måneden</option>
+                </select>
+                <p className="text-xs text-muted-foreground mt-1.5">Fakturaen dækker forbruget fra den foregående måned</p>
+              </div>
+              <div className="pt-1">
+                <Button variant="outline" size="sm" onClick={async () => {
+                  setInvoiceTestLoading(true);
+                  setInvoiceTestResult(null);
+                  try {
+                    const res = await testSendInvoice();
+                    setInvoiceTestResult(res);
+                  } catch {
+                    setInvoiceTestResult({ ok: false, message: "Uventet fejl" });
+                  } finally {
+                    setInvoiceTestLoading(false);
+                  }
+                }} disabled={invoiceTestLoading}>
+                  {invoiceTestLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                  {invoiceTestLoading ? "Sender..." : "Test: send seneste faktura"}
+                </Button>
+                {invoiceTestResult && (
+                  <div className={`mt-2 text-sm p-2.5 rounded-lg ${invoiceTestResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                    {invoiceTestResult.message}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -238,6 +270,44 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
                 <Label className="text-sm text-muted-foreground">Tidsvindue (timer)</Label>
                 <Input type="number" value={values.alarm_hours_window} onChange={(e) => h("alarm_hours_window", e.target.value)} className="mt-1 w-24" />
                 <p className="text-xs text-muted-foreground mt-1.5">Alarm udløses hvis grænsen overskrides inden for dette antal timer</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main meter leak detection */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Hovedmåler / lækageovervågning</h2></div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-sm text-muted-foreground">Hovedmåler el (HA entity)</Label>
+              <Input value={values.main_meter_el_entity} onChange={(e) => h("main_meter_el_entity", e.target.value)} placeholder="sensor.main_power_meter" className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-sm text-muted-foreground">Hovedmåler vand (HA entity)</Label>
+              <Input value={values.main_meter_water_entity} onChange={(e) => h("main_meter_water_entity", e.target.value)} placeholder="sensor.main_water_meter" className="mt-1" />
+            </div>
+          </div>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" checked={values.main_meter_leak_enabled === "true"} onChange={(e) => h("main_meter_leak_enabled", e.target.checked ? "true" : "false")} className="mt-0.5 h-4 w-4 accent-primary" />
+            <div>
+              <p className="text-sm font-medium">Lækagealarm (konstant forbrug)</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Advar hvis hovedmåleren registrerer løbende forbrug over en periode (f.eks. vandlæk)</p>
+            </div>
+          </label>
+          {values.main_meter_leak_enabled === "true" && (
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <div>
+                <Label className="text-sm text-muted-foreground">Min. forbrug pr. time (liter)</Label>
+                <Input type="number" step="1" value={values.main_meter_leak_threshold_liters} onChange={(e) => h("main_meter_leak_threshold_liters", e.target.value)} className="mt-1" />
+                <p className="text-xs text-muted-foreground mt-1.5">Alarm hvis forbruget er over denne grænse i alle timer</p>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Antal sammenhængende timer</Label>
+                <Input type="number" step="1" value={values.main_meter_leak_hours} onChange={(e) => h("main_meter_leak_hours", e.target.value)} className="mt-1" />
+                <p className="text-xs text-muted-foreground mt-1.5">Alarm hvis forbruget er konstant i dette antal timer</p>
               </div>
             </div>
           )}

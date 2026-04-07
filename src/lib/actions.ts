@@ -688,9 +688,18 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
   const settings = await getGlobalSettings();
   if (settings.invoice_email_enabled !== "true") return { created: 0, sent: 0 };
 
-  const targetDay = parseInt(settings.invoice_email_day || "1", 10);
+  const invoiceDaySetting = settings.invoice_email_day || "1";
   const today = new Date();
-  if (today.getDate() !== targetDay) return { created: 0, sent: 0 };
+  const todayDate = today.getDate();
+  const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+
+  let isInvoiceDay = false;
+  if (invoiceDaySetting === "last") {
+    isInvoiceDay = todayDate === lastDayOfMonth;
+  } else {
+    isInvoiceDay = todayDate === parseInt(invoiceDaySetting, 10);
+  }
+  if (!isInvoiceDay) return { created: 0, sent: 0 };
 
   // Check if already ran today (prevent duplicate invoices)
   const todayStr = today.toISOString().slice(0, 10);
@@ -728,6 +737,22 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
   });
 
   return { created, sent };
+}
+
+export async function testSendInvoice(): Promise<{ ok: boolean; message: string }> {
+  // Find the most recent invoice to test with
+  const invoice = await prisma.invoice.findFirst({
+    orderBy: { createdAt: "desc" },
+    include: { unit: true },
+  });
+  if (!invoice) return { ok: false, message: "Ingen fakturaer fundet. Opret en faktura først." };
+
+  try {
+    const result = await sendInvoiceToCustomer(invoice.id, invoice.unitId);
+    return result;
+  } catch (e) {
+    return { ok: false, message: `Fejl: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 export async function getInvoiceByPaymentToken(token: string) {
@@ -1197,6 +1222,43 @@ export async function checkConsumptionAlarms(): Promise<{
       if (usage > waterThreshold) {
         alerts.push({ unitId: unit.id, unitName, type: "water", usage, threshold: waterThreshold });
       }
+    }
+  }
+
+  // Main meter leak detection (continuous consumption alarm)
+  if (settings.main_meter_leak_enabled === "true" && settings.main_meter_water_entity) {
+    const leakThreshold = parseFloat(settings.main_meter_leak_threshold_liters || "10");
+    const leakHours = parseInt(settings.main_meter_leak_hours || "3", 10);
+
+    try {
+      const history = await ha.getEntityHistory(settings.main_meter_water_entity, leakHours + 1);
+      if (history && history.length >= 2) {
+        // Check if consumption is constant (above threshold) for every hour
+        let continuousHours = 0;
+        for (let i = 1; i < history.length; i++) {
+          const prev = parseFloat(history[i - 1].state);
+          const curr = parseFloat(history[i].state);
+          if (!isNaN(prev) && !isNaN(curr)) {
+            const diff = curr - prev;
+            if (diff >= leakThreshold) {
+              continuousHours++;
+            } else {
+              continuousHours = 0;
+            }
+          }
+        }
+        if (continuousHours >= leakHours) {
+          alerts.push({
+            unitId: 0,
+            unitName: "Hovedmåler vand",
+            type: "water",
+            usage: continuousHours,
+            threshold: leakHours,
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Leak detection error:", e);
     }
   }
 

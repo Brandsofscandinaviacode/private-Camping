@@ -114,3 +114,15 @@ export async function checkHAConnection(): Promise<boolean> {
     return false;
   }
 }
+
+export async function getEntityHistory(entityId: string, hours: number): Promise<{ state: string; last_changed: string }[]> {
+  const startTime = new Date();
+  startTime.setHours(startTime.getHours() - hours);
+  const res = await haFetch(
+    `/history/period/${startTime.toISOString()}?filter_entity_id=${entityId}&minimal_response&no_attributes`
+  );
+  if (!res.ok) throw new Error(`HA history error: ${res.status}`);
+  const data = await res.json();
+  // HA returns array of arrays, first array is the entity's history
+  return (data[0] || []) as { state: string; last_changed: string }[];
+}
