@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { LayoutDashboard, Settings, Tent, BookOpen, Zap, Wallet } from "lucide-react";
+import { LayoutDashboard, Settings, Tent, BookOpen, Zap, Wallet, WashingMachine } from "lucide-react";
 import { requireAuth } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { MobileSidebar } from "@/components/admin/mobile-sidebar";
@@ -61,6 +61,13 @@ export default async function AdminLayout({
             >
               <Zap className="h-[18px] w-[18px]" />
               Elpriser
+            </Link>
+            <Link
+              href="/admin/services"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+            >
+              <WashingMachine className="h-[18px] w-[18px]" />
+              Services
             </Link>
           </div>
 

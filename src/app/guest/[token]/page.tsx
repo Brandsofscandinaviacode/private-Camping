@@ -57,6 +57,7 @@ export default async function GuestPortalPage({
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
+        laundryCredit={session.laundryCredit ?? 0}
         nextInvoiceDay={null}
       />
     );
@@ -112,6 +113,7 @@ export default async function GuestPortalPage({
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
+        laundryCredit={activeSession?.laundryCredit ?? 0}
         nextInvoiceDay={invoiceDay}
       />
     );

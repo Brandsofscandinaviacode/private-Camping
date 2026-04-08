@@ -7,6 +7,7 @@ import { getSessionById, getPricing } from "@/lib/actions";
 import { CopyButton } from "@/components/admin/copy-button";
 import { SessionActions } from "@/components/admin/session-actions";
 import { SessionEditForm } from "@/components/admin/session-edit-form";
+import { LaundryCreditSection } from "@/components/admin/laundry-credit";
 
 export const dynamic = "force-dynamic";
 
@@ -259,6 +260,13 @@ export default async function BookingDetailPage({
             isPaid={isPaid}
             paidAt={session.paidAt?.toISOString() ?? null}
           />
+
+          {isActive && (
+            <LaundryCreditSection
+              sessionId={session.id}
+              currentCredit={session.laundryCredit ?? 0}
+            />
+          )}
         </div>
       </div>
     </div>

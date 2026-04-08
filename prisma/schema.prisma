@@ -162,6 +162,9 @@ model Session {
   externalPrice       Float?
   externalDescription String?
 
+  // Laundry credit (admin can add credit for guests who paid at register)
+  laundryCredit  Float   @default(0)
+
   notes String?   // Admin-bemærkninger
 
   laundrySessions LaundrySess[]

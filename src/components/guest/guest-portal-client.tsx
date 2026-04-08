@@ -73,6 +73,7 @@ interface GuestPortalClientProps {
   practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
   laundryMachines: { id: number; name: string; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null }[];
+  laundryCredit: number;
   nextInvoiceDay: number | null; // 1-31 or null
 }
 
@@ -147,6 +148,7 @@ export function GuestPortalClient({
   practicalInfo,
   siteMapUrl,
   laundryMachines,
+  laundryCredit,
   nextInvoiceDay,
 }: GuestPortalClientProps) {
   const [locale, setLocale] = useState<Locale>(() => {
@@ -451,7 +453,7 @@ export function GuestPortalClient({
             <div className="space-y-4">
               {/* Laundry */}
               {laundryMachines.length > 0 && (
-                <LaundrySection machines={laundryMachines} token={token} locale={locale} />
+                <LaundrySection machines={laundryMachines} token={token} locale={locale} credit={laundryCredit} />
               )}
 
               {/* Climate */}
@@ -636,10 +638,12 @@ function LaundrySection({
   machines: initialMachines,
   token,
   locale,
+  credit,
 }: {
   machines: GuestPortalClientProps["laundryMachines"];
   token: string;
   locale: string;
+  credit: number;
 }) {
   const [machines, setMachines] = useState(initialMachines);
   const [startingId, setStartingId] = useState<number | null>(null);
@@ -681,11 +685,30 @@ function LaundrySection({
     perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
   };
 
+  const creditLabel = locale === "en" ? "Credit" : locale === "de" ? "Guthaben" : "Kredit";
+  const freeLabel = locale === "en" ? "Free" : locale === "de" ? "Gratis" : "Gratis";
+
+  function buttonLabel(m: typeof machines[0]) {
+    if (credit >= m.pricePerUse) return freeLabel;
+    if (credit > 0) {
+      const toPay = m.pricePerUse - credit;
+      return `${toPay.toFixed(0)} DKK`;
+    }
+    return labels.start;
+  }
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <WashingMachine className="h-4 w-4 text-blue-500" />
-        {labels.title}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <WashingMachine className="h-4 w-4 text-blue-500" />
+          {labels.title}
+        </div>
+        {credit > 0 && (
+          <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+            {creditLabel}: {credit.toFixed(0)} DKK
+          </span>
+        )}
       </div>
       {machines.map((m) => (
         <div key={m.id} className="flex items-center justify-between py-2 border-b last:border-0">
@@ -710,7 +733,7 @@ function LaundrySection({
             {startingId === m.id ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              labels.start
+              buttonLabel(m)
             )}
           </Button>
         </div>

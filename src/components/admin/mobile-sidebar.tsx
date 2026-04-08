@@ -9,6 +9,7 @@ import {
   BookOpen,
   Zap,
   Wallet,
+  WashingMachine,
   Menu,
   X,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt" },
   { href: "/admin/bookings", label: "Bookinger", icon: BookOpen, section: "Oversigt", badge: true },
   { href: "/admin/elpriser", label: "Elpriser", icon: Zap, section: "Oversigt" },
+  { href: "/admin/services", label: "Services", icon: WashingMachine, section: "Oversigt" },
   { href: "/admin/economy", label: "Økonomi", icon: Wallet, section: "System" },
   { href: "/admin/settings", label: "Indstillinger", icon: Settings, section: "System" },
 ];

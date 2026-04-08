@@ -2079,13 +2079,43 @@ export async function createLaundryPayment(
     });
   }
 
-  // Find guest session
+  // Find guest session and check laundry credit
   const guestSession = await prisma.session.findUnique({
     where: { guestPortalToken },
   });
+  const credit = guestSession?.laundryCredit ?? 0;
+  const price = machine.pricePerUse;
+  const amountToPay = Math.max(0, price - credit);
+  const creditUsed = Math.min(credit, price);
 
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
+
+  // If guest has enough credit, start immediately (no payment needed)
+  if (amountToPay <= 0) {
+    // Deduct credit
+    if (guestSession) {
+      await prisma.session.update({
+        where: { id: guestSession.id },
+        data: { laundryCredit: Math.max(0, credit - price) },
+      });
+    }
+
+    const laundrySess = await prisma.laundrySess.create({
+      data: {
+        machineId,
+        sessionId: guestSession?.id || null,
+        guestPortalToken,
+        endsAt,
+        pricePaid: price,
+        status: "ACTIVE",
+        paymentStatus: "PAID",
+      },
+    });
+
+    try { await ha.turnOn(machine.switchEntityId); } catch (e) { console.error("HA laundry:", e); }
+    return { ok: true, message: `${machine.name} startet med kredit — kører i ${machine.durationMinutes} minutter` };
+  }
 
   // Create laundry session in PENDING state (waiting for payment)
   const laundrySess = await prisma.laundrySess.create({
@@ -2094,18 +2124,24 @@ export async function createLaundryPayment(
       sessionId: guestSession?.id || null,
       guestPortalToken,
       endsAt,
-      pricePaid: machine.pricePerUse,
+      pricePaid: price,
       status: "PENDING",
       paymentStatus: "UNPAID",
     },
   });
 
-  // Create QuickPay payment
+  // Create QuickPay payment for remaining amount
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
 
   if (settings.quickpay_enabled !== "true") {
     // No payment configured — start directly
+    if (guestSession && creditUsed > 0) {
+      await prisma.session.update({
+        where: { id: guestSession.id },
+        data: { laundryCredit: Math.max(0, credit - creditUsed) },
+      });
+    }
     await prisma.laundrySess.update({
       where: { id: laundrySess.id },
       data: { status: "ACTIVE", paymentStatus: "PAID" },
@@ -2120,21 +2156,29 @@ export async function createLaundryPayment(
 
     const { paymentId, paymentLink } = await createPaymentLink({
       orderId,
-      amount: machine.pricePerUse,
+      amount: amountToPay,
       currency: settings.currency || "DKK",
       continueUrl: `${baseUrl}/guest/${guestPortalToken}?laundry_paid=1`,
       cancelUrl: `${baseUrl}/guest/${guestPortalToken}?laundry_cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
 
+    // Store credit info so callback can deduct it
     await prisma.laundrySess.update({
       where: { id: laundrySess.id },
       data: { paymentId: String(paymentId) },
     });
 
-    return { ok: true, message: "Videresendes til betaling...", paymentLink };
+    // Deduct credit now (it will be used regardless of payment)
+    if (guestSession && creditUsed > 0) {
+      await prisma.session.update({
+        where: { id: guestSession.id },
+        data: { laundryCredit: Math.max(0, credit - creditUsed) },
+      });
+    }
+
+    return { ok: true, message: `Betaler ${amountToPay.toFixed(0)} DKK (${creditUsed.toFixed(0)} DKK kredit brugt)...`, paymentLink };
   } catch (e) {
-    // Payment creation failed — clean up
     await prisma.laundrySess.delete({ where: { id: laundrySess.id } });
     return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -2236,4 +2280,144 @@ export async function checkLaundryMachines() {
   }
 
   return { turned_off: expired.length };
+}
+
+// ──────────────────────────────────────────────
+// SERVICES — Admin overview & control
+// ──────────────────────────────────────────────
+export async function getServiceStatus() {
+  const machines = await prisma.laundryMachine.findMany({
+    include: {
+      sessions: {
+        where: { status: { in: ["ACTIVE", "PENDING"] } },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+        include: { session: { select: { guestName: true, unit: { select: { name: true } } } } },
+      },
+    },
+    orderBy: { name: "asc" },
+  });
+
+  return machines.map((m) => {
+    const active = m.sessions[0];
+    const now = new Date();
+    const isRunning = active?.status === "ACTIVE" && new Date(active.endsAt) > now;
+    const minutesLeft = isRunning ? Math.max(0, Math.round((new Date(active.endsAt).getTime() - now.getTime()) / 60000)) : 0;
+
+    return {
+      id: m.id,
+      name: m.name,
+      switchEntityId: m.switchEntityId,
+      durationMinutes: m.durationMinutes,
+      pricePerUse: m.pricePerUse,
+      enabled: m.enabled,
+      isRunning,
+      isPending: active?.status === "PENDING",
+      minutesLeft,
+      endsAt: isRunning ? active.endsAt.toISOString() : null,
+      activeSession: active ? {
+        id: active.id,
+        guestName: active.session?.guestName || null,
+        unitName: active.session?.unit?.name || null,
+        pricePaid: active.pricePaid,
+        paymentStatus: active.paymentStatus,
+        startedAt: active.startedAt.toISOString(),
+      } : null,
+    };
+  });
+}
+
+export async function adminStartLaundry(machineId: number, durationMinutes: number) {
+  const machine = await prisma.laundryMachine.findUnique({ where: { id: machineId } });
+  if (!machine) return { ok: false, message: "Maskine ikke fundet" };
+
+  // Mark any expired active session as completed
+  await prisma.laundrySess.updateMany({
+    where: { machineId, status: "ACTIVE", endsAt: { lte: new Date() } },
+    data: { status: "COMPLETED" },
+  });
+
+  // Check if already running
+  const running = await prisma.laundrySess.findFirst({
+    where: { machineId, status: "ACTIVE", endsAt: { gt: new Date() } },
+  });
+  if (running) return { ok: false, message: "Maskinen kører allerede" };
+
+  const endsAt = new Date();
+  endsAt.setMinutes(endsAt.getMinutes() + durationMinutes);
+
+  await prisma.laundrySess.create({
+    data: {
+      machineId,
+      endsAt,
+      status: "ACTIVE",
+      pricePaid: 0,
+      paymentStatus: "PAID",
+    },
+  });
+
+  try {
+    await ha.turnOn(machine.switchEntityId);
+  } catch (e) {
+    return { ok: false, message: `Kunne ikke tænde: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  return { ok: true, message: `Startet i ${durationMinutes} minutter` };
+}
+
+export async function adminExtendLaundry(laundrySessionId: number, extraMinutes: number) {
+  const sess = await prisma.laundrySess.findUnique({ where: { id: laundrySessionId } });
+  if (!sess || sess.status !== "ACTIVE") return { ok: false, message: "Ingen aktiv session" };
+
+  const newEndsAt = new Date(sess.endsAt);
+  newEndsAt.setMinutes(newEndsAt.getMinutes() + extraMinutes);
+
+  await prisma.laundrySess.update({
+    where: { id: laundrySessionId },
+    data: { endsAt: newEndsAt },
+  });
+
+  return { ok: true, message: `Forlænget med ${extraMinutes} minutter` };
+}
+
+export async function adminStopLaundry(laundrySessionId: number) {
+  const sess = await prisma.laundrySess.findUnique({
+    where: { id: laundrySessionId },
+    include: { machine: true },
+  });
+  if (!sess) return { ok: false, message: "Session ikke fundet" };
+
+  await prisma.laundrySess.update({
+    where: { id: laundrySessionId },
+    data: { status: "COMPLETED", endsAt: new Date() },
+  });
+
+  try {
+    await ha.turnOff(sess.machine.switchEntityId);
+  } catch (e) {
+    return { ok: false, message: `Stoppet i DB men kunne ikke slukke relæ: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  return { ok: true, message: "Maskine stoppet" };
+}
+
+// ──────────────────────────────────────────────
+// LAUNDRY CREDIT — Admin adds credit to booking
+// ──────────────────────────────────────────────
+export async function addLaundryCredit(sessionId: number, amount: number) {
+  if (amount <= 0) return { ok: false, message: "Beløb skal være positivt" };
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!session) return { ok: false, message: "Booking ikke fundet" };
+
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { laundryCredit: (session.laundryCredit ?? 0) + amount },
+  });
+
+  return { ok: true, message: `${amount.toFixed(2)} DKK kredit tilføjet` };
+}
+
+export async function getSessionLaundryCredit(sessionId: number): Promise<number> {
+  const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { laundryCredit: true } });
+  return session?.laundryCredit ?? 0;
 }
