@@ -16,7 +16,7 @@ export default function ElpriserPage() {
         </p>
       </div>
 
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Spotpriser & forbrug</h2>
         </div>

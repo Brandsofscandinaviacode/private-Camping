@@ -114,47 +114,57 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
     <div className="space-y-6">
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="rounded-xl border bg-card shadow-sm p-4">
-          <div className="flex items-center gap-2 text-muted-foreground mb-1">
-            <TrendingUp className="h-4 w-4" />
-            <span className="text-xs font-medium">Total omsætning</span>
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+              <TrendingUp className="h-4 w-4 text-primary" />
+            </div>
           </div>
-          <div className="text-xl font-bold">{fmt(totals.revenue)} DKK</div>
+          <p className="text-xs font-medium text-muted-foreground mb-0.5">Total omsætning</p>
+          <div className="text-xl font-bold tracking-tight">{fmt(totals.revenue)} <span className="text-sm font-medium text-muted-foreground">DKK</span></div>
         </div>
-        <div className="rounded-xl border bg-card shadow-sm p-4">
-          <div className="flex items-center gap-2 text-muted-foreground mb-1">
-            <AlertCircle className="h-4 w-4" />
-            <span className="text-xs font-medium">Udestående</span>
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-8 w-8 rounded-lg bg-red-500/10 flex items-center justify-center">
+              <AlertCircle className="h-4 w-4 text-red-500" />
+            </div>
           </div>
-          <div className="text-xl font-bold text-red-600">{fmt(totals.unpaid)} DKK</div>
+          <p className="text-xs font-medium text-muted-foreground mb-0.5">Udestående</p>
+          <div className="text-xl font-bold text-red-600 tracking-tight">{fmt(totals.unpaid)} <span className="text-sm font-medium">DKK</span></div>
         </div>
-        <div className="rounded-xl border bg-card shadow-sm p-4">
-          <div className="flex items-center gap-2 text-muted-foreground mb-1">
-            <Zap className="h-4 w-4" />
-            <span className="text-xs font-medium">Total el-forbrug</span>
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-8 w-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
+              <Zap className="h-4 w-4 text-amber-500" />
+            </div>
           </div>
-          <div className="text-xl font-bold">{fmt(totals.kwh)} kWh</div>
+          <p className="text-xs font-medium text-muted-foreground mb-0.5">Total el-forbrug</p>
+          <div className="text-xl font-bold tracking-tight">{fmt(totals.kwh)} <span className="text-sm font-medium text-muted-foreground">kWh</span></div>
         </div>
-        <div className="rounded-xl border bg-card shadow-sm p-4">
-          <div className="flex items-center gap-2 text-muted-foreground mb-1">
-            <Droplets className="h-4 w-4" />
-            <span className="text-xs font-medium">Total vandforbrug</span>
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+              <Droplets className="h-4 w-4 text-blue-500" />
+            </div>
           </div>
-          <div className="text-xl font-bold">{totals.water.toFixed(0)} L</div>
+          <p className="text-xs font-medium text-muted-foreground mb-0.5">Total vandforbrug</p>
+          <div className="text-xl font-bold tracking-tight">{totals.water.toFixed(0)} <span className="text-sm font-medium text-muted-foreground">L</span></div>
         </div>
-        <div className="rounded-xl border bg-card shadow-sm p-4">
-          <div className="flex items-center gap-2 text-muted-foreground mb-1">
-            <WashingMachine className="h-4 w-4" />
-            <span className="text-xs font-medium">Vaskerum</span>
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-8 w-8 rounded-lg bg-violet-500/10 flex items-center justify-center">
+              <WashingMachine className="h-4 w-4 text-violet-500" />
+            </div>
           </div>
-          <div className="text-xl font-bold">{fmt(laundryTotals.total)} DKK</div>
+          <p className="text-xs font-medium text-muted-foreground mb-0.5">Vaskerum</p>
+          <div className="text-xl font-bold tracking-tight">{fmt(laundryTotals.total)} <span className="text-sm font-medium text-muted-foreground">DKK</span></div>
           <p className="text-xs text-muted-foreground mt-0.5">{laundryTotals.count} vaske</p>
         </div>
       </div>
 
       {/* Unpaid items */}
       {(unpaidSessions.length > 0 || unpaidInvoices.length > 0) && (
-        <div className="rounded-xl border bg-card shadow-sm">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
           <div className="px-5 py-4 border-b border-border">
             <h2 className="font-semibold flex items-center gap-2">
               <AlertCircle className="h-4 w-4 text-red-500" />
@@ -208,7 +218,7 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
       )}
 
       {/* Monthly breakdown */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Månedsoversigt</h2>
         </div>
@@ -287,7 +297,7 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
       <TotalConsumptionChart />
 
       {/* Export buttons */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4" />
@@ -359,7 +369,7 @@ function TotalConsumptionChart() {
   }, [period]);
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border flex items-center justify-between">
         <h2 className="font-semibold flex items-center gap-2">
           <BarChart3 className="h-4 w-4" />

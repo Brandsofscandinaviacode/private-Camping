@@ -100,16 +100,16 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <button
-        className="w-full flex items-center justify-between px-4 py-3 text-left"
+        className="w-full flex items-center justify-between px-4 py-3.5 text-left hover:bg-muted/30 transition-colors"
         onClick={() => setOpen(!open)}
       >
-        <span className="flex items-center gap-2 text-base font-semibold">
+        <span className="flex items-center gap-2.5 text-base font-semibold">
           {icon}
           {title}
         </span>
-        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && (
         <CardContent className="pt-0 pb-4">
@@ -258,17 +258,21 @@ export function GuestPortalClient({
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="bg-gradient-to-br from-primary/20 via-primary/10 to-background px-4 py-8 text-center">
+      <div className="bg-gradient-to-br from-primary/15 via-primary/5 to-background px-4 pt-6 pb-10 text-center relative overflow-hidden">
+        {/* Decorative circles */}
+        <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-primary/5" />
+        <div className="absolute -bottom-8 -left-8 w-32 h-32 rounded-full bg-primary/5" />
+
         {/* Language switcher */}
-        <div className="flex justify-end px-2 -mt-2 mb-2">
-          <div className="flex items-center gap-1 bg-background/80 rounded-full px-2 py-1 text-xs">
-            <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+        <div className="flex justify-end px-2 mb-4 relative z-10">
+          <div className="flex items-center gap-0.5 bg-white/80 backdrop-blur-sm rounded-full px-1.5 py-1 text-xs shadow-sm border border-border/40">
+            <Globe className="h-3.5 w-3.5 text-muted-foreground mr-0.5" />
             {(["da", "en", "de"] as Locale[]).map((l) => (
               <button
                 key={l}
                 onClick={() => changeLocale(l)}
-                className={`px-2 py-0.5 rounded-full transition-colors ${
-                  locale === l ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                className={`px-2.5 py-1 rounded-full transition-all text-xs font-medium ${
+                  locale === l ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {localeLabels[l]}
@@ -276,26 +280,28 @@ export function GuestPortalClient({
             ))}
           </div>
         </div>
-        <div className="h-10 w-10 rounded-xl bg-primary/20 flex items-center justify-center mx-auto mb-3">
-          <Tent className="h-5 w-5 text-primary" />
+        <div className="relative z-10">
+          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-primary/20">
+            <Tent className="h-6 w-6 text-white" />
+          </div>
+          <h1 className="text-xl font-bold">{tx.welcome}, {guestName}!</h1>
+          <p className="text-muted-foreground text-sm mt-0.5 font-medium">{unitName}</p>
+          <p className="text-muted-foreground/60 text-xs mt-1.5">
+            {isLongTerm ? tx.longTermRental : `${tx.arrival}: ${new Date(checkInTime).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
+              day: "numeric", month: "short",
+            })}`}
+            {!isLongTerm && expectedCheckOut && (
+              <span>
+                {" — "}{tx.departure}: {new Date(expectedCheckOut).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
+                  day: "numeric", month: "short",
+                })}
+              </span>
+            )}
+          </p>
         </div>
-        <h1 className="text-xl font-bold">{tx.welcome}, {guestName}!</h1>
-        <p className="text-muted-foreground text-sm mt-0.5">{unitName}</p>
-        <p className="text-muted-foreground/70 text-xs mt-1">
-          {isLongTerm ? tx.longTermRental : `${tx.arrival}: ${new Date(checkInTime).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
-            day: "numeric", month: "short",
-          })}`}
-          {!isLongTerm && expectedCheckOut && (
-            <span>
-              {" — "}{tx.departure}: {new Date(expectedCheckOut).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
-                day: "numeric", month: "short",
-              })}
-            </span>
-          )}
-        </p>
       </div>
 
-      <div className="max-w-md mx-auto px-4 py-4 space-y-3 -mt-2">
+      <div className="max-w-md mx-auto px-4 py-4 space-y-3 -mt-4">
         {/* ═══ Completed session ═══ */}
         {!isActive && !isLongTerm && (
           <Card>
@@ -357,9 +363,9 @@ export function GuestPortalClient({
             <CardContent className="space-y-3">
               {hasElectricity && (
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="h-8 w-8 rounded-lg bg-yellow-500/10 flex items-center justify-center">
-                      <Zap className="h-4 w-4 text-yellow-400" />
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                      <Zap className="h-4 w-4 text-amber-500" />
                     </div>
                     <div>
                       <p className="text-sm font-medium">{tx.electricity}</p>
@@ -374,9 +380,9 @@ export function GuestPortalClient({
               )}
               {hasWater && (
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                      <Droplets className="h-4 w-4 text-blue-400" />
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                      <Droplets className="h-4 w-4 text-blue-500" />
                     </div>
                     <div>
                       <p className="text-sm font-medium">{tx.water}</p>
@@ -390,9 +396,9 @@ export function GuestPortalClient({
                 </div>
               )}
               <Separator />
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between p-3 rounded-xl bg-primary/5">
                 <span className="font-bold">{tx.total}</span>
-                <span className="text-lg font-bold text-primary">
+                <span className="text-lg font-bold text-primary tracking-tight">
                   {formatDKK(consumption?.totalLiveCost ?? null)}
                 </span>
               </div>
@@ -627,7 +633,7 @@ export function GuestPortalClient({
           </Card>
         )}
 
-        <p className="text-[10px] text-center text-muted-foreground/50 pt-2 pb-4">{tx.poweredBy}</p>
+        <p className="text-[10px] text-center text-muted-foreground/40 pt-4 pb-6">{tx.poweredBy}</p>
       </div>
     </div>
   );

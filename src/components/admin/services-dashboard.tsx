@@ -102,15 +102,15 @@ export function ServicesDashboard({ initialMachines }: Props) {
     <div className="space-y-4">
       {/* Summary */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-        <div className="rounded-xl border bg-card shadow-sm p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4">
           <div className="text-xs text-muted-foreground font-medium">Maskiner</div>
           <div className="text-2xl font-bold mt-1">{machines.length}</div>
         </div>
-        <div className="rounded-xl border bg-card shadow-sm p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4">
           <div className="text-xs text-muted-foreground font-medium">Kører nu</div>
           <div className="text-2xl font-bold text-green-600 mt-1">{runningCount}</div>
         </div>
-        <div className="rounded-xl border bg-card shadow-sm p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4">
           <div className="text-xs text-muted-foreground font-medium">Ledige</div>
           <div className="text-2xl font-bold mt-1">{machines.length - runningCount}</div>
         </div>
@@ -125,7 +125,7 @@ export function ServicesDashboard({ initialMachines }: Props) {
 
       {/* Machine cards */}
       {machines.length === 0 ? (
-        <div className="rounded-xl border bg-card shadow-sm p-8 text-center text-muted-foreground">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-8 text-center text-muted-foreground">
           <WashingMachine className="h-8 w-8 mx-auto mb-2 opacity-40" />
           <p>Ingen maskiner konfigureret</p>
           <p className="text-xs mt-1">Tilføj maskiner under Indstillinger → Vaskerum</p>
@@ -133,7 +133,7 @@ export function ServicesDashboard({ initialMachines }: Props) {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {machines.map((m) => (
-            <div key={m.id} className="rounded-xl border bg-card shadow-sm overflow-hidden">
+            <div key={m.id} className="rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
               {/* Header */}
               <div className={`px-5 py-4 border-b flex items-center justify-between ${
                 m.isRunning ? "bg-green-50 border-green-100" : m.isPending ? "bg-amber-50 border-amber-100" : ""

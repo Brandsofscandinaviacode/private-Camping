@@ -54,8 +54,10 @@ export default async function AdminDashboard() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {units.length} enheder &middot; {occupiedCount} optaget &middot; {vacantCount} ledige
+          <p className="text-muted-foreground mt-1">
+            {units.length} enheder &middot;{" "}
+            <span className="text-primary font-medium">{occupiedCount} optaget</span> &middot;{" "}
+            <span className="font-medium">{vacantCount} ledige</span>
           </p>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
@@ -66,10 +68,12 @@ export default async function AdminDashboard() {
       {/* Alerts */}
       {unpaidCount > 0 && (
         <Link href="/admin/bookings?filter=unpaid">
-          <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 hover:bg-red-100 transition-colors cursor-pointer">
-            <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
+          <div className="flex items-center gap-3 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3.5 hover:bg-red-100/80 transition-all cursor-pointer shadow-sm">
+            <div className="h-8 w-8 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+              <AlertCircle className="h-4 w-4 text-red-500" />
+            </div>
             <p className="text-sm text-red-700">
-              <span className="font-semibold">{unpaidCount}</span>{" "}
+              <span className="font-bold">{unpaidCount}</span>{" "}
               {unpaidCount === 1 ? "booking" : "bookinger"} afventer betaling
             </p>
           </div>
@@ -81,10 +85,12 @@ export default async function AdminDashboard() {
         <div className="space-y-2">
           {alarmResult.alerts.map((alert, i) => (
             <Link key={i} href={`/admin/units/${alert.unitId}`}>
-              <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 hover:bg-amber-100 transition-colors cursor-pointer">
-                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+              <div className="flex items-center gap-3 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3.5 hover:bg-amber-100/80 transition-all cursor-pointer shadow-sm">
+                <div className="h-8 w-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                </div>
                 <p className="text-sm text-amber-800">
-                  <span className="font-semibold">{alert.unitName}</span> bruger{" "}
+                  <span className="font-bold">{alert.unitName}</span> bruger{" "}
                   {alert.type === "electricity"
                     ? `${alert.usage.toFixed(1)} kWh (grænse: ${alert.threshold} kWh)`
                     : `${alert.usage.toFixed(0)} liter vand (grænse: ${alert.threshold} L)`
@@ -99,39 +105,39 @@ export default async function AdminDashboard() {
       {/* Total Usage Summary — current rate per hour + spot price */}
       {(totalUsage?.unitCount ?? 0) > 0 && (
         <div className={`grid gap-3 sm:gap-4 grid-cols-1 ${elPricing && elPricing.mode !== "fixed" ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
-          <div className="rounded-xl border bg-card shadow-sm p-5">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
-                <Zap className="h-5 w-5 text-yellow-500" />
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 hover:shadow-md transition-shadow">
+            <div className="flex items-center gap-4">
+              <div className="h-11 w-11 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                <Zap className="h-5 w-5 text-amber-500" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Nuværende strømforbrug</p>
-                <p className="text-2xl font-bold tabular-nums">{totalUsage!.totalKwhPerHour.toFixed(2)} kWh/t</p>
+                <p className="text-2xl font-bold tabular-nums tracking-tight">{totalUsage!.totalKwhPerHour.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">kWh/t</span></p>
                 <p className="text-xs text-muted-foreground">{(totalUsage!.totalKwhPerHour * 1000).toFixed(0)} W — alle enheder</p>
               </div>
             </div>
           </div>
-          <div className="rounded-xl border bg-card shadow-sm p-5">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 hover:shadow-md transition-shadow">
+            <div className="flex items-center gap-4">
+              <div className="h-11 w-11 rounded-xl bg-blue-500/10 flex items-center justify-center">
                 <Droplets className="h-5 w-5 text-blue-500" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Nuværende vandforbrug</p>
-                <p className="text-2xl font-bold tabular-nums">{totalUsage!.totalWaterLitersPerHour.toFixed(1)} L/t</p>
+                <p className="text-2xl font-bold tabular-nums tracking-tight">{totalUsage!.totalWaterLitersPerHour.toFixed(1)} <span className="text-sm font-medium text-muted-foreground">L/t</span></p>
                 <p className="text-xs text-muted-foreground">Alle enheder</p>
               </div>
             </div>
           </div>
           {elPricing && elPricing.mode !== "fixed" && (
-            <div className="rounded-xl border bg-card shadow-sm p-5">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-lg bg-green-500/10 flex items-center justify-center">
-                  <Zap className="h-5 w-5 text-green-500" />
+            <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 hover:shadow-md transition-shadow">
+              <div className="flex items-center gap-4">
+                <div className="h-11 w-11 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+                  <Zap className="h-5 w-5 text-emerald-500" />
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Effektiv elpris</p>
-                  <p className="text-2xl font-bold tabular-nums">{elPricing.pricePerKwh.toFixed(2)} kr/kWh</p>
+                  <p className="text-2xl font-bold tabular-nums tracking-tight">{elPricing.pricePerKwh.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">kr/kWh</span></p>
                   <p className="text-xs text-muted-foreground">
                     {elPricing.spotPrice !== null ? `Spot: ${elPricing.spotPrice.toFixed(2)} kr/kWh` : "Spotpris utilgængelig"}
                     {" — "}

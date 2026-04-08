@@ -46,7 +46,7 @@ export default async function BookingsPage({
           <p>Ingen bookinger fundet</p>
         </div>
       ) : (
-        <div className="rounded-xl border bg-card shadow-sm divide-y divide-border">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm divide-y divide-border/60 overflow-hidden">
           {sessions.map((s) => {
             const isActive = s.status === "ACTIVE";
             const isUnpaid = s.status === "COMPLETED" && s.paymentStatus === "UNPAID";
@@ -54,7 +54,7 @@ export default async function BookingsPage({
 
             return (
               <Link key={s.id} href={`/admin/bookings/${s.id}`}>
-                <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/30 transition-colors cursor-pointer ${
+                <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer ${
                   isUnpaid ? "border-l-[3px] border-l-red-500" :
                   isActive ? "border-l-[3px] border-l-primary" : ""
                 }`}>
@@ -87,17 +87,20 @@ export default async function BookingsPage({
                       </span>
                     )}
                     {isActive && (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">Aktiv</span>
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium inline-flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                        Aktiv
+                      </span>
                     )}
                     {isUnpaid && (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium flex items-center gap-1">
-                        <AlertCircle className="h-3 w-3" />
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium inline-flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                         Ubetalt
                       </span>
                     )}
                     {isPaid && (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium flex items-center gap-1">
-                        <CreditCard className="h-3 w-3" />
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-600 font-medium inline-flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
                         Betalt
                       </span>
                     )}

@@ -12,6 +12,7 @@ import {
   WashingMachine,
   Menu,
   X,
+  Tent,
 } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
 
@@ -37,10 +38,13 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
     <>
       {/* Mobile top bar */}
       <div className="md:hidden flex items-center justify-between px-4 py-3 bg-sidebar text-sidebar-foreground border-b border-sidebar-border">
-        <Link href="/admin" className="flex items-center gap-2">
-          <span className="text-base font-semibold text-sidebar-accent-foreground">CampSense</span>
+        <Link href="/admin" className="flex items-center gap-2.5">
+          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-sidebar-primary to-sidebar-primary/80 flex items-center justify-center">
+            <Tent className="h-3.5 w-3.5 text-white" />
+          </div>
+          <span className="text-base font-bold text-sidebar-accent-foreground">CampSense</span>
         </Link>
-        <button onClick={() => setOpen(true)} className="p-2 rounded-lg hover:bg-sidebar-accent">
+        <button onClick={() => setOpen(true)} className="p-2 rounded-lg hover:bg-sidebar-accent transition-colors">
           <Menu className="h-5 w-5" />
         </button>
       </div>
@@ -74,9 +78,9 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
                             key={item.href}
                             href={item.href}
                             onClick={() => setOpen(false)}
-                            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
                               isActive
-                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                ? "bg-sidebar-primary text-white font-medium shadow-md shadow-sidebar-primary/20"
                                 : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                             }`}
                           >
@@ -98,7 +102,7 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
             <div className="px-4 py-4 border-t border-sidebar-border">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="h-8 w-8 rounded-full bg-sidebar-accent flex items-center justify-center text-xs font-medium text-sidebar-foreground">
+                  <div className="h-8 w-8 rounded-full bg-gradient-to-br from-sidebar-primary/80 to-sidebar-primary flex items-center justify-center text-xs font-bold text-white">
                     {username?.charAt(0).toUpperCase()}
                   </div>
                   <span className="text-sm text-sidebar-foreground">{username}</span>

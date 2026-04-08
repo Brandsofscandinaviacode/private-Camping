@@ -74,7 +74,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
   return (
     <div className="space-y-5">
       {/* Site URL */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Site URL</h2>
         </div>
@@ -86,7 +86,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Pricing */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Elpriser</h2></div>
         <div className="p-5 space-y-4">
           <div>
@@ -147,7 +147,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Water + Currency */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Vand & valuta</h2></div>
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -164,7 +164,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Temperatures */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Standard temperaturer</h2></div>
         <div className="p-5">
           <div className="grid grid-cols-2 gap-4">
@@ -181,7 +181,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Check-out */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Check-out</h2></div>
         <div className="p-5">
           <label className="flex items-start gap-3 cursor-pointer">
@@ -195,7 +195,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Faktura-email */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Faktura (fastliggere)</h2></div>
         <div className="p-5 space-y-4">
           <label className="flex items-start gap-3 cursor-pointer">
@@ -244,7 +244,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Alarm */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Forbrugsalarm</h2></div>
         <div className="p-5 space-y-4">
           <label className="flex items-start gap-3 cursor-pointer">
@@ -277,7 +277,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Main meter leak detection */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Hovedmåler / lækageovervågning</h2></div>
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -351,7 +351,7 @@ export function HASettings({ settings }: SettingsFormProps) {
   return (
     <div className="space-y-5">
       {/* Connection */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Forbindelse</h2></div>
         <div className="p-5 space-y-4">
           <div>
@@ -419,7 +419,7 @@ function CloudflareTunnelGuide() {
   );
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <button
         className="w-full px-5 py-4 flex items-center justify-between text-left"
         onClick={() => setExpanded(!expanded)}
@@ -624,7 +624,7 @@ function AddShellyDevice() {
   }
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border">
         <h2 className="font-semibold">Tilføj Shelly enhed</h2>
       </div>
@@ -754,7 +754,7 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
   return (
     <div className="space-y-5">
       {/* SMS */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">SMS (Twilio)</h2></div>
         <div className="p-5 space-y-4">
           <label className="flex items-start gap-3 cursor-pointer">
@@ -804,7 +804,7 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Email */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Email (SMTP)</h2></div>
         <div className="p-5 space-y-4">
           <label className="flex items-start gap-3 cursor-pointer">
@@ -864,7 +864,7 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Templates */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Skabeloner</h2></div>
         <div className="p-5 space-y-5">
           {tagInfo}
@@ -963,7 +963,7 @@ export function PaymentSettings({ settings }: SettingsFormProps) {
 
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">QuickPay</h2>
         </div>
@@ -1004,7 +1004,7 @@ export function PaymentSettings({ settings }: SettingsFormProps) {
         </div>
       </div>
 
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Sådan virker det</h2>
         </div>
@@ -1084,7 +1084,7 @@ export function GuestPortalSettings({ settings }: SettingsFormProps) {
   return (
     <div className="space-y-5">
       {/* Practical info per unit type per language */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Praktiske oplysninger</h2>
           <p className="text-xs text-muted-foreground mt-1">Vises på gæstesiden pr. enhedstype og sprog. HTML understøttes (&lt;b&gt;, &lt;ul&gt;, &lt;a&gt;, &lt;h3&gt; osv.)</p>
@@ -1123,7 +1123,7 @@ export function GuestPortalSettings({ settings }: SettingsFormProps) {
       </div>
 
       {/* Site map */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">Pladskort</h2>
           <p className="text-xs text-muted-foreground mt-1">Upload et billede af campingpladsen. Vises på gæstesiden.</p>

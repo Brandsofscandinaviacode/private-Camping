@@ -104,7 +104,7 @@ export function SystemStatus() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border bg-card shadow-sm p-8 text-center">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm p-8 text-center">
         <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
       </div>
     );
@@ -117,7 +117,7 @@ export function SystemStatus() {
   return (
     <div className="space-y-5">
       {/* Cron Status */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <h2 className="font-semibold">Cron job (forbrugslogning)</h2>
           <div className="flex items-center gap-2">
@@ -210,7 +210,7 @@ export function SystemStatus() {
       </div>
 
       {/* Feature Status Overview */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h2 className="font-semibold">System oversigt</h2>
         </div>
@@ -241,7 +241,7 @@ export function SystemStatus() {
       </div>
 
       {/* API Configuration */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <h2 className="font-semibold">REST API</h2>
           <a

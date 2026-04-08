@@ -48,13 +48,22 @@ export default async function BookingDetailPage({
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">{session.guestName}</h1>
             {isActive && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium">Aktiv</span>
+              <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                Aktiv
+              </span>
             )}
             {isUnpaid && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium">Ubetalt</span>
+              <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                Ubetalt
+              </span>
             )}
             {isPaid && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-600 font-medium">Betalt</span>
+              <span className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-600 font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                Betalt
+              </span>
             )}
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -66,7 +75,7 @@ export default async function BookingDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Booking info */}
         <div className="space-y-5">
-          <div className="rounded-xl border bg-card shadow-sm">
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Booking detaljer</h2>
             </div>
@@ -161,7 +170,7 @@ export default async function BookingDetailPage({
 
         {/* Right: Consumption & Payment */}
         <div className="space-y-5">
-          <div className="rounded-xl border bg-card shadow-sm">
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Forbrugsfordeling</h2>
             </div>

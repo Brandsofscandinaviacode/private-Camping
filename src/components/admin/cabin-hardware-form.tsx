@@ -240,7 +240,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
   ].filter(Boolean);
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <button
         className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-muted/30 transition-colors"
         onClick={() => setExpanded(!expanded)}

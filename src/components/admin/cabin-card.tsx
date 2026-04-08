@@ -63,35 +63,39 @@ export function UnitCard({ unit, haStates, activeGuestName }: UnitCardProps) {
   return (
     <Link href={`/admin/units/${unit.id}`} className="h-full block">
       <div
-        className={`group rounded-xl border bg-card p-5 hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full min-h-[160px] flex flex-col ${
+        className={`group rounded-xl border border-border/60 bg-card p-5 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all cursor-pointer h-full min-h-[160px] flex flex-col ${
           isOccupied ? "border-l-[3px] border-l-primary" : ""
         }`}
       >
         {/* Header row */}
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center shrink-0">
-              <TypeIcon className="h-5 w-5 text-muted-foreground" />
+            <div className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${
+              isOccupied ? "bg-primary/10" : "bg-muted"
+            }`}>
+              <TypeIcon className={`h-5 w-5 ${isOccupied ? "text-primary" : "text-muted-foreground"}`} />
             </div>
             <div>
               <p className="text-base font-semibold leading-tight">{unit.name}</p>
               <p className="text-sm text-muted-foreground mt-0.5">{typeLabels[unit.type]}</p>
             </div>
           </div>
-          <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-muted-foreground transition-colors mt-1" />
+          <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary group-hover:translate-x-0.5 transition-all mt-1" />
         </div>
 
         {/* Status */}
         <div className="flex items-center gap-2 mb-3">
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+          <span className={`text-xs px-2.5 py-1 rounded-full font-medium inline-flex items-center gap-1.5 ${
             isOccupied
               ? "bg-primary/10 text-primary"
               : "bg-muted text-muted-foreground"
           }`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${isOccupied ? "bg-primary animate-pulse" : "bg-muted-foreground/40"}`} />
             {isOccupied ? "Optaget" : "Ledig"}
           </span>
           {unit.isLongTerm && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+            <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 inline-flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
               Langtid
             </span>
           )}

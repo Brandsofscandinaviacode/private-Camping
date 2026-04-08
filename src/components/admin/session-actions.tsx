@@ -16,7 +16,7 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
   const [isPending, startTransition] = useTransition();
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border">
         <h2 className="font-semibold flex items-center gap-2">
           <CreditCard className="h-4 w-4 text-muted-foreground" />

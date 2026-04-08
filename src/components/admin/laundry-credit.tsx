@@ -42,7 +42,7 @@ export function LaundryCreditSection({ sessionId, currentCredit }: Props) {
   }
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border flex items-center justify-between">
         <h2 className="font-semibold flex items-center gap-2">
           <WashingMachine className="h-4 w-4" />

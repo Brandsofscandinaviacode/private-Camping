@@ -54,7 +54,7 @@ export function LiveConsumption({
 
   if (loading) {
     return (
-      <div className="rounded-xl border bg-card shadow-sm p-5 text-center">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 text-center">
         <p className="text-sm text-muted-foreground">Henter forbrugsdata...</p>
       </div>
     );
@@ -62,14 +62,14 @@ export function LiveConsumption({
 
   if (!data) {
     return (
-      <div className="rounded-xl border bg-card shadow-sm p-5 text-center">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 text-center">
         <p className="text-sm text-muted-foreground">Ingen forbrugsdata</p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border">
         <h2 className="font-semibold">Live forbrug</h2>
       </div>

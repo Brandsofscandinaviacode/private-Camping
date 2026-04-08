@@ -51,7 +51,7 @@ export function CabinControls({
 
   if (!haStates?.haReachable) {
     return (
-      <div className="rounded-xl border bg-card shadow-sm p-5">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5">
         <div className="flex items-center gap-2 text-orange-500">
           <WifiOff className="h-5 w-5" />
           <span className="font-medium">Home Assistant utilgængelig</span>
@@ -64,7 +64,7 @@ export function CabinControls({
   }
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border">
         <h2 className="font-semibold">Hardware kontrol</h2>
       </div>

@@ -58,7 +58,7 @@ function MachineRow({ machine }: { machine: Machine }) {
   }
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm p-5 space-y-3">
+    <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <WashingMachine className="h-4 w-4 text-muted-foreground" />
@@ -182,7 +182,7 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
       </div>
 
       {showAdd ? (
-        <div className="rounded-xl border bg-card shadow-sm p-5 space-y-3">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 space-y-3">
           <h3 className="font-medium text-sm">Ny maskine</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>

@@ -78,7 +78,7 @@ export default async function UnitDetailPage({
           {!isOccupied && !activeSession ? (
             <CheckInDialog unitId={unit.id} unitName={unitDisplayName} />
           ) : activeSession ? (
-            <div className="rounded-xl border bg-card shadow-sm">
+            <div className="rounded-xl border border-border/60 bg-card shadow-sm">
               <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h2 className="font-semibold">Aktuel gæst</h2>
                 <Link href={`/admin/bookings/${activeSession.id}`}>
@@ -122,7 +122,7 @@ export default async function UnitDetailPage({
           {activeSession && <LiveConsumption sessionId={activeSession.id} />}
 
           {/* Consumption Trends */}
-          <div className="rounded-xl border bg-card shadow-sm">
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Forbrugstrend</h2>
             </div>
@@ -133,7 +133,7 @@ export default async function UnitDetailPage({
 
           {/* Monthly invoicing for long-term */}
           {unit.isLongTerm && (
-            <div className="rounded-xl border bg-card shadow-sm">
+            <div className="rounded-xl border border-border/60 bg-card shadow-sm">
               <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h2 className="font-semibold">Månedlige fakturaer</h2>
                 {unit.longTermGuestName && <CreateInvoiceButton unitId={unit.id} />}
@@ -169,7 +169,7 @@ export default async function UnitDetailPage({
             />
           )}
           {!hw && (
-            <div className="rounded-xl border bg-card shadow-sm p-8 text-center">
+            <div className="rounded-xl border border-border/60 bg-card shadow-sm p-8 text-center">
               <p className="text-muted-foreground">Ingen hardware konfigureret</p>
               <Link href="/admin/settings">
                 <Button variant="link" className="mt-2">Konfigurér i Indstillinger</Button>
@@ -181,7 +181,7 @@ export default async function UnitDetailPage({
 
       {/* Session History — clickable rows */}
       {completedSessions.length > 0 && (
-        <div className="rounded-xl border bg-card shadow-sm">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
           <div className="px-5 py-4 border-b border-border">
             <h2 className="font-semibold">Seneste ophold</h2>
           </div>
