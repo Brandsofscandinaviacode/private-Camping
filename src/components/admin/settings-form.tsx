@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, useRef } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -328,6 +328,7 @@ export function HASettings({ settings }: SettingsFormProps) {
   const { isPending, saved, handleSave } = useSave(values);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const isCloudflareUrl = values.ha_url.includes("cloudflare") || values.ha_url.startsWith("https://");
 
   function h(key: string, value: string) {
     setValues((v) => ({ ...v, [key]: value }));
@@ -349,13 +350,22 @@ export function HASettings({ settings }: SettingsFormProps) {
 
   return (
     <div className="space-y-5">
+      {/* Connection */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Forbindelse</h2></div>
         <div className="p-5 space-y-4">
           <div>
             <Label className="text-sm text-muted-foreground">HA URL</Label>
-            <Input value={values.ha_url} onChange={(e) => h("ha_url", e.target.value)} placeholder="http://192.168.1.13:8123" className="mt-1" />
-            <p className="text-xs text-muted-foreground mt-1.5">Skal starte med http:// eller https://</p>
+            <Input value={values.ha_url} onChange={(e) => h("ha_url", e.target.value)} placeholder="https://ha.din-camping.campsense.net" className="mt-1" />
+            <p className="text-xs text-muted-foreground mt-1.5">
+              {isCloudflareUrl ? (
+                <span className="flex items-center gap-1 text-green-600">
+                  <Shield className="h-3 w-3" /> Sikker forbindelse via HTTPS
+                </span>
+              ) : (
+                "Lokal: http://IP:8123 — Cloud: https://ha.din-domæne.dk (via Cloudflare Tunnel)"
+              )}
+            </p>
           </div>
           <div>
             <Label className="text-sm text-muted-foreground">Long-Lived Access Token</Label>
@@ -378,8 +388,217 @@ export function HASettings({ settings }: SettingsFormProps) {
       </div>
       <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
 
+      {/* Cloudflare Tunnel Guide */}
+      <CloudflareTunnelGuide />
+
       {/* Add Shelly Device */}
       <AddShellyDevice />
+    </div>
+  );
+}
+
+// ── Cloudflare Tunnel Setup Guide ──
+function CloudflareTunnelGuide() {
+  const [expanded, setExpanded] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+
+  function copyToClipboard(text: string, id: string) {
+    navigator.clipboard.writeText(text);
+    setCopiedCmd(id);
+    setTimeout(() => setCopiedCmd(null), 2000);
+  }
+
+  const CopyBtn = ({ text, id }: { text: string; id: string }) => (
+    <button
+      onClick={() => copyToClipboard(text, id)}
+      className="absolute top-2 right-2 p-1.5 rounded-md bg-background/80 hover:bg-background border text-muted-foreground hover:text-foreground transition-colors"
+      title="Kopier"
+    >
+      {copiedCmd === id ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+
+  return (
+    <div className="rounded-xl border bg-card shadow-sm">
+      <button
+        className="w-full px-5 py-4 flex items-center justify-between text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2">
+          <Cloud className="h-4 w-4 text-orange-500" />
+          <h2 className="font-semibold">Cloudflare Tunnel opsætning</h2>
+          <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">Guide</span>
+        </div>
+        {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5 space-y-5 border-t pt-5">
+          {/* What is it */}
+          <div className="bg-blue-50 text-blue-800 rounded-lg p-4 text-sm space-y-2">
+            <p className="font-medium">Hvad er Cloudflare Tunnel?</p>
+            <p>
+              Cloudflare Tunnel gør det muligt at tilgå din Home Assistant fra internettet <strong>uden offentlig IP</strong> og
+              uden at åbne porte i din router. Din Raspberry Pi opretter en sikker, udgående forbindelse til Cloudflare,
+              som derefter giver CampSense adgang via HTTPS.
+            </p>
+            <p className="text-xs text-blue-600">Gratis at bruge — kræver kun en Cloudflare-konto og et domæne.</p>
+          </div>
+
+          {/* Prerequisites */}
+          <div>
+            <h3 className="font-medium mb-2">Forudsætninger</h3>
+            <ul className="text-sm text-muted-foreground space-y-1.5 list-disc pl-5">
+              <li>En Cloudflare-konto (gratis)</li>
+              <li>Dit domæne tilføjet til Cloudflare (DNS)</li>
+              <li>SSH-adgang til din Raspberry Pi</li>
+              <li>Home Assistant kørende på Pi&apos;en (port 8123)</li>
+            </ul>
+          </div>
+
+          {/* Step 1 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
+              Installer cloudflared på Raspberry Pi
+            </h3>
+            <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
+              <CopyBtn id="install" text="curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb && sudo dpkg -i cloudflared.deb" />
+              <code>curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb<br />sudo dpkg -i cloudflared.deb</code>
+            </div>
+          </div>
+
+          {/* Step 2 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
+              Log ind og opret tunnel
+            </h3>
+            <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
+              <CopyBtn id="login" text="cloudflared tunnel login&#10;cloudflared tunnel create ha-camping" />
+              <code>cloudflared tunnel login<br />cloudflared tunnel create ha-camping</code>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              En browser åbnes — log ind med din Cloudflare-konto og vælg dit domæne.
+              Notér det <strong>Tunnel ID</strong> der vises efter <code>tunnel create</code>.
+            </p>
+          </div>
+
+          {/* Step 3 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">3</span>
+              Konfigurer tunnel
+            </h3>
+            <p className="text-sm text-muted-foreground mb-2">
+              Opret filen <code>~/.cloudflared/config.yml</code> på din Pi:
+            </p>
+            <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto whitespace-pre">
+              <CopyBtn id="config" text={`tunnel: DIT_TUNNEL_ID\ncredentials-file: /home/pi/.cloudflared/DIT_TUNNEL_ID.json\n\ningress:\n  - hostname: ha.din-camping.campsense.net\n    service: http://localhost:8123\n    originRequest:\n      noTLSVerify: true\n  - service: http_status:404`} />
+              <code>{`tunnel: DIT_TUNNEL_ID
+credentials-file: /home/pi/.cloudflared/DIT_TUNNEL_ID.json
+
+ingress:
+  - hostname: ha.din-camping.campsense.net
+    service: http://localhost:8123
+    originRequest:
+      noTLSVerify: true
+  - service: http_status:404`}</code>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Erstat <code>DIT_TUNNEL_ID</code> med dit faktiske tunnel ID og
+              <code> ha.din-camping.campsense.net</code> med dit ønskede subdomæne.
+            </p>
+          </div>
+
+          {/* Step 4 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">4</span>
+              Tilføj DNS-record
+            </h3>
+            <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
+              <CopyBtn id="dns" text="cloudflared tunnel route dns ha-camping ha.din-camping.campsense.net" />
+              <code>cloudflared tunnel route dns ha-camping ha.din-camping.campsense.net</code>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Dette opretter automatisk en CNAME-record i Cloudflare DNS.
+            </p>
+          </div>
+
+          {/* Step 5 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">5</span>
+              Start som service (kør automatisk ved boot)
+            </h3>
+            <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
+              <CopyBtn id="service" text="sudo cloudflared service install&#10;sudo systemctl enable cloudflared&#10;sudo systemctl start cloudflared" />
+              <code>sudo cloudflared service install<br />sudo systemctl enable cloudflared<br />sudo systemctl start cloudflared</code>
+            </div>
+          </div>
+
+          {/* Step 6 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">6</span>
+              Konfigurer Home Assistant
+            </h3>
+            <p className="text-sm text-muted-foreground mb-2">
+              Tilføj dette til din <code>configuration.yaml</code> i Home Assistant:
+            </p>
+            <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto whitespace-pre">
+              <CopyBtn id="hayaml" text={`http:\n  use_x_forwarded_for: true\n  trusted_proxies:\n    - 127.0.0.1\n    - 172.16.0.0/12`} />
+              <code>{`http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - 172.16.0.0/12`}</code>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Genstart Home Assistant efter ændringen.
+            </p>
+          </div>
+
+          {/* Step 7 */}
+          <div>
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full flex items-center justify-center text-xs">7</span>
+              Opdater CampSense
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Sæt <strong>HA URL</strong> ovenfor til din tunnel-adresse, f.eks.:
+            </p>
+            <div className="bg-muted rounded-lg p-3 font-mono text-sm mt-2">
+              <code>https://ha.din-camping.campsense.net</code>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Klik <strong>Gem indstillinger</strong> og derefter <strong>Test forbindelse</strong> for at bekræfte.
+            </p>
+          </div>
+
+          {/* Troubleshooting */}
+          <div className="bg-amber-50 text-amber-800 rounded-lg p-4 text-sm space-y-2">
+            <p className="font-medium">Fejlfinding</p>
+            <ul className="space-y-1 list-disc pl-5 text-xs">
+              <li><strong>502 Bad Gateway</strong> — Home Assistant er ikke startet, eller <code>service</code> i config.yml peger forkert. Prøv <code>http://localhost:8123</code>.</li>
+              <li><strong>Tunnel er offline</strong> — Kør <code>sudo systemctl status cloudflared</code> på Pi&apos;en for at se status.</li>
+              <li><strong>DNS ikke fundet</strong> — Vent 2-5 minutter efter DNS-tilføjelse. Tjek med <code>dig ha.din-camping.campsense.net</code>.</li>
+              <li><strong>401 Unauthorized i CampSense</strong> — Dit HA Long-Lived Access Token er forkert eller udløbet. Opret et nyt i HA &rarr; Profil.</li>
+            </ul>
+          </div>
+
+          {/* Security note */}
+          <div className="bg-green-50 text-green-800 rounded-lg p-4 text-sm space-y-1">
+            <p className="font-medium flex items-center gap-1.5"><Shield className="h-4 w-4" /> Sikkerhed</p>
+            <p className="text-xs">
+              Cloudflare Tunnel krypterer al trafik mellem CampSense og din Home Assistant med TLS.
+              Ingen porte er åbne i din router, og din Pi&apos;s IP-adresse er skjult bag Cloudflare.
+              Kombiner med HA&apos;s Long-Lived Access Token for fuld autentificering.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
