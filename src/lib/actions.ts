@@ -871,19 +871,16 @@ export async function createMonthlyInvoice(unitId: number) {
   let startWaterLiters: number | null = null;
   let endWaterLiters: number | null = null;
 
-  // Start values come from previous invoice's end, or active session's start readings for first invoice
+  // Always look up active session as fallback for start readings
   const prevInvoice = await prisma.invoice.findFirst({
     where: { unitId },
     orderBy: { periodEnd: "desc" },
   });
 
-  // For the first invoice, use active session's start readings as baseline
-  const activeSession = !prevInvoice
-    ? await prisma.session.findFirst({
-        where: { unitId, status: "ACTIVE" },
-        orderBy: { checkInTime: "desc" },
-      })
-    : null;
+  const activeSession = await prisma.session.findFirst({
+    where: { unitId, status: "ACTIVE" },
+    orderBy: { checkInTime: "desc" },
+  });
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);

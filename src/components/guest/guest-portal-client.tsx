@@ -239,7 +239,7 @@ export function GuestPortalClient({
 
   const formatDKK = (v: number | null) => v !== null ? `${v.toFixed(2)} DKK` : "—";
 
-  const hasServices = hasClimate || hasSmartLock || hasElectricity || laundryMachines.length > 0;
+  const hasServices = hasClimate || hasSmartLock || laundryMachines.length > 0;
   const hasPracticalInfo = !!(practicalInfo[locale] || practicalInfo.da);
   const hasInfoSection = hasPracticalInfo || !!siteMapUrl;
 
@@ -407,6 +407,14 @@ export function GuestPortalClient({
               </div>
               <p className="text-[11px] text-center text-muted-foreground">{tx.updatesEvery30s}</p>
 
+              {/* Power toggle — inline in consumption card */}
+              {hasElectricity && (
+                <>
+                  <Separator />
+                  <PowerToggle token={token} locale={locale as "da" | "en" | "de"} showSeparator={false} />
+                </>
+              )}
+
               {/* Prepaid balance — compact inline */}
               {billingMode === "PREPAID" && prepaidAmount != null && (
                 <>
@@ -501,10 +509,6 @@ export function GuestPortalClient({
                 </div>
               )}
 
-              {/* Power Toggle */}
-              {hasElectricity && (
-                <PowerToggle token={token} locale={locale as "da" | "en" | "de"} showSeparator={hasClimate || hasSmartLock || laundryMachines.length > 0} />
-              )}
             </div>
           </Section>
         )}
