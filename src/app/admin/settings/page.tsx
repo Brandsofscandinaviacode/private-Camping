@@ -6,7 +6,7 @@ import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SystemStatus } from "@/components/admin/system-status";
 import { SettingsTabs } from "@/components/admin/settings-tabs";
 import { LaundrySettings } from "@/components/admin/laundry-settings";
-import { Home, Anchor, Caravan, MapPin } from "lucide-react";
+import { Home, Caravan, MapPin } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ const typeLabels: Record<string, string> = {
 const typeOrder = ["CABIN", "SEASONAL", "CARAVAN", "PITCH"];
 const typeIcons: Record<string, typeof Home> = {
   CABIN: Home,
-  SEASONAL: Anchor,
+  SEASONAL: Caravan,
   CARAVAN: Caravan,
   PITCH: MapPin,
 };

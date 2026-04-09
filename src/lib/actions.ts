@@ -2417,6 +2417,24 @@ export async function addLaundryCredit(sessionId: number, amount: number) {
   return { ok: true, message: `${amount.toFixed(2)} DKK kredit tilføjet` };
 }
 
+export async function removeLaundryCredit(sessionId: number, amount: number) {
+  "use server";
+  if (amount <= 0) return { ok: false, message: "Beløb skal være positivt" };
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!session) return { ok: false, message: "Booking ikke fundet" };
+
+  const currentCredit = session.laundryCredit ?? 0;
+  const newCredit = Math.max(0, currentCredit - amount);
+
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { laundryCredit: newCredit },
+  });
+
+  const removed = currentCredit - newCredit;
+  return { ok: true, message: `${removed.toFixed(2)} DKK kredit fjernet` };
+}
+
 export async function getSessionLaundryCredit(sessionId: number): Promise<number> {
   const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { laundryCredit: true } });
   return session?.laundryCredit ?? 0;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Home, Caravan, MapPin, Anchor } from "lucide-react";
+import { Plus, Home, Caravan, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,7 +16,7 @@ import { createUnit } from "@/lib/actions";
 
 const unitTypes = [
   { value: "CABIN" as const, label: "Hytte", icon: Home, desc: "Korttidsleje" },
-  { value: "SEASONAL" as const, label: "Fastligger", icon: Anchor, desc: "Langtidsleje med månedlig fakturering" },
+  { value: "SEASONAL" as const, label: "Fastligger", icon: Caravan, desc: "Langtidsleje med månedlig fakturering" },
   { value: "CARAVAN" as const, label: "Campingvogn", icon: Caravan, desc: "Korttidsleje" },
   { value: "PITCH" as const, label: "Plads", icon: MapPin, desc: "Korttidsleje (telt/vogn)" },
 ];

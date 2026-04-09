@@ -2,13 +2,13 @@ import Link from "next/link";
 import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
 import { UnitCard } from "@/components/admin/cabin-card";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
-import { Tent, Home, Caravan, MapPin, Anchor, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
+import { Tent, Home, Caravan, MapPin, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 const typeConfig = [
   { type: "CABIN", label: "Hytter", icon: Home },
-  { type: "SEASONAL", label: "Fastliggere", icon: Anchor },
+  { type: "SEASONAL", label: "Fastliggere", icon: Caravan },
   { type: "CARAVAN", label: "Campingvogne", icon: Caravan },
   { type: "PITCH", label: "Pladser", icon: MapPin },
 ];

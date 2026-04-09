@@ -12,13 +12,12 @@ import {
   Home,
   Caravan,
   MapPin,
-  Anchor,
   ChevronRight,
 } from "lucide-react";
 
 const typeIcons: Record<string, typeof Home> = {
   CABIN: Home,
-  SEASONAL: Anchor,
+  SEASONAL: Caravan,
   CARAVAN: Caravan,
   PITCH: MapPin,
 };

@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { WashingMachine, Plus, Loader2 } from "lucide-react";
+import { WashingMachine, Plus, Minus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { addLaundryCredit } from "@/lib/actions";
+import { addLaundryCredit, removeLaundryCredit } from "@/lib/actions";
 import { useRouter } from "next/navigation";
 
 interface Props {
@@ -41,6 +41,48 @@ export function LaundryCreditSection({ sessionId, currentCredit }: Props) {
     }
   }
 
+  async function handleRemove() {
+    const val = parseFloat(amount);
+    if (!val || val <= 0) return;
+    setLoading(true);
+    setMessage(null);
+    try {
+      const res = await removeLaundryCredit(sessionId, val);
+      setMessage({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        setCredit((c) => Math.max(0, c - val));
+        setAmount("");
+        router.refresh();
+      }
+    } catch {
+      setMessage({ ok: false, text: "Fejl" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleReset() {
+    if (credit <= 0) return;
+    setLoading(true);
+    setMessage(null);
+    try {
+      const res = await removeLaundryCredit(sessionId, credit);
+      setMessage({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        setCredit(0);
+        setAmount("");
+        router.refresh();
+      }
+    } catch {
+      setMessage({ ok: false, text: "Fejl" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const parsedAmount = parseFloat(amount);
+  const hasValidAmount = parsedAmount > 0;
+
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border flex items-center justify-between">
@@ -54,7 +96,7 @@ export function LaundryCreditSection({ sessionId, currentCredit }: Props) {
       </div>
       <div className="p-5 space-y-3">
         <p className="text-sm text-muted-foreground">
-          Tilføj kredit som gæsten kan bruge til vask/tørring. Gæsten ser kreditten på sin gæsteportal.
+          Tilføj eller fjern kredit som gæsten kan bruge til vask/tørring.
         </p>
         <div className="flex gap-1.5 flex-wrap">
           {presets.map((p) => (
@@ -86,13 +128,33 @@ export function LaundryCreditSection({ sessionId, currentCredit }: Props) {
           </div>
           <Button
             size="sm"
-            disabled={loading || !amount || parseFloat(amount) <= 0}
+            disabled={loading || !hasValidAmount}
             onClick={handleAdd}
+            title="Tilføj kredit"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />}
             Tilføj
           </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={loading || !hasValidAmount || credit <= 0}
+            onClick={handleRemove}
+            title="Fjern kredit"
+          >
+            <Minus className="h-4 w-4 mr-1" />
+            Fjern
+          </Button>
         </div>
+        {credit > 0 && (
+          <button
+            onClick={handleReset}
+            disabled={loading}
+            className="text-xs text-destructive hover:underline disabled:opacity-50"
+          >
+            Nulstil al kredit
+          </button>
+        )}
         {message && (
           <div className={`text-sm p-2 rounded-lg ${message.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
             {message.text}

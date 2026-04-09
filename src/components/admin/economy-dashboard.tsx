@@ -12,8 +12,10 @@ import {
   FileSpreadsheet,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   BarChart3,
   WashingMachine,
+  Calendar,
 } from "lucide-react";
 import {
   BarChart,
@@ -64,18 +66,41 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
   const [expandedMonth, setExpandedMonth] = useState<string | null>(
     months.length > 0 ? months[0].month : null
   );
+  const [selectedMonth, setSelectedMonth] = useState<string>("all");
 
-  // Totals across all months
-  const totals = months.reduce(
+  // Filter months for summary
+  const filteredMonths = selectedMonth === "all" ? months : months.filter((m) => m.month === selectedMonth);
+
+  // Totals based on selected month
+  const totals = filteredMonths.reduce(
     (acc, m) => ({
       revenue: acc.revenue + m.totalRevenue,
       paid: acc.paid + m.totalPaid,
       unpaid: acc.unpaid + m.totalUnpaid,
       kwh: acc.kwh + m.totalKwhUsed,
       water: acc.water + m.totalWaterUsed,
+      laundry: acc.laundry + m.totalLaundry,
+      laundryCount: acc.laundryCount + m.laundryCount,
     }),
-    { revenue: 0, paid: 0, unpaid: 0, kwh: 0, water: 0 }
+    { revenue: 0, paid: 0, unpaid: 0, kwh: 0, water: 0, laundry: 0, laundryCount: 0 }
   );
+
+  // Navigate months
+  const monthIndex = months.findIndex((m) => m.month === selectedMonth);
+  function prevMonth() {
+    if (selectedMonth === "all" && months.length > 0) {
+      setSelectedMonth(months[0].month);
+    } else if (monthIndex < months.length - 1) {
+      setSelectedMonth(months[monthIndex + 1].month);
+    }
+  }
+  function nextMonth() {
+    if (monthIndex > 0) {
+      setSelectedMonth(months[monthIndex - 1].month);
+    } else if (monthIndex === 0) {
+      setSelectedMonth("all");
+    }
+  }
 
   function downloadCSV(content: string, filename: string) {
     const bom = "\uFEFF";
@@ -112,7 +137,59 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
 
   return (
     <div className="space-y-6">
+      {/* Month selector */}
+      {months.length > 0 && (
+        <div className="flex items-center justify-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={prevMonth}
+            disabled={selectedMonth !== "all" && monthIndex >= months.length - 1}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <button
+            onClick={() => setSelectedMonth("all")}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              selectedMonth === "all"
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+          >
+            Alle
+          </button>
+          <div className="flex items-center gap-1 bg-muted/80 rounded-xl px-1 py-0.5 border border-border/40">
+            <Calendar className="h-3.5 w-3.5 text-muted-foreground ml-2" />
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="bg-transparent text-sm font-medium py-1.5 px-2 pr-6 appearance-none cursor-pointer focus:outline-none"
+            >
+              <option value="all">Alle måneder</option>
+              {months.map((m) => (
+                <option key={m.month} value={m.month}>
+                  {formatMonth(m.month)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={nextMonth}
+            disabled={selectedMonth === "all"}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
       {/* Summary cards */}
+      {selectedMonth !== "all" && (
+        <p className="text-sm text-muted-foreground text-center -mb-2">
+          Viser data for <span className="font-semibold text-foreground">{formatMonth(selectedMonth)}</span>
+        </p>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
           <div className="flex items-center gap-2 mb-2">
@@ -120,7 +197,7 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
               <TrendingUp className="h-4 w-4 text-primary" />
             </div>
           </div>
-          <p className="text-xs font-medium text-muted-foreground mb-0.5">Total omsætning</p>
+          <p className="text-xs font-medium text-muted-foreground mb-0.5">{selectedMonth === "all" ? "Total omsætning" : "Omsætning"}</p>
           <div className="text-xl font-bold tracking-tight">{fmt(totals.revenue)} <span className="text-sm font-medium text-muted-foreground">DKK</span></div>
         </div>
         <div className="rounded-xl border border-border/60 bg-card shadow-sm p-4 hover:shadow-md transition-shadow">
@@ -157,8 +234,8 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
             </div>
           </div>
           <p className="text-xs font-medium text-muted-foreground mb-0.5">Vaskerum</p>
-          <div className="text-xl font-bold tracking-tight">{fmt(laundryTotals.total)} <span className="text-sm font-medium text-muted-foreground">DKK</span></div>
-          <p className="text-xs text-muted-foreground mt-0.5">{laundryTotals.count} vaske</p>
+          <div className="text-xl font-bold tracking-tight">{fmt(totals.laundry)} <span className="text-sm font-medium text-muted-foreground">DKK</span></div>
+          <p className="text-xs text-muted-foreground mt-0.5">{totals.laundryCount} vaske</p>
         </div>
       </div>
 
