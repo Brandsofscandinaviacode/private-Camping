@@ -245,12 +245,30 @@ model LaundryMachine {
   pricePerUse      Float   @default(25)             // DKK per use
   enabled          Boolean @default(true)           // Admin can disable
 
+  groupId          Int?
+  group            LaundryGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
   sessions LaundrySess[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("laundry_machines")
+}
+
+// ──────────────────────────────────────────────
+// Laundry Group (QR code grouping of machines)
+// ──────────────────────────────────────────────
+model LaundryGroup {
+  id       Int     @id @default(autoincrement())
+  name     String                           // "Vaskerum 1", "Bygning A"
+  token    String  @unique                  // URL-safe token for public access
+  machines LaundryMachine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("laundry_groups")
 }
 
 // ──────────────────────────────────────────────

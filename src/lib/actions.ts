@@ -2421,3 +2421,181 @@ export async function getSessionLaundryCredit(sessionId: number): Promise<number
   const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { laundryCredit: true } });
   return session?.laundryCredit ?? 0;
 }
+
+// ══════════════════════════════════════════════
+//  Laundry Groups — QR code grouping
+// ══════════════════════════════════════════════
+
+export async function getLaundryGroups() {
+  return prisma.laundryGroup.findMany({
+    include: { machines: { select: { id: true, name: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+export async function createLaundryGroup(name: string, machineIds: number[]) {
+  "use server";
+  const token = uuidv4().replace(/-/g, "").slice(0, 12);
+  const group = await prisma.laundryGroup.create({
+    data: { name, token },
+  });
+  if (machineIds.length > 0) {
+    await prisma.laundryMachine.updateMany({
+      where: { id: { in: machineIds } },
+      data: { groupId: group.id },
+    });
+  }
+  return group;
+}
+
+export async function updateLaundryGroup(groupId: number, name: string, machineIds: number[]) {
+  "use server";
+  await prisma.laundryGroup.update({
+    where: { id: groupId },
+    data: { name },
+  });
+  // Remove all machines from this group first
+  await prisma.laundryMachine.updateMany({
+    where: { groupId },
+    data: { groupId: null },
+  });
+  // Assign selected machines
+  if (machineIds.length > 0) {
+    await prisma.laundryMachine.updateMany({
+      where: { id: { in: machineIds } },
+      data: { groupId },
+    });
+  }
+}
+
+export async function deleteLaundryGroup(groupId: number) {
+  "use server";
+  // Unlink machines first
+  await prisma.laundryMachine.updateMany({
+    where: { groupId },
+    data: { groupId: null },
+  });
+  await prisma.laundryGroup.delete({ where: { id: groupId } });
+}
+
+// Public: get machines in a group by token (no auth needed)
+export async function getPublicLaundryGroup(token: string) {
+  const group = await prisma.laundryGroup.findUnique({
+    where: { token },
+    include: {
+      machines: {
+        where: { enabled: true },
+        include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
+        orderBy: { id: "asc" },
+      },
+    },
+  });
+  if (!group) return null;
+
+  const now = new Date();
+  return {
+    id: group.id,
+    name: group.name,
+    machines: group.machines.map((m) => {
+      const active = m.sessions[0];
+      const isRunning = active && new Date(active.endsAt) > now;
+      const minutesLeft = isRunning ? Math.max(0, Math.ceil((new Date(active.endsAt).getTime() - now.getTime()) / 60000)) : 0;
+      return {
+        id: m.id,
+        name: m.name,
+        durationMinutes: m.durationMinutes,
+        pricePerUse: m.pricePerUse,
+        available: !isRunning,
+        minutesLeft,
+        endsAt: isRunning ? active!.endsAt.toISOString() : null,
+      };
+    }),
+  };
+}
+
+// Public: start a laundry machine from QR page (no guest session required)
+export async function createPublicLaundryPayment(
+  machineId: number,
+  groupToken: string,
+): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  const machine = await prisma.laundryMachine.findUnique({
+    where: { id: machineId },
+    include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
+  });
+
+  if (!machine) return { ok: false, message: "Maskine ikke fundet" };
+  if (!machine.enabled) return { ok: false, message: "Maskine er deaktiveret" };
+
+  // Check if currently running
+  const activeSession = machine.sessions[0];
+  if (activeSession && new Date(activeSession.endsAt) > new Date()) {
+    return { ok: false, message: "Maskinen er allerede i brug" };
+  }
+
+  // Clean up expired active sessions
+  if (activeSession) {
+    await prisma.laundrySess.update({
+      where: { id: activeSession.id },
+      data: { status: "COMPLETED" },
+    });
+  }
+
+  const price = machine.pricePerUse;
+  const endsAt = new Date();
+  endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
+
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+
+  if (settings.quickpay_enabled !== "true") {
+    // No payment configured — start directly
+    await prisma.laundrySess.create({
+      data: {
+        machineId,
+        guestPortalToken: `qr:${groupToken}`,
+        endsAt,
+        pricePaid: price,
+        status: "ACTIVE",
+        paymentStatus: "PAID",
+      },
+    });
+    try { await ha.turnOn(machine.switchEntityId); } catch (e) { console.error("HA laundry:", e); }
+    return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
+  }
+
+  // Create pending session
+  const laundrySess = await prisma.laundrySess.create({
+    data: {
+      machineId,
+      guestPortalToken: `qr:${groupToken}`,
+      endsAt,
+      pricePaid: price,
+      status: "PENDING",
+      paymentStatus: "UNPAID",
+    },
+  });
+
+  try {
+    const { createPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("L", laundrySess.id);
+
+    const { paymentId, paymentLink } = await createPaymentLink({
+      orderId,
+      amount: price,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}/laundry/${groupToken}?paid=1`,
+      cancelUrl: `${baseUrl}/laundry/${groupToken}?cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    await prisma.laundrySess.update({
+      where: { id: laundrySess.id },
+      data: { paymentId: String(paymentId) },
+    });
+
+    return { ok: true, message: "Går til betaling...", paymentLink };
+  } catch (e) {
+    await prisma.laundrySess.delete({ where: { id: laundrySess.id } });
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
