@@ -55,6 +55,8 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
     auto_power_off_on_checkout: settings.auto_power_off_on_checkout || "false",
     invoice_email_enabled: settings.invoice_email_enabled || "false",
     invoice_email_day: settings.invoice_email_day || "1",
+    invoice_payment_deadline_days: settings.invoice_payment_deadline_days || "14",
+    invoice_auto_power_off: settings.invoice_auto_power_off || "false",
     alarm_enabled: settings.alarm_enabled || "false",
     alarm_kwh_threshold: settings.alarm_kwh_threshold || "10",
     alarm_water_threshold: settings.alarm_water_threshold || "500",
@@ -216,6 +218,18 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
                 </select>
                 <p className="text-xs text-muted-foreground mt-1.5">Fakturaen dækker forbruget fra den foregående måned</p>
               </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Betalingsfrist (dage)</Label>
+                <Input type="number" min="1" max="90" value={values.invoice_payment_deadline_days} onChange={(e) => h("invoice_payment_deadline_days", e.target.value)} className="mt-1 w-32" />
+                <p className="text-xs text-muted-foreground mt-1.5">Antal dage lejeren har til at betale fakturaen (standard: 14 dage)</p>
+              </div>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={values.invoice_auto_power_off === "true"} onChange={(e) => h("invoice_auto_power_off", e.target.checked ? "true" : "false")} className="mt-0.5 h-4 w-4 accent-primary" />
+                <div>
+                  <p className="text-sm font-medium">Sluk strøm ved manglende betaling</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Strømmen slukkes automatisk hvis fakturaen ikke er betalt inden betalingsfristen</p>
+                </div>
+              </label>
               <div className="pt-1">
                 <Button variant="outline" size="sm" onClick={async () => {
                   setInvoiceTestLoading(true);

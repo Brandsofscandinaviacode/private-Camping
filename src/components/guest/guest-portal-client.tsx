@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import {
   Tent,
   Zap,
+  Power,
   Droplets,
   Thermometer,
   DoorOpen,
@@ -26,6 +27,8 @@ import {
   getLiveConsumption,
   guestSetTemperature,
   guestUnlockDoor,
+  guestTogglePower,
+  guestGetPowerState,
   createSessionPayment,
   createInvoicePayment,
   createLaundryPayment,
@@ -236,7 +239,7 @@ export function GuestPortalClient({
 
   const formatDKK = (v: number | null) => v !== null ? `${v.toFixed(2)} DKK` : "—";
 
-  const hasServices = hasClimate || hasSmartLock || laundryMachines.length > 0;
+  const hasServices = hasClimate || hasSmartLock || hasElectricity || laundryMachines.length > 0;
   const hasPracticalInfo = !!(practicalInfo[locale] || practicalInfo.da);
   const hasInfoSection = hasPracticalInfo || !!siteMapUrl;
 
@@ -496,6 +499,11 @@ export function GuestPortalClient({
                   </Button>
                   {unlockMsg && <p className="text-sm text-primary text-center">{tx.doorUnlocked}</p>}
                 </div>
+              )}
+
+              {/* Power Toggle */}
+              {hasElectricity && (
+                <PowerToggle token={token} locale={locale as "da" | "en" | "de"} showSeparator={hasClimate || hasSmartLock || laundryMachines.length > 0} />
               )}
             </div>
           </Section>
@@ -834,5 +842,77 @@ function TopUpSection({
         {error && <p className="text-xs text-red-600">{error}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Power Toggle for Guest Portal ──
+function PowerToggle({
+  token,
+  locale,
+  showSeparator,
+}: {
+  token: string;
+  locale: "da" | "en" | "de";
+  showSeparator: boolean;
+}) {
+  const [powerOn, setPowerOn] = useState<boolean | null>(null);
+  const [loading, setLoading] = useState(false);
+  const tx = getTranslations(locale);
+
+  useEffect(() => {
+    let mounted = true;
+    async function fetchState() {
+      try {
+        const state = await guestGetPowerState(token);
+        if (mounted) setPowerOn(state);
+      } catch {}
+    }
+    fetchState();
+    const interval = setInterval(fetchState, 30000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, [token]);
+
+  async function handleToggle() {
+    if (powerOn === null) return;
+    setLoading(true);
+    try {
+      const res = await guestTogglePower(token, !powerOn);
+      if (res.ok) setPowerOn(res.powerOn);
+    } catch {}
+    setLoading(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      {showSeparator && <Separator />}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <Zap className="h-4 w-4 text-amber-500" />
+          {tx.power}
+        </div>
+        {powerOn !== null && (
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${powerOn ? "bg-green-50 text-green-600" : "bg-muted text-muted-foreground"}`}>
+            {powerOn ? tx.powerIsOn : tx.powerIsOff}
+          </span>
+        )}
+      </div>
+      <Button
+        onClick={handleToggle}
+        disabled={loading || powerOn === null}
+        variant={powerOn ? "destructive" : "default"}
+        className="w-full"
+        size="sm"
+      >
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+        ) : (
+          <Power className="h-3.5 w-3.5 mr-1.5" />
+        )}
+        {loading
+          ? (powerOn ? tx.turningOff : tx.turningOn)
+          : (powerOn ? tx.powerOff : tx.powerOn)
+        }
+      </Button>
+    </div>
   );
 }

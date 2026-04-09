@@ -787,6 +787,61 @@ export async function guestUnlockDoor(token: string) {
   await ha.unlockDoor(hw.lockEntityId);
 }
 
+export async function guestTogglePower(token: string, turnOn: boolean): Promise<{ ok: boolean; powerOn: boolean }> {
+  let hw: { electricitySwitchEntityId: string | null } | null = null;
+
+  const session = await prisma.session.findUnique({
+    where: { guestPortalToken: token },
+    include: { unit: { include: { hardware: true } } },
+  });
+  if (session?.status === "ACTIVE") hw = session.unit.hardware;
+
+  if (!hw) {
+    const unit = await prisma.unit.findUnique({
+      where: { longTermPortalToken: token },
+      include: { hardware: true },
+    });
+    if (unit) hw = unit.hardware;
+  }
+
+  if (!hw?.electricitySwitchEntityId) return { ok: false, powerOn: false };
+
+  if (turnOn) {
+    await ha.turnOn(hw.electricitySwitchEntityId);
+  } else {
+    await ha.turnOff(hw.electricitySwitchEntityId);
+  }
+
+  return { ok: true, powerOn: turnOn };
+}
+
+export async function guestGetPowerState(token: string): Promise<boolean | null> {
+  let hw: { electricitySwitchEntityId: string | null } | null = null;
+
+  const session = await prisma.session.findUnique({
+    where: { guestPortalToken: token },
+    include: { unit: { include: { hardware: true } } },
+  });
+  if (session?.status === "ACTIVE") hw = session.unit.hardware;
+
+  if (!hw) {
+    const unit = await prisma.unit.findUnique({
+      where: { longTermPortalToken: token },
+      include: { hardware: true },
+    });
+    if (unit) hw = unit.hardware;
+  }
+
+  if (!hw?.electricitySwitchEntityId) return null;
+
+  try {
+    const state = await ha.getEntityState(hw.electricitySwitchEntityId);
+    return state.state === "on";
+  } catch {
+    return null;
+  }
+}
+
 export async function getActiveSession(unitId: number) {
   return prisma.session.findFirst({
     where: { unitId, status: "ACTIVE" },
@@ -816,20 +871,27 @@ export async function createMonthlyInvoice(unitId: number) {
   let startWaterLiters: number | null = null;
   let endWaterLiters: number | null = null;
 
-  // For now, get current readings as end values
-  // Start values come from previous invoice's end, or current if first invoice
+  // Start values come from previous invoice's end, or active session's start readings for first invoice
   const prevInvoice = await prisma.invoice.findFirst({
     where: { unitId },
     orderBy: { periodEnd: "desc" },
   });
 
+  // For the first invoice, use active session's start readings as baseline
+  const activeSession = !prevInvoice
+    ? await prisma.session.findFirst({
+        where: { unitId, status: "ACTIVE" },
+        orderBy: { checkInTime: "desc" },
+      })
+    : null;
+
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-    startKwh = prevInvoice?.endKwh ?? endKwh;
+    startKwh = prevInvoice?.endKwh ?? activeSession?.startKwh ?? endKwh;
   }
   if (hw?.hasWater && hw.waterMeterEntityId) {
     endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
-    startWaterLiters = prevInvoice?.endWaterLiters ?? endWaterLiters;
+    startWaterLiters = prevInvoice?.endWaterLiters ?? activeSession?.startWaterLiters ?? endWaterLiters;
   }
 
   // Get effective electricity price for invoice
@@ -923,6 +985,49 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
   });
 
   return { created, sent };
+}
+
+// Check overdue invoices and optionally cut power
+export async function checkOverdueInvoices(): Promise<{ markedOverdue: number; powerOff: number }> {
+  const settings = await getGlobalSettings();
+  const deadlineDays = parseInt(settings.invoice_payment_deadline_days || "14", 10);
+  const autoPowerOff = settings.invoice_auto_power_off === "true";
+
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - deadlineDays);
+
+  // Find PENDING invoices that have passed the deadline
+  const overdueInvoices = await prisma.invoice.findMany({
+    where: {
+      status: "PENDING",
+      createdAt: { lte: cutoffDate },
+    },
+    include: { unit: { include: { hardware: true } } },
+  });
+
+  let markedOverdue = 0;
+  let powerOff = 0;
+
+  for (const invoice of overdueInvoices) {
+    // Mark as overdue
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: "OVERDUE" },
+    });
+    markedOverdue++;
+
+    // Auto power-off if enabled
+    if (autoPowerOff && invoice.unit.hardware?.electricitySwitchEntityId) {
+      try {
+        await ha.turnOff(invoice.unit.hardware.electricitySwitchEntityId);
+        powerOff++;
+      } catch (e) {
+        console.error(`Auto power-off failed for unit ${invoice.unit.name}:`, e);
+      }
+    }
+  }
+
+  return { markedOverdue, powerOff };
 }
 
 export async function testSendInvoice(): Promise<{ ok: boolean; message: string }> {
@@ -2019,6 +2124,13 @@ export async function deleteLaundryMachine(id: number) {
 
 // Get laundry machines with status for guest portal
 export async function getGuestLaundryMachines() {
+  // Auto-expire stale PENDING sessions (older than 5 minutes)
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.laundrySess.updateMany({
+    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+
   const machines = await prisma.laundryMachine.findMany({
     where: { enabled: true },
     orderBy: { name: "asc" },
@@ -2057,6 +2169,13 @@ export async function createLaundryPayment(
   machineId: number,
   guestPortalToken: string,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  // Auto-expire stale PENDING sessions before checking availability
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.laundrySess.updateMany({
+    where: { machineId, status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+
   const machine = await prisma.laundryMachine.findUnique({
     where: { id: machineId },
     include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
@@ -2279,13 +2398,30 @@ export async function checkLaundryMachines() {
     });
   }
 
-  return { turned_off: expired.length };
+  // Auto-expire PENDING laundry sessions older than 5 minutes
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const expiredPending = await prisma.laundrySess.updateMany({
+    where: {
+      status: "PENDING",
+      createdAt: { lte: fiveMinutesAgo },
+    },
+    data: { status: "CANCELLED" },
+  });
+
+  return { turned_off: expired.length, expired_pending: expiredPending.count };
 }
 
 // ──────────────────────────────────────────────
 // SERVICES — Admin overview & control
 // ──────────────────────────────────────────────
 export async function getServiceStatus() {
+  // Auto-expire stale PENDING sessions (older than 5 minutes)
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.laundrySess.updateMany({
+    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+
   const machines = await prisma.laundryMachine.findMany({
     include: {
       sessions: {
@@ -2498,6 +2634,13 @@ export async function deleteLaundryGroup(groupId: number) {
 
 // Public: get machines in a group by token (no auth needed)
 export async function getPublicLaundryGroup(token: string) {
+  // Auto-expire stale PENDING sessions (older than 5 minutes)
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.laundrySess.updateMany({
+    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+
   const group = await prisma.laundryGroup.findUnique({
     where: { token },
     include: {
@@ -2536,6 +2679,13 @@ export async function createPublicLaundryPayment(
   machineId: number,
   groupToken: string,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  // Auto-expire stale PENDING sessions before checking availability
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.laundrySess.updateMany({
+    where: { machineId, status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+
   const machine = await prisma.laundryMachine.findUnique({
     where: { id: machineId },
     include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },

@@ -5,6 +5,7 @@ import {
   updateMultipleSettings,
   autoCreateAndSendInvoices,
   checkLaundryMachines,
+  checkOverdueInvoices,
 } from "@/lib/actions";
 
 // GET /api/cron — Called periodically (e.g. every 15 min via cron or HA automation)
@@ -16,6 +17,7 @@ export async function GET() {
     const { alerts } = await checkConsumptionAlarms();
     const invoiceResult = await autoCreateAndSendInvoices();
     const laundryResult = await checkLaundryMachines();
+    const overdueResult = await checkOverdueInvoices();
 
     // Track last run time and count
     await updateMultipleSettings([
@@ -31,6 +33,7 @@ export async function GET() {
       alertDetails: alerts,
       invoices: invoiceResult,
       laundry: laundryResult,
+      overdue: overdueResult,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
