@@ -623,16 +623,14 @@ export function GuestPortalClient({
           </Card>
         )}
 
-        {/* ═══ Invoices for long-term renters — at bottom ═══ */}
+        {/* ═══ Invoices for long-term renters — collapsible ═══ */}
         {isLongTerm && invoices.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Receipt className="h-4 w-4" />
-                {tx.yourInvoices}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
+          <Section
+            icon={<Receipt className="h-4 w-4 text-primary" />}
+            title={`${tx.yourInvoices} (${invoices.length})`}
+            defaultOpen={unpaidInvoices.length > 0}
+          >
+            <div className="space-y-2">
               {invoices.map((inv) => (
                 <div key={inv.id} className="p-3 rounded-lg bg-muted/50 space-y-2">
                   <div className="flex items-center justify-between">
@@ -669,8 +667,8 @@ export function GuestPortalClient({
                 </div>
               ))}
               {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
-            </CardContent>
-          </Card>
+            </div>
+          </Section>
         )}
 
         {/* ═══ Payment info — only for short-term postpaid stays ═══ */}
