@@ -77,7 +77,7 @@ export default async function BookingDetailPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Booking info */}
+        {/* ═══ Booking (details + edit) ═══ */}
         <div className="space-y-5">
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
@@ -172,7 +172,7 @@ export default async function BookingDetailPage({
           />
         </div>
 
-        {/* Right: Consumption & Payment */}
+        {/* ═══ Forbrug (fordeling + live + trend) ═══ */}
         <div className="space-y-5">
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
@@ -267,13 +267,76 @@ export default async function BookingDetailPage({
             </div>
           </div>
 
+          {isActive && <LiveConsumption sessionId={session.id} />}
+
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="font-semibold">Forbrugstrend</h2>
+            </div>
+            <div className="p-5">
+              <ConsumptionChart unitId={session.unit.id} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ Betaling + Vask ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left: Skyldigt beløb + Betaling */}
+        <div className="space-y-5">
+          {session.unit.isLongTerm && (() => {
+            const invoices = session.unit.invoices;
+            const unpaid = invoices.filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
+            const totalOwed = unpaid.reduce((sum, inv) => sum + inv.totalAmount, 0);
+            return (
+              <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+                <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Receipt className="h-4 w-4 text-primary" />
+                    <h2 className="font-semibold">Skyldigt beløb</h2>
+                  </div>
+                  <CreateInvoiceButton unitId={session.unit.id} />
+                </div>
+                <div className="p-5 space-y-4">
+                  <div className="flex items-center justify-between p-4 rounded-lg bg-primary/5 border border-primary/10">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Ubetalt total</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {unpaid.length === 0 ? "Ingen ubetalte fakturaer" : `${unpaid.length} ubetalt${unpaid.length === 1 ? "" : "e"} faktura${unpaid.length === 1 ? "" : "er"}`}
+                      </p>
+                    </div>
+                    <span className={`text-2xl font-bold tabular-nums ${totalOwed > 0 ? "text-primary" : "text-muted-foreground"}`}>
+                      {totalOwed.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">DKK</span>
+                    </span>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Månedlige fakturaer</p>
+                    {invoices.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">Ingen fakturaer endnu</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {invoices.map((inv) => (
+                          <InvoiceRow key={inv.id} invoice={inv} unitId={session.unit.id} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           <SessionActions
             sessionId={session.id}
             paymentStatus={session.paymentStatus}
             isPaid={isPaid}
             paidAt={session.paidAt?.toISOString() ?? null}
           />
+        </div>
 
+        {/* Right: Vask */}
+        <div className="space-y-5">
           {isActive && (
             <LaundryCreditSection
               sessionId={session.id}
@@ -282,66 +345,6 @@ export default async function BookingDetailPage({
           )}
         </div>
       </div>
-
-      {/* ═══ Customer consumption & billing ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Live consumption */}
-        {isActive && <LiveConsumption sessionId={session.id} />}
-
-        {/* Consumption trend */}
-        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-          <div className="px-5 py-4 border-b border-border">
-            <h2 className="font-semibold">Forbrugstrend</h2>
-          </div>
-          <div className="p-5">
-            <ConsumptionChart unitId={session.unit.id} />
-          </div>
-        </div>
-      </div>
-
-      {/* Skyldigt beløb — monthly invoices for long-term renters */}
-      {session.unit.isLongTerm && (() => {
-        const invoices = session.unit.invoices;
-        const unpaid = invoices.filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
-        const totalOwed = unpaid.reduce((sum, inv) => sum + inv.totalAmount, 0);
-        return (
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Receipt className="h-4 w-4 text-primary" />
-                <h2 className="font-semibold">Skyldigt beløb</h2>
-              </div>
-              <CreateInvoiceButton unitId={session.unit.id} />
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="flex items-center justify-between p-4 rounded-lg bg-primary/5 border border-primary/10">
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Ubetalt total</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {unpaid.length === 0 ? "Ingen ubetalte fakturaer" : `${unpaid.length} ubetalt${unpaid.length === 1 ? "" : "e"} faktura${unpaid.length === 1 ? "" : "er"}`}
-                  </p>
-                </div>
-                <span className={`text-2xl font-bold tabular-nums ${totalOwed > 0 ? "text-primary" : "text-muted-foreground"}`}>
-                  {totalOwed.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">DKK</span>
-                </span>
-              </div>
-
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Månedlige fakturaer</p>
-                {invoices.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Ingen fakturaer endnu</p>
-                ) : (
-                  <div className="space-y-2">
-                    {invoices.map((inv) => (
-                      <InvoiceRow key={inv.id} invoice={inv} unitId={session.unit.id} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
