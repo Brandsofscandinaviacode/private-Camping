@@ -1156,7 +1156,17 @@ export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "activ
 export async function getSessionById(sessionId: number) {
   return prisma.session.findUnique({
     where: { id: sessionId },
-    include: { unit: { include: { hardware: true } } },
+    include: {
+      unit: {
+        include: {
+          hardware: true,
+          invoices: {
+            orderBy: { periodEnd: "desc" },
+            take: 12,
+          },
+        },
+      },
+    },
   });
 }
 

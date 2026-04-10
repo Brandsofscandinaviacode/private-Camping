@@ -12,12 +12,8 @@ import {
 import { CheckInDialog } from "@/components/admin/check-in-dialog";
 import { CheckOutDialog } from "@/components/admin/check-out-dialog";
 import { CabinControls } from "@/components/admin/cabin-controls";
-import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CopyButton } from "@/components/admin/copy-button";
-import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
-import { InvoiceRow } from "@/components/admin/invoice-row";
-import { ConsumptionChart } from "@/components/admin/consumption-chart";
 
 export const dynamic = "force-dynamic";
 
@@ -118,39 +114,6 @@ export default async function UnitDetailPage({
             </div>
           ) : null}
 
-          {/* Live Consumption */}
-          {activeSession && <LiveConsumption sessionId={activeSession.id} />}
-
-          {/* Consumption Trends */}
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-            <div className="px-5 py-4 border-b border-border">
-              <h2 className="font-semibold">Forbrugstrend</h2>
-            </div>
-            <div className="p-5">
-              <ConsumptionChart unitId={unit.id} />
-            </div>
-          </div>
-
-          {/* Monthly invoicing for long-term */}
-          {unit.isLongTerm && (
-            <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-              <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-                <h2 className="font-semibold">Månedlige fakturaer</h2>
-                {unit.longTermGuestName && <CreateInvoiceButton unitId={unit.id} />}
-              </div>
-              <div className="p-5">
-                {unit.invoices.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Ingen fakturaer endnu</p>
-                ) : (
-                  <div className="space-y-2">
-                    {unit.invoices.map((inv) => (
-                      <InvoiceRow key={inv.id} invoice={inv} unitId={unit.id} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Right: Hardware Controls */}
