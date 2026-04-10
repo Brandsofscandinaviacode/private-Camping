@@ -639,7 +639,10 @@ export function GuestPortalClient({
                         {new Date(inv.periodStart).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", { month: "long", year: "numeric" })}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {tx.electricity}: {inv.electricityCost.toFixed(2)} · {tx.water}: {inv.waterCost.toFixed(2)}
+                        {[
+                          hasElectricity && `${tx.electricity}: ${inv.electricityCost.toFixed(2)}`,
+                          hasWater && `${tx.water}: ${inv.waterCost.toFixed(2)}`,
+                        ].filter(Boolean).join(" · ")}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">

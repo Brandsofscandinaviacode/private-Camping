@@ -79,49 +79,55 @@ export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
 
       {expanded && (
         <div className="px-4 pb-4 pt-1 border-t border-border space-y-3">
-          {/* Consumption breakdown */}
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-md bg-muted/40 p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Zap className="h-4 w-4 text-yellow-500" />
-                <span className="font-medium text-xs">Elektricitet</span>
-              </div>
-              {usedKwh !== null ? (
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Forbrug</span>
-                    <span>{usedKwh.toFixed(2)} kWh</span>
+          {/* Consumption breakdown — only show boxes for metered utilities */}
+          {(invoice.startKwh != null || invoice.startWaterLiters != null) && (
+            <div className={`grid gap-3 text-sm ${invoice.startKwh != null && invoice.startWaterLiters != null ? "grid-cols-2" : "grid-cols-1"}`}>
+              {invoice.startKwh != null && (
+                <div className="rounded-md bg-muted/40 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Zap className="h-4 w-4 text-yellow-500" />
+                    <span className="font-medium text-xs">Elektricitet</span>
                   </div>
-                  <div className="flex justify-between font-medium">
-                    <span>Pris</span>
-                    <span>{invoice.electricityCost.toFixed(2)} DKK</span>
-                  </div>
+                  {usedKwh !== null ? (
+                    <div className="space-y-1 text-xs">
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Forbrug</span>
+                        <span>{usedKwh.toFixed(2)} kWh</span>
+                      </div>
+                      <div className="flex justify-between font-medium">
+                        <span>Pris</span>
+                        <span>{invoice.electricityCost.toFixed(2)} DKK</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Ingen data</p>
+                  )}
                 </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">Ingen data</p>
+              )}
+              {invoice.startWaterLiters != null && (
+                <div className="rounded-md bg-muted/40 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Droplets className="h-4 w-4 text-blue-500" />
+                    <span className="font-medium text-xs">Vand</span>
+                  </div>
+                  {usedWater !== null ? (
+                    <div className="space-y-1 text-xs">
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Forbrug</span>
+                        <span>{usedWater.toFixed(0)} L</span>
+                      </div>
+                      <div className="flex justify-between font-medium">
+                        <span>Pris</span>
+                        <span>{invoice.waterCost.toFixed(2)} DKK</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Ingen data</p>
+                  )}
+                </div>
               )}
             </div>
-            <div className="rounded-md bg-muted/40 p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Droplets className="h-4 w-4 text-blue-500" />
-                <span className="font-medium text-xs">Vand</span>
-              </div>
-              {usedWater !== null ? (
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Forbrug</span>
-                    <span>{usedWater.toFixed(0)} L</span>
-                  </div>
-                  <div className="flex justify-between font-medium">
-                    <span>Pris</span>
-                    <span>{invoice.waterCost.toFixed(2)} DKK</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">Ingen data</p>
-              )}
-            </div>
-          </div>
+          )}
 
           {/* Payment info */}
           {invoice.paidAt && (
