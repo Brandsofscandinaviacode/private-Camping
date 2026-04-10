@@ -598,6 +598,12 @@ export async function getLiveConsumption(sessionId: number) {
   let usedWaterLiters: number | null = null;
   let waterCost: number | null = null;
 
+  // Use latest PAID invoice's end readings as baseline (so paid amounts are excluded)
+  const latestPaidInvoice = await prisma.invoice.findFirst({
+    where: { unitId: session.unitId, status: "PAID" },
+    orderBy: { periodEnd: "desc" },
+  });
+
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
     if (currentKwh !== null && session.startKwh === null) {
@@ -606,7 +612,8 @@ export async function getLiveConsumption(sessionId: number) {
       usedKwh = 0;
       electricityCost = 0;
     } else if (currentKwh !== null && session.startKwh !== null) {
-      usedKwh = Math.max(0, currentKwh - session.startKwh);
+      const baselineKwh = latestPaidInvoice?.endKwh ?? session.startKwh;
+      usedKwh = Math.max(0, currentKwh - baselineKwh);
       electricityCost = usedKwh * effectiveElPrice;
     }
   }
@@ -619,7 +626,8 @@ export async function getLiveConsumption(sessionId: number) {
       usedWaterLiters = 0;
       waterCost = 0;
     } else if (currentWaterLiters !== null && session.startWaterLiters !== null) {
-      usedWaterLiters = Math.max(0, currentWaterLiters - session.startWaterLiters);
+      const baselineWater = latestPaidInvoice?.endWaterLiters ?? session.startWaterLiters;
+      usedWaterLiters = Math.max(0, currentWaterLiters - baselineWater);
       waterCost = usedWaterLiters * pricing.pricePerLiterWater;
     }
   }

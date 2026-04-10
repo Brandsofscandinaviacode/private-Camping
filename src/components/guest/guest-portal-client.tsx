@@ -455,6 +455,44 @@ export function GuestPortalClient({
           </Card>
         )}
 
+        {/* ═══ Unpaid invoice banner — for fastliggere ═══ */}
+        {isLongTerm && unpaidInvoices.length > 0 && (
+          <Card className="border-amber-300 bg-amber-50">
+            <CardContent className="py-4 space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="h-9 w-9 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
+                  <Receipt className="h-4 w-4 text-amber-700" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-amber-900 text-sm">
+                    {locale === "en" ? "You have unpaid invoices" :
+                     locale === "de" ? "Sie haben unbezahlte Rechnungen" :
+                     "Du har ubetalte fakturaer"}
+                  </p>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    {unpaidInvoices.length} {locale === "en" ? "invoice(s) awaiting payment" :
+                                              locale === "de" ? "Rechnung(en) ausstehend" :
+                                              "faktura(er) afventer betaling"}
+                    {" — "}
+                    {unpaidInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0).toFixed(2)} DKK
+                  </p>
+                </div>
+              </div>
+              {quickpayEnabled && unpaidInvoices[0] && (
+                <Button
+                  onClick={() => handlePayInvoice(unpaidInvoices[0].id)}
+                  disabled={payingInvoiceId !== null}
+                  className="w-full bg-amber-600 hover:bg-amber-700 text-white"
+                  size="sm"
+                >
+                  <CreditCard className="h-4 w-4 mr-2" />
+                  {payingInvoiceId === unpaidInvoices[0].id ? tx.creatingPayment : `${tx.payInvoice} — ${unpaidInvoices[0].totalAmount.toFixed(2)} DKK`}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* ═══ Prepaid Top-up ═══ */}
         {isActive && billingMode === "PREPAID" && sessionId && quickpayEnabled && (
           <TopUpSection sessionId={sessionId} token={token} locale={locale} />

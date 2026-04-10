@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { getSessionByToken, getUnitByPortalToken, getActiveSession, getLiveConsumption, getGlobalSettings, getGuestLaundryMachines } from "@/lib/actions";
+import { getSessionByToken, getUnitByPortalToken, getActiveSession, getGlobalSettings, getGuestLaundryMachines } from "@/lib/actions";
+import { prisma } from "@/lib/prisma";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,17 @@ export default async function GuestPortalPage({
       en: globalSettings[`practical_info_${typeKey}_en`] || null,
       de: globalSettings[`practical_info_${typeKey}_de`] || null,
     };
+
+    // If this is a fastligger, load invoices too
+    const isFastligger = session.unit.isLongTerm;
+    const invoices = isFastligger
+      ? await prisma.invoice.findMany({
+          where: { unitId: session.unitId },
+          orderBy: { periodEnd: "desc" },
+          take: 12,
+        })
+      : [];
+
     return (
       <GuestPortalClient
         token={token}
@@ -50,15 +62,24 @@ export default async function GuestPortalPage({
         paymentStatus={session.paymentStatus}
         billingMode={(session.billingMode as "PREPAID" | "POSTPAID") || "POSTPAID"}
         prepaidAmount={session.prepaidAmount}
-        isLongTerm={false}
-        invoices={[]}
+        isLongTerm={isFastligger}
+        invoices={invoices.map((inv) => ({
+          id: inv.id,
+          periodStart: inv.periodStart.toISOString(),
+          periodEnd: inv.periodEnd.toISOString(),
+          electricityCost: inv.electricityCost,
+          waterCost: inv.waterCost,
+          totalAmount: inv.totalAmount,
+          status: inv.status,
+          paymentToken: inv.paymentToken,
+        }))}
         quickpayEnabled={quickpayEnabled}
         unitType={session.unit.type}
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
         laundryCredit={session.laundryCredit ?? 0}
-        nextInvoiceDay={null}
+        nextInvoiceDay={isFastligger ? invoiceDay : null}
       />
     );
   }
