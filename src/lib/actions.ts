@@ -879,11 +879,20 @@ export async function createMonthlyInvoice(unitId: number) {
   let startWaterLiters: number | null = null;
   let endWaterLiters: number | null = null;
 
-  // Always look up active session as fallback for start readings
-  const prevInvoice = await prisma.invoice.findFirst({
-    where: { unitId },
-    orderBy: { periodEnd: "desc" },
+  // Find the latest invoice for this unit with a captured end reading — per meter.
+  // Ordering by `id` (not periodEnd) avoids ambiguity when multiple invoices share
+  // a period (e.g. two invoices created the same month).
+  const lastElecInvoice = await prisma.invoice.findFirst({
+    where: { unitId, endKwh: { not: null } },
+    orderBy: { id: "desc" },
   });
+  const lastWaterInvoice = await prisma.invoice.findFirst({
+    where: { unitId, endWaterLiters: { not: null } },
+    orderBy: { id: "desc" },
+  });
+  // Has ANY previous invoice been created for this unit? If yes we must NOT
+  // fall back to session.startKwh — that would re-bill already-invoiced kWh.
+  const hasAnyPrevInvoice = (await prisma.invoice.count({ where: { unitId } })) > 0;
 
   const activeSession = await prisma.session.findFirst({
     where: { unitId, status: "ACTIVE" },
@@ -892,11 +901,26 @@ export async function createMonthlyInvoice(unitId: number) {
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-    startKwh = prevInvoice?.endKwh ?? activeSession?.startKwh ?? endKwh;
+    if (lastElecInvoice?.endKwh != null) {
+      // Continue from where the last invoice ended
+      startKwh = lastElecInvoice.endKwh;
+    } else if (hasAnyPrevInvoice) {
+      // Prior invoices exist but none captured endKwh — don't re-bill from session start
+      startKwh = endKwh;
+    } else {
+      // First ever invoice for this unit — start from the session baseline
+      startKwh = activeSession?.startKwh ?? endKwh;
+    }
   }
   if (hw?.hasWater && hw.waterMeterEntityId) {
     endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
-    startWaterLiters = prevInvoice?.endWaterLiters ?? activeSession?.startWaterLiters ?? endWaterLiters;
+    if (lastWaterInvoice?.endWaterLiters != null) {
+      startWaterLiters = lastWaterInvoice.endWaterLiters;
+    } else if (hasAnyPrevInvoice) {
+      startWaterLiters = endWaterLiters;
+    } else {
+      startWaterLiters = activeSession?.startWaterLiters ?? endWaterLiters;
+    }
   }
 
   // Get effective electricity price for invoice
