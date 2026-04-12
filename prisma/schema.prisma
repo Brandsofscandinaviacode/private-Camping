@@ -86,11 +86,13 @@ model UnitHardware {
   hasElectricity           Boolean @default(false)
   electricitySwitchEntityId String?   // Relay: turns power on/off at check-in/out
   electricityMeterEntityId  String?   // Meter: measures total kWh consumption
+  electricityPowerEntityId  String?   // Instantaneous power draw in W (optional)
 
   // Heating — separate relay for electric radiators (no wifi thermostat)
   hasHeating              Boolean @default(false)
   heatingSwitchEntityId   String?   // Relay: controls heating independently
   heatingMeterEntityId    String?   // Optional: separate meter for heating
+  heatingPowerEntityId    String?   // Instantaneous power draw in W (optional)
   winterModeEnabled       Boolean @default(false)  // Keep heating on when vacant (protect cabin)
 
   // Water (LoRaWAN meter or similar)

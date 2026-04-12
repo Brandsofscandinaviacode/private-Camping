@@ -21,9 +21,11 @@ interface CabinHardwareFormProps {
     hasElectricity: boolean;
     electricitySwitchEntityId: string | null;
     electricityMeterEntityId: string | null;
+    electricityPowerEntityId: string | null;
     hasHeating: boolean;
     heatingSwitchEntityId: string | null;
     heatingMeterEntityId: string | null;
+    heatingPowerEntityId: string | null;
     winterModeEnabled: boolean;
     hasWater: boolean;
     waterMeterEntityId: string | null;
@@ -186,9 +188,11 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
     hasElectricity: hardware?.hasElectricity ?? false,
     electricitySwitchEntityId: hardware?.electricitySwitchEntityId ?? "",
     electricityMeterEntityId: hardware?.electricityMeterEntityId ?? "",
+    electricityPowerEntityId: hardware?.electricityPowerEntityId ?? "",
     hasHeating: hardware?.hasHeating ?? false,
     heatingSwitchEntityId: hardware?.heatingSwitchEntityId ?? "",
     heatingMeterEntityId: hardware?.heatingMeterEntityId ?? "",
+    heatingPowerEntityId: hardware?.heatingPowerEntityId ?? "",
     winterModeEnabled: hardware?.winterModeEnabled ?? false,
     hasWater: hardware?.hasWater ?? false,
     waterMeterEntityId: hardware?.waterMeterEntityId ?? "",
@@ -215,9 +219,11 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
         hasElectricity: values.hasElectricity,
         electricitySwitchEntityId: values.electricitySwitchEntityId || null,
         electricityMeterEntityId: values.electricityMeterEntityId || null,
+        electricityPowerEntityId: values.electricityPowerEntityId || null,
         hasHeating: values.hasHeating,
         heatingSwitchEntityId: values.heatingSwitchEntityId || null,
         heatingMeterEntityId: values.heatingMeterEntityId || null,
+        heatingPowerEntityId: values.heatingPowerEntityId || null,
         winterModeEnabled: values.winterModeEnabled,
         hasWater: values.hasWater,
         waterMeterEntityId: values.waterMeterEntityId || null,
@@ -302,6 +308,17 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                     placeholder="Vælg energi-sensor..."
                   />
                 </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Live effekt (W) — valgfri</Label>
+                  <EntityPicker
+                    value={values.electricityPowerEntityId}
+                    onChange={(v) => setValues((s) => ({ ...s, electricityPowerEntityId: v }))}
+                    entities={entities}
+                    loading={entitiesLoading}
+                    filterCategory={["sensor_power"]}
+                    placeholder="Vælg effekt-sensor (W)..."
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -339,6 +356,17 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
                     loading={entitiesLoading}
                     filterCategory={["sensor_energy"]}
                     placeholder="Vælg energi-sensor (valgfri)..."
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Live varmeeffekt (W) — valgfri</Label>
+                  <EntityPicker
+                    value={values.heatingPowerEntityId}
+                    onChange={(v) => setValues((s) => ({ ...s, heatingPowerEntityId: v }))}
+                    entities={entities}
+                    loading={entitiesLoading}
+                    filterCategory={["sensor_power"]}
+                    placeholder="Vælg effekt-sensor (W)..."
                   />
                 </div>
                 <div className="flex items-center justify-between pt-1">

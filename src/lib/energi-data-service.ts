@@ -227,6 +227,9 @@ export async function getAvailableDateRange(area: "DK1" | "DK2" = "DK1"): Promis
 }
 
 // Get the current hour's spot price in DKK/kWh
+// READ-ONLY from cache — never calls the API. The cron job refreshes
+// the cache, so this path stays fast and independent of upstream availability.
+// Falls back to the most recent cached price if the exact current hour is missing.
 export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<number | null> {
   try {
     const now = new Date();
@@ -235,29 +238,30 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
     const cph = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Copenhagen" }));
     const currentDanishHour = `${cph.getFullYear()}-${String(cph.getMonth() + 1).padStart(2, "0")}-${String(cph.getDate()).padStart(2, "0")}T${String(cph.getHours()).padStart(2, "0")}`;
 
-    // Check DB cache first (fast path — no API call)
+    // 1. Try exact match for the current Danish hour
     try {
-      const cached = await prisma.spotPriceCache.findFirst({
-        where: {
-          area,
-          hourDK: { startsWith: currentDanishHour },
-        },
+      const exact = await prisma.spotPriceCache.findFirst({
+        where: { area, hourDK: { startsWith: currentDanishHour } },
       });
-      if (cached) {
-        return cached.priceDKK / 1000; // DKK/MWh → DKK/kWh
-      }
+      if (exact) return exact.priceDKK / 1000; // DKK/MWh → DKK/kWh
     } catch {
-      // DB error — skip cache, try API
+      // DB error — fall through to latest
     }
 
-    // Cache miss — fetch from API (this also populates the cache)
-    const prices = await fetchSpotPrices(area);
-    const current = prices.find((p) => p.HourDK.slice(0, 13) === currentDanishHour);
+    // 2. Fall back to the most recent cached price (whatever hour it is)
+    try {
+      const latest = await prisma.spotPriceCache.findFirst({
+        where: { area },
+        orderBy: { hourDK: "desc" },
+      });
+      if (latest) return latest.priceDKK / 1000;
+    } catch {
+      // DB error — no cached data available
+    }
 
-    if (!current) return null;
-    return current.SpotPriceDKK / 1000;
+    return null;
   } catch (e) {
-    console.error("Energi Data Service fejl:", e);
+    console.error("getCurrentSpotPrice fejl:", e);
     return null;
   }
 }

@@ -14,6 +14,7 @@ import { CheckOutDialog } from "@/components/admin/check-out-dialog";
 import { CabinControls } from "@/components/admin/cabin-controls";
 import { CopyButton } from "@/components/admin/copy-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
+import { LivePowerDraw } from "@/components/admin/live-power-draw";
 
 export const dynamic = "force-dynamic";
 
@@ -130,6 +131,9 @@ export default async function UnitDetailPage({
               }}
               haStates={haStates}
             />
+          )}
+          {hw && (
+            <LivePowerDraw unitId={unit.id} />
           )}
           {!hw && (
             <div className="rounded-xl border border-border/60 bg-card shadow-sm p-8 text-center">

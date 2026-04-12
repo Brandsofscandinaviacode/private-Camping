@@ -8,7 +8,6 @@ import { CopyButton } from "@/components/admin/copy-button";
 import { SessionActions } from "@/components/admin/session-actions";
 import { SessionEditForm } from "@/components/admin/session-edit-form";
 import { LaundryCreditSection } from "@/components/admin/laundry-credit";
-import { LiveConsumption } from "@/components/admin/live-consumption";
 import { ConsumptionChart } from "@/components/admin/consumption-chart";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
@@ -328,8 +327,6 @@ export default async function BookingDetailPage({
               )}
             </div>
           </div>
-
-          {isActive && <LiveConsumption sessionId={session.id} />}
 
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">

@@ -106,7 +106,7 @@ export async function testEntityId(entityId: string): Promise<{ ok: boolean; val
 // ──────────────────────────────────────────────
 // HA Entity Browser
 // ──────────────────────────────────────────────
-export type EntityCategory = "switch" | "sensor_energy" | "sensor_water" | "sensor_other" | "climate" | "lock" | "other";
+export type EntityCategory = "switch" | "sensor_energy" | "sensor_power" | "sensor_water" | "sensor_other" | "climate" | "lock" | "other";
 
 export interface BrowsableEntity {
   entity_id: string;
@@ -138,10 +138,10 @@ export async function browseHAEntities(): Promise<BrowsableEntity[]> {
       } else if (e.domain === "sensor") {
         if (e.device_class === "energy" || e.unit_of_measurement === "kWh" || e.unit_of_measurement === "Wh") {
           category = "sensor_energy";
+        } else if (e.device_class === "power" || e.unit_of_measurement === "W" || e.unit_of_measurement === "kW") {
+          category = "sensor_power";
         } else if (e.device_class === "water" || e.unit_of_measurement === "L" || e.unit_of_measurement === "m³") {
           category = "sensor_water";
-        } else if (e.device_class === "power" || e.unit_of_measurement === "W") {
-          category = "sensor_energy";
         } else {
           category = "sensor_other";
         }
@@ -176,8 +176,10 @@ async function getUsedEntityMap(): Promise<Map<string, string>> {
     const ids = [
       hw.electricitySwitchEntityId,
       hw.electricityMeterEntityId,
+      hw.electricityPowerEntityId,
       hw.heatingSwitchEntityId,
       hw.heatingMeterEntityId,
+      hw.heatingPowerEntityId,
       hw.waterMeterEntityId,
       hw.climateEntityId,
       hw.lockEntityId,
@@ -279,9 +281,11 @@ export async function updateUnitHardware(
     hasElectricity: boolean;
     electricitySwitchEntityId: string | null;
     electricityMeterEntityId: string | null;
+    electricityPowerEntityId: string | null;
     hasHeating: boolean;
     heatingSwitchEntityId: string | null;
     heatingMeterEntityId: string | null;
+    heatingPowerEntityId: string | null;
     winterModeEnabled: boolean;
     hasWater: boolean;
     waterMeterEntityId: string | null;
@@ -675,6 +679,71 @@ export async function getLiveConsumption(sessionId: number) {
     pricePerKwh: effectiveElPrice,
     spotPrice,
     pricingMode: pricing.pricingMode,
+  };
+}
+
+// ──────────────────────────────────────────────
+// LIVE POWER DRAW — instantaneous W readings for a unit
+// Used by the unit detail page so the operator can see what is currently
+// being drawn on the main + heating circuits without opening a booking.
+// ──────────────────────────────────────────────
+export async function getLivePowerDraw(unitId: number): Promise<{
+  electricityW: number | null;
+  heatingW: number | null;
+  totalW: number | null;
+  hasElectricityPower: boolean;
+  hasHeatingPower: boolean;
+} | null> {
+  const unit = await prisma.unit.findUnique({
+    where: { id: unitId },
+    include: { hardware: true },
+  });
+  if (!unit?.hardware) return null;
+  const hw = unit.hardware;
+
+  const hasElectricityPower = !!(hw.hasElectricity && hw.electricityPowerEntityId);
+  const hasHeatingPower = !!(hw.hasHeating && hw.heatingPowerEntityId);
+  if (!hasElectricityPower && !hasHeatingPower) return null;
+
+  // Read the power sensors in parallel — each failure is isolated
+  const [rawElec, rawHeat] = await Promise.all([
+    hasElectricityPower
+      ? ha.getEntityNumericState(hw.electricityPowerEntityId!).then(async (v) => {
+          if (v === null) return null;
+          // Normalize to W — if the sensor reports kW, multiply by 1000
+          try {
+            const state = await ha.getEntityState(hw.electricityPowerEntityId!);
+            const unit = (state.attributes.unit_of_measurement as string | undefined)?.toLowerCase();
+            return unit === "kw" ? v * 1000 : v;
+          } catch {
+            return v;
+          }
+        })
+      : Promise.resolve(null),
+    hasHeatingPower
+      ? ha.getEntityNumericState(hw.heatingPowerEntityId!).then(async (v) => {
+          if (v === null) return null;
+          try {
+            const state = await ha.getEntityState(hw.heatingPowerEntityId!);
+            const unit = (state.attributes.unit_of_measurement as string | undefined)?.toLowerCase();
+            return unit === "kw" ? v * 1000 : v;
+          } catch {
+            return v;
+          }
+        })
+      : Promise.resolve(null),
+  ]);
+
+  const totalW = rawElec !== null || rawHeat !== null
+    ? (rawElec ?? 0) + (rawHeat ?? 0)
+    : null;
+
+  return {
+    electricityW: rawElec,
+    heatingW: rawHeat,
+    totalW,
+    hasElectricityPower,
+    hasHeatingPower,
   };
 }
 
