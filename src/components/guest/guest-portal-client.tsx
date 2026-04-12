@@ -250,8 +250,12 @@ export function GuestPortalClient({
   const hasPracticalInfo = !!(practicalInfo[locale] || practicalInfo.da);
   const hasInfoSection = hasPracticalInfo || !!siteMapUrl;
 
+  // Filter invoices to only this session's period (exclude previous tenants on same unit)
+  const sessionStartDate = new Date(checkInTime);
+  const relevantInvoices = invoices.filter(inv => new Date(inv.periodEnd) >= sessionStartDate);
+
   // Unpaid invoices for long-term
-  const unpaidInvoices = invoices.filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
+  const unpaidInvoices = relevantInvoices.filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
 
   // Next invoice date for long-term
   const nextInvoiceDateStr = (() => {
@@ -369,12 +373,27 @@ export function GuestPortalClient({
           // For long-term renters: monthly navigation through invoices + current period
           // For short-term: just show current live data (monthIndex always 0)
           const isCurrentMonth = monthIndex === 0;
-          const totalMonths = isLongTerm ? 1 + invoices.length : 1;
+
+          // Separate current-month invoices from past-month invoices
+          const now = new Date();
+          const isInCurrentMonth = (inv: InvoiceData) => {
+            const d = new Date(inv.periodStart);
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+          };
+          const currentMonthInvoices = relevantInvoices.filter(isInCurrentMonth);
+          const pastMonthInvoices = relevantInvoices.filter(inv => !isInCurrentMonth(inv));
+
+          // Sum PAID invoices for the current month → "Betalt" in current view
+          const currentMonthPaid = currentMonthInvoices
+            .filter(inv => inv.status === "PAID")
+            .reduce((sum, inv) => sum + inv.totalAmount, 0);
+
+          const totalMonths = isLongTerm ? 1 + pastMonthInvoices.length : 1;
           const canGoBack = isLongTerm && monthIndex < totalMonths - 1;
           const canGoForward = monthIndex > 0;
 
-          // Current invoice (null if viewing live data)
-          const viewedInvoice = isCurrentMonth ? null : invoices[monthIndex - 1];
+          // Current invoice for past-month view (null if viewing live data)
+          const viewedInvoice = isCurrentMonth ? null : pastMonthInvoices[monthIndex - 1];
 
           // Data for display
           const elecKwh = isCurrentMonth
@@ -395,7 +414,7 @@ export function GuestPortalClient({
             ? consumption?.totalLiveCost ?? null
             : viewedInvoice?.totalAmount ?? null;
           const paidAmount = isCurrentMonth
-            ? 0
+            ? currentMonthPaid
             : (viewedInvoice?.status === "PAID" ? viewedInvoice.totalAmount : 0);
 
           // Month label
@@ -748,14 +767,14 @@ export function GuestPortalClient({
         )}
 
         {/* ═══ Invoices for long-term renters — collapsible ═══ */}
-        {isLongTerm && invoices.length > 0 && (
+        {isLongTerm && relevantInvoices.length > 0 && (
           <Section
             icon={<Receipt className="h-4 w-4 text-primary" />}
-            title={`${tx.yourInvoices} (${invoices.length})`}
+            title={`${tx.yourInvoices} (${relevantInvoices.length})`}
             defaultOpen={unpaidInvoices.length > 0}
           >
             <div className="space-y-2">
-              {invoices.map((inv) => (
+              {relevantInvoices.map((inv) => (
                 <div key={inv.id} className="p-3 rounded-lg bg-muted/50 space-y-2">
                   <div className="flex items-center justify-between">
                     <div>
