@@ -2,6 +2,8 @@
 // API docs: https://www.energidataservice.dk/guides/api-guides
 // Prices are cached in the SpotPriceCache table — API is only called
 // when cached data is missing or stale (older than 6 hours).
+// All cache operations fail gracefully — if the table doesn't exist
+// or any DB error occurs, we fall back to direct API calls.
 
 import { prisma } from "./prisma";
 
@@ -16,61 +18,67 @@ interface EdsResponse {
 }
 
 // ──────────────────────────────────────────────
-// CACHE HELPERS
+// CACHE HELPERS (all fail silently on DB errors)
 // ──────────────────────────────────────────────
 
 const CACHE_MAX_AGE_MS = 6 * 3600_000; // 6 hours
 
 /** Check whether we have fresh cached data covering the requested range */
 async function isCacheFresh(area: string, startHour: string, endHour: string): Promise<boolean> {
-  const cutoff = new Date(Date.now() - CACHE_MAX_AGE_MS);
-
-  // Count how many cached records exist in the range that were fetched recently
-  const cached = await prisma.spotPriceCache.count({
-    where: {
-      area,
-      hourDK: { gte: startHour, lte: endHour },
-      fetchedAt: { gte: cutoff },
-    },
-  });
-
-  // If we have at least 1 fresh record, consider cache usable.
-  // The API sometimes returns fewer hours (future hours not yet published),
-  // so we can't require an exact count.
-  return cached > 0;
+  try {
+    const cutoff = new Date(Date.now() - CACHE_MAX_AGE_MS);
+    const cached = await prisma.spotPriceCache.count({
+      where: {
+        area,
+        hourDK: { gte: startHour, lte: endHour },
+        fetchedAt: { gte: cutoff },
+      },
+    });
+    return cached > 0;
+  } catch {
+    return false; // DB error → treat as cache miss
+  }
 }
 
 /** Upsert API results into the cache */
 async function upsertPrices(area: string, records: SpotPrice[]) {
   const now = new Date();
   for (const p of records) {
-    await prisma.spotPriceCache.upsert({
-      where: { area_hourDK: { area, hourDK: p.HourDK } },
-      create: {
-        area,
-        hourDK: p.HourDK,
-        priceDKK: p.SpotPriceDKK,
-        priceEUR: p.SpotPriceEUR,
-        fetchedAt: now,
-      },
-      update: {
-        priceDKK: p.SpotPriceDKK,
-        priceEUR: p.SpotPriceEUR,
-        fetchedAt: now,
-      },
-    });
+    try {
+      await prisma.spotPriceCache.upsert({
+        where: { area_hourDK: { area, hourDK: p.HourDK } },
+        create: {
+          area,
+          hourDK: p.HourDK,
+          priceDKK: p.SpotPriceDKK,
+          priceEUR: p.SpotPriceEUR,
+          fetchedAt: now,
+        },
+        update: {
+          priceDKK: p.SpotPriceDKK,
+          priceEUR: p.SpotPriceEUR,
+          fetchedAt: now,
+        },
+      });
+    } catch {
+      // DB error — skip caching, non-critical
+    }
   }
 }
 
 /** Read cached prices for a given range */
 async function getCachedPrices(area: string, startHour: string, endHour: string) {
-  return prisma.spotPriceCache.findMany({
-    where: {
-      area,
-      hourDK: { gte: startHour, lte: endHour },
-    },
-    orderBy: { hourDK: "asc" },
-  });
+  try {
+    return await prisma.spotPriceCache.findMany({
+      where: {
+        area,
+        hourDK: { gte: startHour, lte: endHour },
+      },
+      orderBy: { hourDK: "asc" },
+    });
+  } catch {
+    return []; // DB error → no cached data
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -104,11 +112,13 @@ export async function fetchSpotPrices(area: "DK1" | "DK2" = "DK1"): Promise<Spot
   const fresh = await isCacheFresh(area, startStr, endStr);
   if (fresh) {
     const cached = await getCachedPrices(area, startStr, endStr);
-    return cached.map((c) => ({
-      HourDK: c.hourDK,
-      SpotPriceDKK: c.priceDKK,
-      SpotPriceEUR: c.priceEUR,
-    }));
+    if (cached.length > 0) {
+      return cached.map((c) => ({
+        HourDK: c.hourDK,
+        SpotPriceDKK: c.priceDKK,
+        SpotPriceEUR: c.priceEUR,
+      }));
+    }
   }
 
   // Cache miss or stale — fetch from API and cache
@@ -145,10 +155,12 @@ export async function fetchSpotPricesForDate(
   const fresh = await isCacheFresh(area, startStr, endStr);
   if (fresh) {
     const cached = await getCachedPrices(area, startStr, endStr);
-    return cached.map((c) => ({
-      hour: c.hourDK,
-      pricePerKwh: c.priceDKK / 1000,
-    }));
+    if (cached.length > 0) {
+      return cached.map((c) => ({
+        hour: c.hourDK,
+        pricePerKwh: c.priceDKK / 1000,
+      }));
+    }
   }
 
   // Fetch from API and cache
@@ -175,10 +187,15 @@ export async function fetchSpotPricesForDate(
 export async function getAvailableDateRange(area: "DK1" | "DK2" = "DK1"): Promise<{ earliest: string; latest: string }> {
   try {
     // Check cache for the latest record first
-    const latestCached = await prisma.spotPriceCache.findFirst({
-      where: { area },
-      orderBy: { hourDK: "desc" },
-    });
+    let latestCached: { hourDK: string; fetchedAt: Date } | null = null;
+    try {
+      latestCached = await prisma.spotPriceCache.findFirst({
+        where: { area },
+        orderBy: { hourDK: "desc" },
+      });
+    } catch {
+      // DB error — skip cache
+    }
 
     // If we have a fresh cache record, use it
     if (latestCached && (Date.now() - latestCached.fetchedAt.getTime()) < CACHE_MAX_AGE_MS) {
@@ -195,10 +212,15 @@ export async function getAvailableDateRange(area: "DK1" | "DK2" = "DK1"): Promis
     return { earliest: "2020-01-01", latest: latestDate };
   } catch {
     // Fall back to cache or today
-    const latestCached = await prisma.spotPriceCache.findFirst({
-      where: { area },
-      orderBy: { hourDK: "desc" },
-    });
+    let latestCached: { hourDK: string } | null = null;
+    try {
+      latestCached = await prisma.spotPriceCache.findFirst({
+        where: { area },
+        orderBy: { hourDK: "desc" },
+      });
+    } catch {
+      // DB error — skip cache
+    }
     const latestDate = latestCached ? latestCached.hourDK.slice(0, 10) : new Date().toISOString().slice(0, 10);
     return { earliest: "2020-01-01", latest: latestDate };
   }
@@ -214,15 +236,18 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
     const currentDanishHour = `${cph.getFullYear()}-${String(cph.getMonth() + 1).padStart(2, "0")}-${String(cph.getDate()).padStart(2, "0")}T${String(cph.getHours()).padStart(2, "0")}`;
 
     // Check DB cache first (fast path — no API call)
-    const cached = await prisma.spotPriceCache.findFirst({
-      where: {
-        area,
-        hourDK: { startsWith: currentDanishHour },
-      },
-    });
-
-    if (cached) {
-      return cached.priceDKK / 1000; // DKK/MWh → DKK/kWh
+    try {
+      const cached = await prisma.spotPriceCache.findFirst({
+        where: {
+          area,
+          hourDK: { startsWith: currentDanishHour },
+        },
+      });
+      if (cached) {
+        return cached.priceDKK / 1000; // DKK/MWh → DKK/kWh
+      }
+    } catch {
+      // DB error — skip cache, try API
     }
 
     // Cache miss — fetch from API (this also populates the cache)
@@ -277,11 +302,15 @@ export async function refreshSpotPriceCache(area: "DK1" | "DK2" = "DK1"): Promis
 
 /** Clean up old cache entries (older than 7 days) */
 export async function cleanOldSpotPrices(): Promise<number> {
-  const cutoff = new Date(Date.now() - 7 * 24 * 3600_000);
-  const result = await prisma.spotPriceCache.deleteMany({
-    where: { hourDK: { lt: cutoff.toISOString().slice(0, 13) + ":00" } },
-  });
-  return result.count;
+  try {
+    const cutoff = new Date(Date.now() - 7 * 24 * 3600_000);
+    const result = await prisma.spotPriceCache.deleteMany({
+      where: { hourDK: { lt: cutoff.toISOString().slice(0, 13) + ":00" } },
+    });
+    return result.count;
+  } catch {
+    return 0;
+  }
 }
 
 // ──────────────────────────────────────────────
