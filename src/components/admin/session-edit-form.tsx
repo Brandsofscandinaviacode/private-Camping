@@ -17,6 +17,9 @@ interface SessionEditFormProps {
   expectedCheckOut: string;
   startKwh: number | null;
   endKwh: number | null;
+  startHeatingKwh: number | null;
+  endHeatingKwh: number | null;
+  hasHeatingMeter: boolean;
   startWaterLiters: number | null;
   endWaterLiters: number | null;
   isActive: boolean;
@@ -32,6 +35,9 @@ export function SessionEditForm({
   expectedCheckOut: initialCheckOut,
   startKwh: initialStartKwh,
   endKwh: initialEndKwh,
+  startHeatingKwh: initialStartHeatingKwh,
+  endHeatingKwh: initialEndHeatingKwh,
+  hasHeatingMeter,
   startWaterLiters: initialStartWater,
   endWaterLiters: initialEndWater,
   isActive,
@@ -49,6 +55,8 @@ export function SessionEditForm({
     expectedCheckOut: initialCheckOut,
     startKwh: initialStartKwh !== null ? String(initialStartKwh) : "",
     endKwh: initialEndKwh !== null ? String(initialEndKwh) : "",
+    startHeatingKwh: initialStartHeatingKwh !== null ? String(initialStartHeatingKwh) : "",
+    endHeatingKwh: initialEndHeatingKwh !== null ? String(initialEndHeatingKwh) : "",
     startWaterLiters: initialStartWater !== null ? String(initialStartWater) : "",
     endWaterLiters: initialEndWater !== null ? String(initialEndWater) : "",
   });
@@ -64,6 +72,8 @@ export function SessionEditForm({
         expectedCheckOut: values.expectedCheckOut,
         startKwh: values.startKwh !== "" ? parseFloat(values.startKwh) : null,
         endKwh: values.endKwh !== "" ? parseFloat(values.endKwh) : null,
+        startHeatingKwh: values.startHeatingKwh !== "" ? parseFloat(values.startHeatingKwh) : null,
+        endHeatingKwh: values.endHeatingKwh !== "" ? parseFloat(values.endHeatingKwh) : null,
         startWaterLiters: values.startWaterLiters !== "" ? parseFloat(values.startWaterLiters) : null,
         endWaterLiters: values.endWaterLiters !== "" ? parseFloat(values.endWaterLiters) : null,
       });
@@ -161,7 +171,7 @@ export function SessionEditForm({
           <p className="text-xs font-medium text-muted-foreground mb-3">Forbrug (manuel redigering)</p>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs text-muted-foreground">El start (kWh)</Label>
+              <Label className="text-xs text-muted-foreground">{hasHeatingMeter ? "Hovedmåler start (kWh)" : "El start (kWh)"}</Label>
               <Input
                 type="number"
                 step="0.01"
@@ -172,7 +182,7 @@ export function SessionEditForm({
               />
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">El slut (kWh)</Label>
+              <Label className="text-xs text-muted-foreground">{hasHeatingMeter ? "Hovedmåler slut (kWh)" : "El slut (kWh)"}</Label>
               <Input
                 type="number"
                 step="0.01"
@@ -183,6 +193,32 @@ export function SessionEditForm({
               />
             </div>
           </div>
+          {hasHeatingMeter && (
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div>
+                <Label className="text-xs text-muted-foreground">Varme start (kWh)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={values.startHeatingKwh}
+                  onChange={(e) => h("startHeatingKwh", e.target.value)}
+                  placeholder="—"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Varme slut (kWh)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={values.endHeatingKwh}
+                  onChange={(e) => h("endHeatingKwh", e.target.value)}
+                  placeholder={isActive ? "Aktiv" : "—"}
+                  className="mt-1"
+                />
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 mt-2">
             <div>
               <Label className="text-xs text-muted-foreground">Vand start (L)</Label>

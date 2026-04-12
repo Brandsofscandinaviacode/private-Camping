@@ -402,10 +402,14 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   const pricing = await getPricing();
 
   let startKwh: number | null = null;
+  let startHeatingKwh: number | null = null;
   let startWaterLiters: number | null = null;
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     startKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+  }
+  if (hw?.hasHeating && hw.heatingMeterEntityId) {
+    startHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
   }
   if (hw?.hasWater && hw.waterMeterEntityId) {
     startWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
@@ -430,7 +434,7 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startWaterLiters, status: "ACTIVE" },
+    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startHeatingKwh, startWaterLiters, status: "ACTIVE" },
   });
 
   // Update unit status; for long-term units also store tenant info for invoicing/portal
@@ -496,10 +500,14 @@ export async function checkOut(sessionId: number) {
   }
 
   let endKwh: number | null = null;
+  let endHeatingKwh: number | null = null;
   let endWaterLiters: number | null = null;
 
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
     endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+  }
+  if (hw?.hasHeating && hw.heatingMeterEntityId) {
+    endHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
   }
   if (hw?.hasWater && hw.waterMeterEntityId) {
     endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
@@ -508,8 +516,13 @@ export async function checkOut(sessionId: number) {
   let totalElectricityCost: number | null = null;
   let totalWaterCost: number | null = null;
 
+  // Combine main electricity + heating kWh into a single electricity cost
   if (endKwh !== null && session.startKwh !== null) {
     totalElectricityCost = Math.max(0, endKwh - session.startKwh) * effectiveElPrice;
+  }
+  if (endHeatingKwh !== null && session.startHeatingKwh !== null) {
+    const heatingCost = Math.max(0, endHeatingKwh - session.startHeatingKwh) * effectiveElPrice;
+    totalElectricityCost = (totalElectricityCost ?? 0) + heatingCost;
   }
   if (endWaterLiters !== null && session.startWaterLiters !== null) {
     totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * pricing.pricePerLiterWater;
@@ -544,6 +557,7 @@ export async function checkOut(sessionId: number) {
     status: "COMPLETED",
     checkOutTime: new Date(),
     endKwh,
+    endHeatingKwh,
     endWaterLiters,
     totalElectricityCost,
     totalWaterCost,
@@ -592,6 +606,9 @@ export async function getLiveConsumption(sessionId: number) {
   }
 
   let currentKwh: number | null = null;
+  let usedKwhMain: number | null = null;
+  let currentHeatingKwh: number | null = null;
+  let usedKwhHeating: number | null = null;
   let usedKwh: number | null = null;
   let electricityCost: number | null = null;
   let currentWaterLiters: number | null = null;
@@ -609,13 +626,28 @@ export async function getLiveConsumption(sessionId: number) {
     if (currentKwh !== null && session.startKwh === null) {
       // Auto-capture baseline if it was missing at check-in
       await prisma.session.update({ where: { id: sessionId }, data: { startKwh: currentKwh } });
-      usedKwh = 0;
-      electricityCost = 0;
+      usedKwhMain = 0;
     } else if (currentKwh !== null && session.startKwh !== null) {
       const baselineKwh = latestPaidInvoice?.endKwh ?? session.startKwh;
-      usedKwh = Math.max(0, currentKwh - baselineKwh);
-      electricityCost = usedKwh * effectiveElPrice;
+      usedKwhMain = Math.max(0, currentKwh - baselineKwh);
     }
+  }
+
+  if (hw?.hasHeating && hw.heatingMeterEntityId) {
+    currentHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
+    if (currentHeatingKwh !== null && session.startHeatingKwh === null) {
+      await prisma.session.update({ where: { id: sessionId }, data: { startHeatingKwh: currentHeatingKwh } });
+      usedKwhHeating = 0;
+    } else if (currentHeatingKwh !== null && session.startHeatingKwh !== null) {
+      const baselineHeating = latestPaidInvoice?.endHeatingKwh ?? session.startHeatingKwh;
+      usedKwhHeating = Math.max(0, currentHeatingKwh - baselineHeating);
+    }
+  }
+
+  // Combined kWh + cost — used for guest portal and overall billing
+  if (usedKwhMain !== null || usedKwhHeating !== null) {
+    usedKwh = (usedKwhMain ?? 0) + (usedKwhHeating ?? 0);
+    electricityCost = usedKwh * effectiveElPrice;
   }
 
   if (hw?.hasWater && hw.waterMeterEntityId) {
@@ -634,6 +666,9 @@ export async function getLiveConsumption(sessionId: number) {
 
   return {
     currentKwh, usedKwh, electricityCost,
+    // Separate breakdown for admin UI — guest portal uses the combined `usedKwh`
+    usedKwhMain, usedKwhHeating, currentHeatingKwh,
+    hasHeatingMeter: !!(hw?.hasHeating && hw.heatingMeterEntityId),
     currentWaterLiters, usedWaterLiters, waterCost,
     totalLiveCost: (electricityCost ?? 0) + (waterCost ?? 0),
     currency: pricing.currency,
@@ -876,6 +911,8 @@ export async function createMonthlyInvoice(unitId: number) {
 
   let startKwh: number | null = null;
   let endKwh: number | null = null;
+  let startHeatingKwh: number | null = null;
+  let endHeatingKwh: number | null = null;
   let startWaterLiters: number | null = null;
   let endWaterLiters: number | null = null;
 
@@ -884,6 +921,10 @@ export async function createMonthlyInvoice(unitId: number) {
   // a period (e.g. two invoices created the same month).
   const lastElecInvoice = await prisma.invoice.findFirst({
     where: { unitId, endKwh: { not: null } },
+    orderBy: { id: "desc" },
+  });
+  const lastHeatingInvoice = await prisma.invoice.findFirst({
+    where: { unitId, endHeatingKwh: { not: null } },
     orderBy: { id: "desc" },
   });
   const lastWaterInvoice = await prisma.invoice.findFirst({
@@ -912,6 +953,16 @@ export async function createMonthlyInvoice(unitId: number) {
       startKwh = activeSession?.startKwh ?? endKwh;
     }
   }
+  if (hw?.hasHeating && hw.heatingMeterEntityId) {
+    endHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
+    if (lastHeatingInvoice?.endHeatingKwh != null) {
+      startHeatingKwh = lastHeatingInvoice.endHeatingKwh;
+    } else if (hasAnyPrevInvoice) {
+      startHeatingKwh = endHeatingKwh;
+    } else {
+      startHeatingKwh = activeSession?.startHeatingKwh ?? endHeatingKwh;
+    }
+  }
   if (hw?.hasWater && hw.waterMeterEntityId) {
     endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
     if (lastWaterInvoice?.endWaterLiters != null) {
@@ -932,8 +983,11 @@ export async function createMonthlyInvoice(unitId: number) {
     // Fallback to fixed price
   }
 
-  const electricityCost = (endKwh !== null && startKwh !== null)
+  const mainElecCost = (endKwh !== null && startKwh !== null)
     ? Math.max(0, endKwh - startKwh) * effectiveElPrice : 0;
+  const heatingElecCost = (endHeatingKwh !== null && startHeatingKwh !== null)
+    ? Math.max(0, endHeatingKwh - startHeatingKwh) * effectiveElPrice : 0;
+  const electricityCost = mainElecCost + heatingElecCost;
   const waterCost = (endWaterLiters !== null && startWaterLiters !== null)
     ? Math.max(0, endWaterLiters - startWaterLiters) * pricing.pricePerLiterWater : 0;
 
@@ -944,6 +998,8 @@ export async function createMonthlyInvoice(unitId: number) {
       periodEnd,
       startKwh,
       endKwh,
+      startHeatingKwh,
+      endHeatingKwh,
       startWaterLiters,
       endWaterLiters,
       electricityCost,
@@ -1090,6 +1146,12 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
       const currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
       if (currentKwh !== null) {
         currentCost += Math.max(0, currentKwh - session.startKwh) * effectiveElPrice;
+      }
+    }
+    if (hw.hasHeating && hw.heatingMeterEntityId && session.startHeatingKwh != null) {
+      const currentHeating = await ha.getEntityNumericState(hw.heatingMeterEntityId);
+      if (currentHeating !== null) {
+        currentCost += Math.max(0, currentHeating - session.startHeatingKwh) * effectiveElPrice;
       }
     }
     if (hw.hasWater && hw.waterMeterEntityId && session.startWaterLiters != null) {
@@ -1252,6 +1314,8 @@ export async function updateSessionDetails(
     expectedCheckOut?: string;
     startKwh?: number | null;
     endKwh?: number | null;
+    startHeatingKwh?: number | null;
+    endHeatingKwh?: number | null;
     startWaterLiters?: number | null;
     endWaterLiters?: number | null;
   }
@@ -1265,22 +1329,37 @@ export async function updateSessionDetails(
   if (data.expectedCheckOut !== undefined) updateData.expectedCheckOut = data.expectedCheckOut ? new Date(data.expectedCheckOut) : null;
   if (data.startKwh !== undefined) updateData.startKwh = data.startKwh;
   if (data.endKwh !== undefined) updateData.endKwh = data.endKwh;
+  if (data.startHeatingKwh !== undefined) updateData.startHeatingKwh = data.startHeatingKwh;
+  if (data.endHeatingKwh !== undefined) updateData.endHeatingKwh = data.endHeatingKwh;
   if (data.startWaterLiters !== undefined) updateData.startWaterLiters = data.startWaterLiters;
   if (data.endWaterLiters !== undefined) updateData.endWaterLiters = data.endWaterLiters;
 
   // If consumption was manually edited, recalculate costs
-  if (data.startKwh !== undefined || data.endKwh !== undefined || data.startWaterLiters !== undefined || data.endWaterLiters !== undefined) {
+  if (data.startKwh !== undefined || data.endKwh !== undefined || data.startHeatingKwh !== undefined || data.endHeatingKwh !== undefined || data.startWaterLiters !== undefined || data.endWaterLiters !== undefined) {
     const session = await prisma.session.findUnique({ where: { id: sessionId } });
     if (session) {
       const pricing = await getPricing();
       const startKwh = data.startKwh !== undefined ? data.startKwh : session.startKwh;
       const endKwh = data.endKwh !== undefined ? data.endKwh : session.endKwh;
+      const startHeatingKwh = data.startHeatingKwh !== undefined ? data.startHeatingKwh : session.startHeatingKwh;
+      const endHeatingKwh = data.endHeatingKwh !== undefined ? data.endHeatingKwh : session.endHeatingKwh;
       const startWater = data.startWaterLiters !== undefined ? data.startWaterLiters : session.startWaterLiters;
       const endWater = data.endWaterLiters !== undefined ? data.endWaterLiters : session.endWaterLiters;
 
+      let elCostCalc = 0;
+      let hasElCalc = false;
       if (startKwh != null && endKwh != null) {
         const usedKwh = Math.max(0, endKwh - startKwh);
-        updateData.totalElectricityCost = parseFloat((usedKwh * pricing.pricePerKwh).toFixed(2));
+        elCostCalc += usedKwh * pricing.pricePerKwh;
+        hasElCalc = true;
+      }
+      if (startHeatingKwh != null && endHeatingKwh != null) {
+        const usedHeating = Math.max(0, endHeatingKwh - startHeatingKwh);
+        elCostCalc += usedHeating * pricing.pricePerKwh;
+        hasElCalc = true;
+      }
+      if (hasElCalc) {
+        updateData.totalElectricityCost = parseFloat(elCostCalc.toFixed(2));
       }
       if (startWater != null && endWater != null) {
         const usedWater = Math.max(0, endWater - startWater);

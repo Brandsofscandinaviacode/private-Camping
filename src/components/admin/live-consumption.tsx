@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Zap, Droplets } from "lucide-react";
+import { Zap, Droplets, Flame } from "lucide-react";
 import { getLiveConsumption } from "@/lib/actions";
 
 interface LiveConsumptionProps {
@@ -11,6 +11,9 @@ interface LiveConsumptionProps {
 
 interface ConsumptionData {
   usedKwh: number | null;
+  usedKwhMain: number | null;
+  usedKwhHeating: number | null;
+  hasHeatingMeter: boolean;
   electricityCost: number | null;
   usedWaterLiters: number | null;
   waterCost: number | null;
@@ -77,16 +80,48 @@ export function LiveConsumption({
         <h2 className="font-semibold">Live forbrug</h2>
       </div>
       <div className="p-5 space-y-3">
-        {data.usedKwh !== null && (
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2.5">
-              <Zap className="h-4 w-4 text-yellow-500" />
-              <span>El: {formatNum(data.usedKwh)} kWh</span>
+        {data.hasHeatingMeter ? (
+          <>
+            {data.usedKwhMain !== null && (
+              <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2.5">
+                  <Zap className="h-4 w-4 text-yellow-500" />
+                  <span>Hovedmåler: {formatNum(data.usedKwhMain)} kWh</span>
+                </div>
+              </div>
+            )}
+            {data.usedKwhHeating !== null && (
+              <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2.5">
+                  <Flame className="h-4 w-4 text-orange-500" />
+                  <span>Varme: {formatNum(data.usedKwhHeating)} kWh</span>
+                </div>
+              </div>
+            )}
+            {data.usedKwh !== null && (
+              <div className="flex items-center justify-between text-sm pt-1 border-t border-dashed border-border/60">
+                <span className="text-muted-foreground">Samlet el</span>
+                <div className="flex items-center gap-3">
+                  <span className="tabular-nums">{formatNum(data.usedKwh)} kWh</span>
+                  <span className="tabular-nums font-medium">
+                    {formatNum(data.electricityCost)} {data.currency}
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          data.usedKwh !== null && (
+            <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2.5">
+                <Zap className="h-4 w-4 text-yellow-500" />
+                <span>El: {formatNum(data.usedKwh)} kWh</span>
+              </div>
+              <span className="tabular-nums font-medium">
+                {formatNum(data.electricityCost)} {data.currency}
+              </span>
             </div>
-            <span className="tabular-nums font-medium">
-              {formatNum(data.electricityCost)} {data.currency}
-            </span>
-          </div>
+          )
         )}
 
         {data.usedWaterLiters !== null && (

@@ -147,10 +147,12 @@ model Session {
 
   // Baseline readings captured from HA
   startKwh         Float?
+  startHeatingKwh  Float?
   startWaterLiters Float?
 
   // End readings captured at check-out / period close
   endKwh         Float?
+  endHeatingKwh  Float?
   endWaterLiters Float?
 
   // Calculated totals
@@ -197,6 +199,8 @@ model Invoice {
   // Meter readings for this period
   startKwh         Float?
   endKwh           Float?
+  startHeatingKwh  Float?
+  endHeatingKwh    Float?
   startWaterLiters Float?
   endWaterLiters   Float?
 

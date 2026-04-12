@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Zap, Droplets, Calendar, Mail, Hash, Phone, Receipt } from "lucide-react";
+import { ArrowLeft, Zap, Droplets, Flame, Calendar, Mail, Hash, Phone, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { getSessionById, getPricing } from "@/lib/actions";
@@ -34,8 +34,13 @@ export default async function BookingDetailPage({
   const isUnpaid = session.status === "COMPLETED" && session.paymentStatus === "UNPAID";
   const isPaid = session.paymentStatus === "PAID";
 
-  const usedKwh = (session.endKwh != null && session.startKwh != null)
+  const usedKwhMain = (session.endKwh != null && session.startKwh != null)
     ? Math.max(0, session.endKwh - session.startKwh) : null;
+  const usedKwhHeating = (session.endHeatingKwh != null && session.startHeatingKwh != null)
+    ? Math.max(0, session.endHeatingKwh - session.startHeatingKwh) : null;
+  const usedKwh = (usedKwhMain !== null || usedKwhHeating !== null)
+    ? (usedKwhMain ?? 0) + (usedKwhHeating ?? 0) : null;
+  const hasHeatingMeter = !!(session.unit.hardware?.hasHeating && session.unit.hardware?.heatingMeterEntityId);
   const usedWater = (session.endWaterLiters != null && session.startWaterLiters != null)
     ? Math.max(0, session.endWaterLiters - session.startWaterLiters) : null;
 
@@ -166,6 +171,9 @@ export default async function BookingDetailPage({
             expectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : ""}
             startKwh={session.startKwh}
             endKwh={session.endKwh}
+            startHeatingKwh={session.startHeatingKwh}
+            endHeatingKwh={session.endHeatingKwh}
+            hasHeatingMeter={hasHeatingMeter}
             startWaterLiters={session.startWaterLiters}
             endWaterLiters={session.endWaterLiters}
             isActive={isActive}
@@ -179,13 +187,13 @@ export default async function BookingDetailPage({
               <h2 className="font-semibold">Forbrugsfordeling</h2>
             </div>
             <div className="p-5 space-y-4">
-              {/* Electricity */}
+              {/* Electricity — main meter */}
               <div className="rounded-lg bg-muted/50 p-4">
                 <div className="flex items-center gap-2.5 mb-3">
                   <div className="h-8 w-8 rounded-lg bg-yellow-50 flex items-center justify-center">
                     <Zap className="h-4 w-4 text-yellow-500" />
                   </div>
-                  <span className="font-medium">Elektricitet</span>
+                  <span className="font-medium">{hasHeatingMeter ? "Elektricitet (hovedmåler)" : "Elektricitet"}</span>
                 </div>
                 {session.startKwh != null ? (
                   <div className="space-y-1.5 text-sm">
@@ -201,12 +209,8 @@ export default async function BookingDetailPage({
                         </div>
                         <Separator />
                         <div className="flex justify-between font-medium">
-                          <span>{usedKwh?.toFixed(2)} kWh</span>
-                          <span>{session.totalElectricityCost?.toFixed(2)} DKK</span>
+                          <span>{usedKwhMain?.toFixed(2)} kWh</span>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          {pricing.pricePerKwh.toFixed(2)} DKK/kWh
-                        </p>
                       </>
                     )}
                     {session.endKwh == null && (
@@ -217,6 +221,64 @@ export default async function BookingDetailPage({
                   <p className="text-sm text-muted-foreground">Ingen elmåler</p>
                 )}
               </div>
+
+              {/* Heating — separate meter */}
+              {hasHeatingMeter && (
+                <div className="rounded-lg bg-muted/50 p-4">
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <div className="h-8 w-8 rounded-lg bg-orange-50 flex items-center justify-center">
+                      <Flame className="h-4 w-4 text-orange-500" />
+                    </div>
+                    <span className="font-medium">Varme</span>
+                  </div>
+                  {session.startHeatingKwh != null ? (
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Start</span>
+                        <span>{session.startHeatingKwh.toFixed(2)} kWh</span>
+                      </div>
+                      {session.endHeatingKwh != null && (
+                        <>
+                          <div className="flex justify-between text-muted-foreground">
+                            <span>Slut</span>
+                            <span>{session.endHeatingKwh.toFixed(2)} kWh</span>
+                          </div>
+                          <Separator />
+                          <div className="flex justify-between font-medium">
+                            <span>{usedKwhHeating?.toFixed(2)} kWh</span>
+                          </div>
+                        </>
+                      )}
+                      {session.endHeatingKwh == null && (
+                        <p className="text-xs text-muted-foreground">Måling aktiv</p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Ingen varmemåler</p>
+                  )}
+                </div>
+              )}
+
+              {/* Combined electricity total */}
+              {usedKwh != null && session.totalElectricityCost != null && (
+                <div className="rounded-lg bg-muted/50 p-4">
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <div className="h-8 w-8 rounded-lg bg-yellow-100 flex items-center justify-center">
+                      <Zap className="h-4 w-4 text-yellow-600" />
+                    </div>
+                    <span className="font-medium">Samlet el-forbrug</span>
+                  </div>
+                  <div className="space-y-1.5 text-sm">
+                    <div className="flex justify-between font-medium">
+                      <span>{usedKwh.toFixed(2)} kWh</span>
+                      <span>{session.totalElectricityCost.toFixed(2)} DKK</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {pricing.pricePerKwh.toFixed(2)} DKK/kWh
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Water */}
               <div className="rounded-lg bg-muted/50 p-4">
