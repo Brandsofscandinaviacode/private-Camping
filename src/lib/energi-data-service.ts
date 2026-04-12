@@ -131,7 +131,12 @@ export async function getEffectiveElPrice(
   const spotPrice = await getCurrentSpotPrice(area);
 
   if (spotPrice === null) {
-    // Fallback to fixed price if spot price unavailable
+    // Spot price unavailable — use mode-appropriate fallback
+    if (mode === "spot") {
+      // In spot mode, the surcharge alone is the minimum the guest should pay
+      return { pricePerKwh: surcharge, spotPrice: null, mode };
+    }
+    // In minimum mode, use the fixed price as fallback
     return { pricePerKwh: fixedPrice, spotPrice: null, mode };
   }
 

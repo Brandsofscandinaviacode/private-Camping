@@ -16,6 +16,9 @@ interface ConsumptionData {
   waterCost: number | null;
   totalLiveCost: number | null;
   currency: string;
+  pricePerKwh?: number;
+  spotPrice?: number | null;
+  pricingMode?: string;
 }
 
 export function LiveConsumption({
@@ -107,6 +110,14 @@ export function LiveConsumption({
 
         <p className="text-xs text-muted-foreground">
           Opdateres hvert {refreshInterval}s
+          {data.pricePerKwh != null && (
+            <span className="ml-1">
+              · {data.pricePerKwh.toFixed(2)} DKK/kWh
+              {data.pricingMode && data.pricingMode !== "fixed" && (
+                <span> ({data.pricingMode}{data.spotPrice != null ? `, spot: ${data.spotPrice.toFixed(2)}` : ", spot: n/a"})</span>
+              )}
+            </span>
+          )}
         </p>
       </div>
     </div>
