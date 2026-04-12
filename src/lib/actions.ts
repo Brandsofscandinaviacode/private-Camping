@@ -1059,6 +1059,59 @@ export async function checkOverdueInvoices(): Promise<{ markedOverdue: number; p
   return { markedOverdue, powerOff };
 }
 
+// ──────────────────────────────────────────────
+// PREPAID AUTO POWER-OFF — when balance depleted
+// ──────────────────────────────────────────────
+export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
+  const settings = await getGlobalSettings();
+  if (settings.prepaid_auto_power_off !== "true") return { powerOff: 0 };
+
+  const pricing = await getPricing();
+  let effectiveElPrice = pricing.pricePerKwh;
+  try {
+    const effective = await getEffectiveElPricing();
+    effectiveElPrice = effective.pricePerKwh;
+  } catch {}
+
+  // Find all active PREPAID sessions
+  const sessions = await prisma.session.findMany({
+    where: { status: "ACTIVE", billingMode: "PREPAID" },
+    include: { unit: { include: { hardware: true } } },
+  });
+
+  let powerOff = 0;
+  for (const session of sessions) {
+    const hw = session.unit.hardware;
+    if (!session.prepaidAmount || !hw?.electricitySwitchEntityId) continue;
+    const switchEntity = hw.electricitySwitchEntityId;
+
+    let currentCost = 0;
+    if (hw.hasElectricity && hw.electricityMeterEntityId && session.startKwh != null) {
+      const currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+      if (currentKwh !== null) {
+        currentCost += Math.max(0, currentKwh - session.startKwh) * effectiveElPrice;
+      }
+    }
+    if (hw.hasWater && hw.waterMeterEntityId && session.startWaterLiters != null) {
+      const currentWater = await ha.getEntityNumericState(hw.waterMeterEntityId);
+      if (currentWater !== null) {
+        currentCost += Math.max(0, currentWater - session.startWaterLiters) * pricing.pricePerLiterWater;
+      }
+    }
+
+    if (currentCost >= session.prepaidAmount) {
+      try {
+        await ha.turnOff(switchEntity);
+        powerOff++;
+      } catch (e) {
+        console.error(`Prepaid auto power-off failed for session ${session.id}:`, e);
+      }
+    }
+  }
+
+  return { powerOff };
+}
+
 export async function testSendInvoice(): Promise<{ ok: boolean; message: string }> {
   // Find the most recent invoice to test with
   const invoice = await prisma.invoice.findFirst({
@@ -2241,21 +2294,41 @@ export async function createLaundryPayment(
   const guestSession = await prisma.session.findUnique({
     where: { guestPortalToken },
   });
-  const credit = guestSession?.laundryCredit ?? 0;
+  let credit = guestSession?.laundryCredit ?? 0;
   const price = machine.pricePerUse;
+
+  // If prepaid credit for services is enabled and guest is PREPAID,
+  // allow them to pay from their prepaid balance as extra credit.
+  const globalSettings = await getGlobalSettings();
+  const prepaidForServices = globalSettings.prepaid_credit_for_services === "true";
+  let prepaidCreditUsed = 0;
+  if (prepaidForServices && guestSession?.billingMode === "PREPAID" && guestSession.prepaidAmount) {
+    const prepaidRemaining = guestSession.prepaidAmount;
+    const shortfall = Math.max(0, price - credit);
+    prepaidCreditUsed = Math.min(prepaidRemaining, shortfall);
+    credit += prepaidCreditUsed;
+  }
+
   const amountToPay = Math.max(0, price - credit);
-  const creditUsed = Math.min(credit, price);
+  const creditUsed = Math.min(guestSession?.laundryCredit ?? 0, price);
 
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
 
   // If guest has enough credit, start immediately (no payment needed)
   if (amountToPay <= 0) {
-    // Deduct credit
+    // Deduct laundry credit and/or prepaid balance
     if (guestSession) {
+      const newLaundryCredit = Math.max(0, (guestSession.laundryCredit ?? 0) - creditUsed);
+      const newPrepaid = prepaidCreditUsed > 0
+        ? Math.max(0, (guestSession.prepaidAmount ?? 0) - prepaidCreditUsed)
+        : undefined;
       await prisma.session.update({
         where: { id: guestSession.id },
-        data: { laundryCredit: Math.max(0, credit - price) },
+        data: {
+          laundryCredit: newLaundryCredit,
+          ...(newPrepaid !== undefined && { prepaidAmount: newPrepaid }),
+        },
       });
     }
 

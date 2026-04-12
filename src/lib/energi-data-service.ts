@@ -70,13 +70,15 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
   try {
     const prices = await fetchSpotPrices(area);
     const now = new Date();
-    const currentHour = now.toISOString().slice(0, 13);
 
-    // Find the price for the current hour
-    const current = prices.find((p) => {
-      const hour = new Date(p.HourDK).toISOString().slice(0, 13);
-      return hour === currentHour;
-    });
+    // HourDK is in Danish local time (e.g. "2026-04-05T14:00:00").
+    // Build a matching string in Danish local time so comparison works
+    // regardless of the server's timezone.
+    const cph = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Copenhagen" }));
+    const currentDanishHour = `${cph.getFullYear()}-${String(cph.getMonth() + 1).padStart(2, "0")}-${String(cph.getDate()).padStart(2, "0")}T${String(cph.getHours()).padStart(2, "0")}`;
+
+    // Find the price for the current Danish hour
+    const current = prices.find((p) => p.HourDK.slice(0, 13) === currentDanishHour);
 
     if (!current) return null;
 

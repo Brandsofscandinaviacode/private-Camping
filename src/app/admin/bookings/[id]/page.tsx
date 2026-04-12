@@ -327,12 +327,14 @@ export default async function BookingDetailPage({
             );
           })()}
 
-          <SessionActions
-            sessionId={session.id}
-            paymentStatus={session.paymentStatus}
-            isPaid={isPaid}
-            paidAt={session.paidAt?.toISOString() ?? null}
-          />
+          {session.billingMode !== "PREPAID" && (
+            <SessionActions
+              sessionId={session.id}
+              paymentStatus={session.paymentStatus}
+              isPaid={isPaid}
+              paidAt={session.paidAt?.toISOString() ?? null}
+            />
+          )}
         </div>
 
         {/* Right: Vask */}
