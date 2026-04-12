@@ -17,6 +17,8 @@ import {
   Wallet,
   Loader2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,6 +43,10 @@ interface InvoiceData {
   id: number;
   periodStart: string;
   periodEnd: string;
+  startKwh: number | null;
+  endKwh: number | null;
+  startWaterLiters: number | null;
+  endWaterLiters: number | null;
   electricityCost: number;
   waterCost: number;
   totalAmount: number;
@@ -172,6 +178,7 @@ export function GuestPortalClient({
   }
 
   const [consumption, setConsumption] = useState<ConsumptionData | null>(null);
+  const [monthIndex, setMonthIndex] = useState(0); // 0 = current period (live), 1+ = invoices
   const [tempValue, setTempValue] = useState("21");
   const [isPending, startTransition] = useTransition();
   const [unlockMsg, setUnlockMsg] = useState("");
@@ -357,103 +364,220 @@ export function GuestPortalClient({
           </Card>
         )}
 
-        {/* ═══ Live Consumption — always visible at top ═══ */}
-        {isActive && sessionId && (hasElectricity || hasWater) && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">{tx.yourConsumption}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {hasElectricity && (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
-                      <Zap className="h-4 w-4 text-amber-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{tx.electricity}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {consumption?.usedKwh != null
-                          ? `${consumption.usedKwh.toFixed(2)} kWh` : tx.awaitingData}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="font-semibold">{formatDKK(consumption?.electricityCost ?? null)}</span>
-                </div>
-              )}
-              {hasWater && (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                      <Droplets className="h-4 w-4 text-blue-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{tx.water}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {consumption?.usedWaterLiters != null
-                          ? `${consumption.usedWaterLiters.toFixed(0)} liter` : tx.awaitingData}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="font-semibold">{formatDKK(consumption?.waterCost ?? null)}</span>
-                </div>
-              )}
-              <Separator />
-              <div className="flex items-center justify-between p-3 rounded-xl bg-primary/5">
-                <span className="font-bold">{tx.total}</span>
-                <span className="text-lg font-bold text-primary tracking-tight">
-                  {formatDKK(consumption?.totalLiveCost ?? null)}
-                </span>
-              </div>
-              <p className="text-[11px] text-center text-muted-foreground">{tx.updatesEvery30s}</p>
+        {/* ═══ Consumption Card — with monthly navigation for long-term ═══ */}
+        {isActive && sessionId && (hasElectricity || hasWater) && (() => {
+          // For long-term renters: monthly navigation through invoices + current period
+          // For short-term: just show current live data (monthIndex always 0)
+          const isCurrentMonth = monthIndex === 0;
+          const totalMonths = isLongTerm ? 1 + invoices.length : 1;
+          const canGoBack = isLongTerm && monthIndex < totalMonths - 1;
+          const canGoForward = monthIndex > 0;
 
-              {/* Power toggle — inline in consumption card */}
-              {hasElectricity && (
-                <>
-                  <Separator />
-                  <PowerToggle token={token} locale={locale as "da" | "en" | "de"} showSeparator={false} />
-                </>
-              )}
+          // Current invoice (null if viewing live data)
+          const viewedInvoice = isCurrentMonth ? null : invoices[monthIndex - 1];
 
-              {/* Prepaid balance — compact inline */}
-              {billingMode === "PREPAID" && prepaidAmount != null && (
-                <>
-                  <Separator />
+          // Data for display
+          const elecKwh = isCurrentMonth
+            ? consumption?.usedKwh ?? null
+            : (viewedInvoice?.startKwh != null && viewedInvoice?.endKwh != null
+              ? Math.max(0, viewedInvoice.endKwh - viewedInvoice.startKwh) : null);
+          const elecCost = isCurrentMonth
+            ? consumption?.electricityCost ?? null
+            : viewedInvoice?.electricityCost ?? null;
+          const waterLiters = isCurrentMonth
+            ? consumption?.usedWaterLiters ?? null
+            : (viewedInvoice?.startWaterLiters != null && viewedInvoice?.endWaterLiters != null
+              ? Math.max(0, viewedInvoice.endWaterLiters - viewedInvoice.startWaterLiters) : null);
+          const waterCost = isCurrentMonth
+            ? consumption?.waterCost ?? null
+            : viewedInvoice?.waterCost ?? null;
+          const total = isCurrentMonth
+            ? consumption?.totalLiveCost ?? null
+            : viewedInvoice?.totalAmount ?? null;
+          const paidAmount = isCurrentMonth
+            ? 0
+            : (viewedInvoice?.status === "PAID" ? viewedInvoice.totalAmount : 0);
+
+          // Month label
+          const locStr = locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK";
+          const monthLabel = isCurrentMonth
+            ? new Date().toLocaleDateString(locStr, { month: "long", year: "numeric" })
+            : viewedInvoice
+              ? new Date(viewedInvoice.periodStart).toLocaleDateString(locStr, { month: "long", year: "numeric" })
+              : "";
+
+          const paidLabel = locale === "en" ? "Paid" : locale === "de" ? "Bezahlt" : "Betalt";
+          const unpaidLabel = locale === "en" ? "Unpaid" : locale === "de" ? "Unbezahlt" : "Ubetalt";
+
+          return (
+            <Card>
+              <CardHeader className="pb-2">
+                {isLongTerm && totalMonths > 1 ? (
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Wallet className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-medium">
-                        {locale === "en" ? "Prepaid" : locale === "de" ? "Vorauszahlung" : "Forudbetalt"}
-                      </span>
+                    <button
+                      onClick={() => canGoBack && setMonthIndex(monthIndex + 1)}
+                      className={`p-1 rounded-md transition-colors ${canGoBack ? "hover:bg-muted text-foreground" : "text-muted-foreground/30 cursor-default"}`}
+                      disabled={!canGoBack}
+                    >
+                      <ChevronLeft className="h-5 w-5" />
+                    </button>
+                    <div className="text-center">
+                      <CardTitle className="text-base capitalize">{monthLabel}</CardTitle>
+                      {isCurrentMonth && (
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          {locale === "en" ? "Current period" : locale === "de" ? "Aktueller Zeitraum" : "Igangværende"}
+                        </p>
+                      )}
                     </div>
-                    <span className="font-semibold">{formatDKK(prepaidAmount)}</span>
+                    <button
+                      onClick={() => canGoForward && setMonthIndex(monthIndex - 1)}
+                      className={`p-1 rounded-md transition-colors ${canGoForward ? "hover:bg-muted text-foreground" : "text-muted-foreground/30 cursor-default"}`}
+                      disabled={!canGoForward}
+                    >
+                      <ChevronRight className="h-5 w-5" />
+                    </button>
                   </div>
-                  {consumption?.totalLiveCost != null && (
-                    <>
-                      <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${
-                            (consumption.totalLiveCost / prepaidAmount) > 0.9 ? "bg-red-500" :
-                            (consumption.totalLiveCost / prepaidAmount) > 0.7 ? "bg-yellow-500" : "bg-green-500"
+                ) : (
+                  <CardTitle className="text-base">{tx.yourConsumption}</CardTitle>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {hasElectricity && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                        <Zap className="h-4 w-4 text-amber-500" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">{tx.electricity}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {elecKwh != null ? `${elecKwh.toFixed(2)} kWh` : tx.awaitingData}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="font-semibold">{formatDKK(elecCost)}</span>
+                  </div>
+                )}
+                {hasWater && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                        <Droplets className="h-4 w-4 text-blue-500" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">{tx.water}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {waterLiters != null ? `${waterLiters.toFixed(0)} liter` : tx.awaitingData}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="font-semibold">{formatDKK(waterCost)}</span>
+                  </div>
+                )}
+                <Separator />
+                <div className="flex items-center justify-between p-3 rounded-xl bg-primary/5">
+                  <span className="font-bold">{tx.total}</span>
+                  <span className="text-lg font-bold text-primary tracking-tight">
+                    {formatDKK(total)}
+                  </span>
+                </div>
+
+                {/* Paid amount row */}
+                {isLongTerm && (
+                  <div className="flex items-center justify-between px-3">
+                    <span className="text-sm font-medium text-muted-foreground">{paidLabel}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-semibold tabular-nums ${paidAmount > 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                        {formatDKK(paidAmount)}
+                      </span>
+                      {!isCurrentMonth && viewedInvoice && (
+                        <Badge
+                          variant={viewedInvoice.status === "PAID" ? "default" : "secondary"}
+                          className={`text-[10px] px-1.5 py-0 ${
+                            viewedInvoice.status === "PAID" ? "bg-green-100 text-green-700" :
+                            viewedInvoice.status === "OVERDUE" ? "bg-red-100 text-red-600" :
+                            "bg-amber-100 text-amber-700"
                           }`}
-                          style={{ width: `${Math.min(100, (consumption.totalLiveCost / prepaidAmount) * 100)}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">
-                          {locale === "en" ? "Remaining" : locale === "de" ? "Verbleibend" : "Resterende"}
-                        </span>
-                        <span className={`font-bold ${prepaidAmount - consumption.totalLiveCost < 0 ? "text-red-600" : "text-green-600"}`}>
-                          {formatDKK(prepaidAmount - consumption.totalLiveCost)}
-                        </span>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                        >
+                          {viewedInvoice.status === "PAID" ? paidLabel :
+                           viewedInvoice.status === "OVERDUE" ? tx.overdue :
+                           unpaidLabel}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Pay button for unpaid past invoices */}
+                {!isCurrentMonth && viewedInvoice && (viewedInvoice.status === "PENDING" || viewedInvoice.status === "OVERDUE") && quickpayEnabled && (
+                  <>
+                    <Separator />
+                    <Button
+                      variant="outline" size="sm"
+                      disabled={payingInvoiceId === viewedInvoice.id}
+                      onClick={() => handlePayInvoice(viewedInvoice.id)}
+                      className="w-full text-xs"
+                    >
+                      <CreditCard className="h-3.5 w-3.5 mr-1.5" />
+                      {payingInvoiceId === viewedInvoice.id ? tx.creatingPayment : `${tx.payInvoice} — ${viewedInvoice.totalAmount.toFixed(2)} DKK`}
+                    </Button>
+                  </>
+                )}
+
+                {/* Live-only: update timer + power toggle */}
+                {isCurrentMonth && (
+                  <>
+                    <p className="text-[11px] text-center text-muted-foreground">{tx.updatesEvery30s}</p>
+
+                    {hasElectricity && (
+                      <>
+                        <Separator />
+                        <PowerToggle token={token} locale={locale as "da" | "en" | "de"} showSeparator={false} />
+                      </>
+                    )}
+
+                    {/* Prepaid balance — compact inline */}
+                    {billingMode === "PREPAID" && prepaidAmount != null && (
+                      <>
+                        <Separator />
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Wallet className="h-4 w-4 text-primary" />
+                            <span className="text-sm font-medium">
+                              {locale === "en" ? "Prepaid" : locale === "de" ? "Vorauszahlung" : "Forudbetalt"}
+                            </span>
+                          </div>
+                          <span className="font-semibold">{formatDKK(prepaidAmount)}</span>
+                        </div>
+                        {consumption?.totalLiveCost != null && (
+                          <>
+                            <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  (consumption.totalLiveCost / prepaidAmount) > 0.9 ? "bg-red-500" :
+                                  (consumption.totalLiveCost / prepaidAmount) > 0.7 ? "bg-yellow-500" : "bg-green-500"
+                                }`}
+                                style={{ width: `${Math.min(100, (consumption.totalLiveCost / prepaidAmount) * 100)}%` }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">
+                                {locale === "en" ? "Remaining" : locale === "de" ? "Verbleibend" : "Resterende"}
+                              </span>
+                              <span className={`font-bold ${prepaidAmount - consumption.totalLiveCost < 0 ? "text-red-600" : "text-green-600"}`}>
+                                {formatDKK(prepaidAmount - consumption.totalLiveCost)}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* ═══ Unpaid invoice banner — for fastliggere ═══ */}
         {isLongTerm && unpaidInvoices.length > 0 && (
