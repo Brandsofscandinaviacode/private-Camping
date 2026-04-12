@@ -8,6 +8,7 @@ import {
   checkOverdueInvoices,
   checkPrepaidBalances,
 } from "@/lib/actions";
+import { refreshSpotPriceCache, cleanOldSpotPrices } from "@/lib/energi-data-service";
 
 // GET /api/cron — Called periodically (e.g. every 15 min via cron or HA automation)
 // Logs consumption, checks alarms, and auto-sends invoices on the configured day
@@ -20,6 +21,16 @@ export async function GET() {
     const laundryResult = await checkLaundryMachines();
     const overdueResult = await checkOverdueInvoices();
     const prepaidResult = await checkPrepaidBalances();
+
+    // Refresh spot price cache (proactive — keeps data fresh even if no page visits)
+    let spotCacheResult = { fetched: 0, cleaned: 0 };
+    try {
+      const refreshed = await refreshSpotPriceCache();
+      const cleaned = await cleanOldSpotPrices();
+      spotCacheResult = { fetched: refreshed.fetched, cleaned };
+    } catch {
+      // Non-critical — don't fail the cron
+    }
 
     // Track last run time and count
     await updateMultipleSettings([
@@ -37,6 +48,7 @@ export async function GET() {
       laundry: laundryResult,
       overdue: overdueResult,
       prepaid: prepaidResult,
+      spotCache: spotCacheResult,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

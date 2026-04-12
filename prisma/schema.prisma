@@ -235,6 +235,21 @@ model ConsumptionLog {
 }
 
 // ──────────────────────────────────────────────
+// Spot Price Cache (EDS electricity prices)
+// ──────────────────────────────────────────────
+model SpotPriceCache {
+  id          Int      @id @default(autoincrement())
+  area        String                 // "DK1" or "DK2"
+  hourDK      String                 // "2026-04-05T14:00:00" (Danish local time)
+  priceDKK    Float                  // DKK per MWh (raw from API)
+  priceEUR    Float   @default(0)    // EUR per MWh
+  fetchedAt   DateTime @default(now()) // When this record was fetched from API
+
+  @@unique([area, hourDK])
+  @@map("spot_price_cache")
+}
+
+// ──────────────────────────────────────────────
 // Laundry Machine (shared facility with Shelly relay)
 // ──────────────────────────────────────────────
 model LaundryMachine {

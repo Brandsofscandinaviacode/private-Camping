@@ -65,20 +65,32 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Check prepaid top-up payments (stored in session notes as TOPUP:paymentId:amount)
+    //    Already-processed entries are marked TOPUP_DONE — skip those.
     const topupSession = await prisma.session.findFirst({
       where: { notes: { contains: `TOPUP:${quickpayId}:` } },
     });
 
     if (topupSession) {
+      // Guard: skip if this topup was already processed (idempotency)
+      if (topupSession.notes?.includes(`TOPUP_DONE:${quickpayId}:`)) {
+        console.log(`QuickPay: Top-up ${quickpayId} already processed for session ${topupSession.id}, skipping`);
+        return NextResponse.json({ status: "ok", type: "topup_duplicate", id: topupSession.id });
+      }
+
       // Extract amount from notes
       const match = topupSession.notes?.match(new RegExp(`TOPUP:${quickpayId}:(\\d+\\.?\\d*)`));
       const topupAmount = match ? parseFloat(match[1]) : 0;
 
       if (topupAmount > 0) {
         const newPrepaid = (topupSession.prepaidAmount || 0) + topupAmount;
+        // Mark as processed by renaming TOPUP → TOPUP_DONE so retries are ignored
+        const updatedNotes = (topupSession.notes || "").replace(
+          `TOPUP:${quickpayId}:${match![1]}`,
+          `TOPUP_DONE:${quickpayId}:${match![1]}`
+        );
         await prisma.session.update({
           where: { id: topupSession.id },
-          data: { prepaidAmount: newPrepaid },
+          data: { prepaidAmount: newPrepaid, notes: updatedNotes },
         });
         console.log(`QuickPay: Top-up ${topupAmount} DKK for session ${topupSession.id}, new balance: ${newPrepaid}`);
         return NextResponse.json({ status: "ok", type: "topup", id: topupSession.id, amount: topupAmount });
