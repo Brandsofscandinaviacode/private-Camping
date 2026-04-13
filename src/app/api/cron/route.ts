@@ -5,6 +5,7 @@ import {
   updateMultipleSettings,
   autoCreateAndSendInvoices,
   checkLaundryMachines,
+  checkShowerSessions,
   checkOverdueInvoices,
   checkPrepaidBalances,
 } from "@/lib/actions";
@@ -19,6 +20,7 @@ export async function GET() {
     const { alerts } = await checkConsumptionAlarms();
     const invoiceResult = await autoCreateAndSendInvoices();
     const laundryResult = await checkLaundryMachines();
+    const showerResult = await checkShowerSessions();
     const overdueResult = await checkOverdueInvoices();
     const prepaidResult = await checkPrepaidBalances();
 
@@ -46,6 +48,7 @@ export async function GET() {
       alertDetails: alerts,
       invoices: invoiceResult,
       laundry: laundryResult,
+      showers: showerResult,
       overdue: overdueResult,
       prepaid: prepaidResult,
       spotCache: spotCacheResult,

@@ -172,6 +172,7 @@ model Session {
   notes String?   // Admin-bemærkninger
 
   laundrySessions LaundrySess[]
+  showerSessions  ShowerSess[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -261,10 +262,13 @@ model SpotPriceCache {
 model LaundryMachine {
   id               Int     @id @default(autoincrement())
   name             String                           // "Vaskemaskine 1", "Tørretumbler"
+  kind             String  @default("WASHER")       // WASHER | DRYER
   switchEntityId   String                           // HA switch entity to control
   durationMinutes  Int     @default(60)             // How long it runs per use
   pricePerUse      Float   @default(25)             // DKK per use
   enabled          Boolean @default(true)           // Admin can disable
+  code             String? @unique                  // 4-digit quick-select code (washers 2xxx, dryers 3xxx)
+  location         String?                          // Free-form location label ("Bygning A", "Vaskerum 2")
 
   groupId          Int?
   group            LaundryGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
@@ -275,6 +279,61 @@ model LaundryMachine {
   updatedAt DateTime @updatedAt
 
   @@map("laundry_machines")
+}
+
+// ──────────────────────────────────────────────
+// Shower (shared facility with Shelly valve relay)
+// ──────────────────────────────────────────────
+model Shower {
+  id               Int     @id @default(autoincrement())
+  name             String                           // "Bad 1"
+  switchEntityId   String                           // HA relay for the valve
+  pricePerMinute   Float   @default(2)              // DKK per minute
+  minMinutes       Int     @default(2)
+  maxMinutes       Int     @default(30)
+  enabled          Boolean @default(true)
+  code             String? @unique                  // 4-digit quick-select code (showers 1xxx)
+  location         String?                          // Free-form location label
+
+  sessions ShowerSess[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("showers")
+}
+
+// ──────────────────────────────────────────────
+// Shower Session (active buy with pause support)
+// ──────────────────────────────────────────────
+model ShowerSess {
+  id              Int      @id @default(autoincrement())
+  showerId        Int
+  shower          Shower   @relation(fields: [showerId], references: [id], onDelete: Cascade)
+
+  // Optional link to guest session (null for day guests)
+  sessionId       Int?
+  session         Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  startedAt       DateTime @default(now())
+  endsAt          DateTime                          // When the shower will auto-close (adjusted on pause/extend)
+  status          String   @default("PENDING")      // PENDING | ACTIVE | PAUSED | COMPLETED | CANCELLED
+
+  // Pause state
+  pausedAt        DateTime?                         // When the current pause started
+  pauseRemainingMs Int?                             // Remaining ms left when pause started
+  pauseResumedAt  DateTime?                         // Last resume — enforces 10s pause cooldown
+
+  pricePaid       Float    @default(0)              // Running total (extensions add to this)
+  minutesPaid     Int      @default(0)              // Running total minutes paid (extensions add to this)
+  paymentStatus   String   @default("UNPAID")       // UNPAID | PAID
+  paymentId       String?                           // QuickPay transaction ID for current purchase
+  pendingMinutes  Int?                              // Minutes being bought while waiting for callback (extension)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("shower_sessions")
 }
 
 // ──────────────────────────────────────────────

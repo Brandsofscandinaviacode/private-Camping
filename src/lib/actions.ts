@@ -2338,22 +2338,41 @@ export async function getLaundryMachines() {
 
 export async function createLaundryMachine(data: {
   name: string;
+  kind: string;
   switchEntityId: string;
   durationMinutes: number;
   pricePerUse: number;
+  code?: string | null;
+  location?: string | null;
 }) {
-  await prisma.laundryMachine.create({ data });
+  await prisma.laundryMachine.create({
+    data: {
+      ...data,
+      code: data.code || null,
+      location: data.location || null,
+    },
+  });
   revalidatePath("/admin/settings");
 }
 
 export async function updateLaundryMachine(id: number, data: {
   name: string;
+  kind: string;
   switchEntityId: string;
   durationMinutes: number;
   pricePerUse: number;
   enabled: boolean;
+  code?: string | null;
+  location?: string | null;
 }) {
-  await prisma.laundryMachine.update({ where: { id }, data });
+  await prisma.laundryMachine.update({
+    where: { id },
+    data: {
+      ...data,
+      code: data.code || null,
+      location: data.location || null,
+    },
+  });
   revalidatePath("/admin/settings");
 }
 
@@ -3026,4 +3045,620 @@ export async function createPublicLaundryPayment(
     await prisma.laundrySess.delete({ where: { id: laundrySess.id } });
     return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SHOWERS — Shared facility with per-minute billing + pause timer
+// ══════════════════════════════════════════════════════════════════
+
+const PAUSE_MAX_MS = 5 * 60 * 1000;      // 5 minutes max pause
+const PAUSE_COOLDOWN_MS = 10 * 1000;     // 10 s between pauses
+
+// ── Admin CRUD ────────────────────────────────────────────────
+export async function getShowers() {
+  return prisma.shower.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      sessions: {
+        where: { status: { in: ["ACTIVE", "PAUSED", "PENDING"] } },
+        take: 1,
+        orderBy: { startedAt: "desc" },
+      },
+    },
+  });
+}
+
+export async function createShower(data: {
+  name: string;
+  switchEntityId: string;
+  pricePerMinute: number;
+  minMinutes: number;
+  maxMinutes: number;
+  code: string | null;
+  location: string | null;
+}) {
+  await prisma.shower.create({ data });
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/services");
+}
+
+export async function updateShower(id: number, data: {
+  name: string;
+  switchEntityId: string;
+  pricePerMinute: number;
+  minMinutes: number;
+  maxMinutes: number;
+  enabled: boolean;
+  code: string | null;
+  location: string | null;
+}) {
+  await prisma.shower.update({ where: { id }, data });
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/services");
+}
+
+export async function deleteShower(id: number) {
+  await prisma.shower.delete({ where: { id } });
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/services");
+}
+
+// Admin view of all showers with status
+export async function getShowerStatus() {
+  await expireStaleShowerPendings();
+  const showers = await prisma.shower.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      sessions: {
+        where: { status: { in: ["ACTIVE", "PAUSED", "PENDING"] } },
+        take: 1,
+        orderBy: { startedAt: "desc" },
+      },
+    },
+  });
+
+  const now = new Date();
+  return showers.map((s) => {
+    const active = s.sessions[0];
+    const isRunning = !!active && active.status === "ACTIVE" && new Date(active.endsAt) > now;
+    const isPaused = !!active && active.status === "PAUSED";
+    const isPending = !!active && active.status === "PENDING";
+    const secondsLeft = isRunning
+      ? Math.max(0, Math.ceil((new Date(active.endsAt).getTime() - now.getTime()) / 1000))
+      : isPaused && active.pauseRemainingMs
+      ? Math.max(0, Math.ceil(active.pauseRemainingMs / 1000))
+      : 0;
+
+    return {
+      id: s.id,
+      name: s.name,
+      location: s.location,
+      switchEntityId: s.switchEntityId,
+      pricePerMinute: s.pricePerMinute,
+      minMinutes: s.minMinutes,
+      maxMinutes: s.maxMinutes,
+      enabled: s.enabled,
+      code: s.code,
+      isRunning,
+      isPaused,
+      isPending,
+      secondsLeft,
+      activeSession: active ? {
+        id: active.id,
+        status: active.status,
+        minutesPaid: active.minutesPaid,
+        pricePaid: active.pricePaid,
+        endsAt: active.endsAt.toISOString(),
+      } : null,
+    };
+  });
+}
+
+// ── Public lookup ─────────────────────────────────────────────
+export async function getPublicShower(showerId: number) {
+  await expireStaleShowerPendings();
+  const shower = await prisma.shower.findUnique({
+    where: { id: showerId },
+    include: {
+      sessions: {
+        where: { status: { in: ["ACTIVE", "PAUSED"] } },
+        take: 1,
+        orderBy: { startedAt: "desc" },
+      },
+    },
+  });
+  if (!shower || !shower.enabled) return null;
+
+  const now = new Date();
+  const active = shower.sessions[0];
+  const isBusy = !!active && (
+    (active.status === "ACTIVE" && new Date(active.endsAt) > now) ||
+    active.status === "PAUSED"
+  );
+
+  return {
+    id: shower.id,
+    name: shower.name,
+    location: shower.location,
+    pricePerMinute: shower.pricePerMinute,
+    minMinutes: shower.minMinutes,
+    maxMinutes: shower.maxMinutes,
+    available: !isBusy,
+  };
+}
+
+// Public overview of every service, grouped
+export async function getPublicServices() {
+  const [showers, laundry] = await Promise.all([
+    prisma.shower.findMany({ where: { enabled: true }, orderBy: [{ location: "asc" }, { name: "asc" }] }),
+    prisma.laundryMachine.findMany({ where: { enabled: true }, orderBy: [{ location: "asc" }, { name: "asc" }], include: { group: true } }),
+  ]);
+  return {
+    showers: showers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      location: s.location,
+      pricePerMinute: s.pricePerMinute,
+      minMinutes: s.minMinutes,
+      maxMinutes: s.maxMinutes,
+      code: s.code,
+    })),
+    washers: laundry.filter((m) => m.kind === "WASHER").map((m) => ({
+      id: m.id,
+      name: m.name,
+      location: m.location,
+      pricePerUse: m.pricePerUse,
+      durationMinutes: m.durationMinutes,
+      code: m.code,
+      groupToken: m.group?.token ?? null,
+    })),
+    dryers: laundry.filter((m) => m.kind === "DRYER").map((m) => ({
+      id: m.id,
+      name: m.name,
+      location: m.location,
+      pricePerUse: m.pricePerUse,
+      durationMinutes: m.durationMinutes,
+      code: m.code,
+      groupToken: m.group?.token ?? null,
+    })),
+  };
+}
+
+// Resolve a 4-digit code to a target route. Returns null if unknown.
+export async function resolveServiceCode(code: string): Promise<{ type: "shower" | "washer" | "dryer"; id: number; groupToken: string | null } | null> {
+  const trimmed = code.trim();
+  if (!/^\d{4}$/.test(trimmed)) return null;
+
+  const shower = await prisma.shower.findUnique({ where: { code: trimmed } });
+  if (shower) return { type: "shower", id: shower.id, groupToken: null };
+
+  const machine = await prisma.laundryMachine.findUnique({
+    where: { code: trimmed },
+    include: { group: true },
+  });
+  if (machine) {
+    return {
+      type: machine.kind === "DRYER" ? "dryer" : "washer",
+      id: machine.id,
+      groupToken: machine.group?.token ?? null,
+    };
+  }
+  return null;
+}
+
+// ── Shower session core flow ──────────────────────────────────
+
+async function expireStaleShowerPendings() {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.showerSess.updateMany({
+    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+}
+
+/**
+ * Create a pending shower session + QuickPay link. Valve is turned on
+ * only after the payment callback resolves.
+ *
+ * Day guests leave `guestPortalToken` undefined.
+ */
+export async function createShowerPayment(
+  showerId: number,
+  minutes: number,
+  guestPortalToken?: string,
+): Promise<{ ok: boolean; message: string; paymentLink?: string; showerSessionId?: number }> {
+  await expireStaleShowerPendings();
+
+  const shower = await prisma.shower.findUnique({
+    where: { id: showerId },
+    include: {
+      sessions: {
+        where: { status: { in: ["ACTIVE", "PAUSED"] } },
+        take: 1,
+        orderBy: { startedAt: "desc" },
+      },
+    },
+  });
+  if (!shower) return { ok: false, message: "Bad ikke fundet" };
+  if (!shower.enabled) return { ok: false, message: "Badet er deaktiveret" };
+
+  const mins = Math.round(minutes);
+  if (mins < shower.minMinutes || mins > shower.maxMinutes) {
+    return { ok: false, message: `Vælg mellem ${shower.minMinutes} og ${shower.maxMinutes} minutter` };
+  }
+
+  // Reject if shower is currently occupied (question 9)
+  const existing = shower.sessions[0];
+  if (existing && existing.status !== "COMPLETED" && existing.status !== "CANCELLED") {
+    if (existing.status === "PAUSED" || new Date(existing.endsAt) > new Date()) {
+      return { ok: false, message: "Badet er optaget — prøv igen senere" };
+    }
+  }
+
+  const guestSession = guestPortalToken
+    ? await prisma.session.findUnique({ where: { guestPortalToken } })
+    : null;
+
+  const price = +(mins * shower.pricePerMinute).toFixed(2);
+  const endsAt = new Date(Date.now() + mins * 60 * 1000);
+
+  const pending = await prisma.showerSess.create({
+    data: {
+      showerId,
+      sessionId: guestSession?.id ?? null,
+      endsAt,
+      status: "PENDING",
+      pricePaid: 0,
+      minutesPaid: 0,
+      pendingMinutes: mins,
+      paymentStatus: "UNPAID",
+    },
+  });
+
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+
+  // No QuickPay configured → start immediately (dev / free mode)
+  if (settings.quickpay_enabled !== "true") {
+    await activateShowerSession(pending.id);
+    return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id };
+  }
+
+  try {
+    const { createPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("S", pending.id);
+
+    const { paymentId, paymentLink } = await createPaymentLink({
+      orderId,
+      amount: price,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}/shower/active/${pending.id}?paid=1`,
+      cancelUrl: `${baseUrl}/shower/${showerId}?cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    await prisma.showerSess.update({
+      where: { id: pending.id },
+      data: { paymentId: String(paymentId) },
+    });
+
+    return { ok: true, message: "Går til betaling...", paymentLink, showerSessionId: pending.id };
+  } catch (e) {
+    await prisma.showerSess.delete({ where: { id: pending.id } });
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/**
+ * Called when the QuickPay callback accepts the payment, OR when QuickPay
+ * is disabled and we start immediately. Opens the valve + flips status.
+ */
+export async function activateShowerSession(pendingId: number) {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: pendingId },
+    include: { shower: true },
+  });
+  if (!sess) return;
+  if (sess.status !== "PENDING") return;
+
+  const mins = sess.pendingMinutes ?? 0;
+  const endsAt = new Date(Date.now() + mins * 60 * 1000);
+
+  await prisma.showerSess.update({
+    where: { id: pendingId },
+    data: {
+      status: "ACTIVE",
+      paymentStatus: "PAID",
+      startedAt: new Date(),
+      endsAt,
+      pricePaid: +(mins * sess.shower.pricePerMinute).toFixed(2),
+      minutesPaid: mins,
+      pendingMinutes: null,
+    },
+  });
+
+  try {
+    await ha.turnOn(sess.shower.switchEntityId);
+  } catch (e) {
+    console.error("Shower turnOn failed:", e);
+  }
+}
+
+/**
+ * Called when an extension payment resolves: adds the purchased
+ * minutes on top of the existing timer.
+ */
+export async function applyShowerExtension(showerSessionId: number) {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return;
+  const extra = sess.pendingMinutes ?? 0;
+  if (extra <= 0) return;
+
+  // Active → extend endsAt. Paused → inflate the frozen remaining time.
+  let newEndsAt = sess.endsAt;
+  let newPauseRemainingMs = sess.pauseRemainingMs;
+  if (sess.status === "PAUSED" && sess.pauseRemainingMs !== null) {
+    newPauseRemainingMs = sess.pauseRemainingMs + extra * 60 * 1000;
+  } else {
+    const base = new Date(Math.max(Date.now(), new Date(sess.endsAt).getTime()));
+    newEndsAt = new Date(base.getTime() + extra * 60 * 1000);
+  }
+
+  await prisma.showerSess.update({
+    where: { id: showerSessionId },
+    data: {
+      endsAt: newEndsAt,
+      pauseRemainingMs: newPauseRemainingMs,
+      minutesPaid: sess.minutesPaid + extra,
+      pricePaid: +(sess.pricePaid + extra * sess.shower.pricePerMinute).toFixed(2),
+      pendingMinutes: null,
+      paymentStatus: "PAID",
+    },
+  });
+}
+
+/**
+ * Guest-side state query for the active timer page.
+ * Returns seconds left + whether the session is paused + pause metadata.
+ */
+export async function getShowerSessionState(showerSessionId: number) {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return null;
+
+  const now = Date.now();
+  let secondsLeft = 0;
+  let pauseSecondsLeft = 0;
+
+  if (sess.status === "ACTIVE") {
+    secondsLeft = Math.max(0, Math.ceil((new Date(sess.endsAt).getTime() - now) / 1000));
+  } else if (sess.status === "PAUSED" && sess.pauseRemainingMs !== null && sess.pausedAt) {
+    secondsLeft = Math.max(0, Math.ceil(sess.pauseRemainingMs / 1000));
+    const pauseUsed = now - new Date(sess.pausedAt).getTime();
+    pauseSecondsLeft = Math.max(0, Math.ceil((PAUSE_MAX_MS - pauseUsed) / 1000));
+  }
+
+  let pauseCooldownSeconds = 0;
+  if (sess.pauseResumedAt) {
+    const diff = now - new Date(sess.pauseResumedAt).getTime();
+    if (diff < PAUSE_COOLDOWN_MS) {
+      pauseCooldownSeconds = Math.ceil((PAUSE_COOLDOWN_MS - diff) / 1000);
+    }
+  }
+
+  return {
+    id: sess.id,
+    showerId: sess.showerId,
+    showerName: sess.shower.name,
+    location: sess.shower.location,
+    pricePerMinute: sess.shower.pricePerMinute,
+    minMinutes: sess.shower.minMinutes,
+    maxMinutes: sess.shower.maxMinutes,
+    status: sess.status,
+    secondsLeft,
+    pauseSecondsLeft,
+    pauseCooldownSeconds,
+    minutesPaid: sess.minutesPaid,
+    pricePaid: sess.pricePaid,
+    paymentStatus: sess.paymentStatus,
+  };
+}
+
+/** Pause an active shower — closes the valve and freezes the remaining time. */
+export async function pauseShower(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (sess.status !== "ACTIVE") return { ok: false, message: "Kan ikke pause nu" };
+
+  if (sess.pauseResumedAt) {
+    const diff = Date.now() - new Date(sess.pauseResumedAt).getTime();
+    if (diff < PAUSE_COOLDOWN_MS) {
+      const remain = Math.ceil((PAUSE_COOLDOWN_MS - diff) / 1000);
+      return { ok: false, message: `Vent ${remain}s før du kan pause igen` };
+    }
+  }
+
+  const remainingMs = Math.max(0, new Date(sess.endsAt).getTime() - Date.now());
+  if (remainingMs <= 0) return { ok: false, message: "Tiden er allerede udløbet" };
+
+  await prisma.showerSess.update({
+    where: { id: showerSessionId },
+    data: {
+      status: "PAUSED",
+      pausedAt: new Date(),
+      pauseRemainingMs: remainingMs,
+    },
+  });
+
+  try { await ha.turnOff(sess.shower.switchEntityId); } catch (e) { console.error("Shower pause off:", e); }
+
+  return { ok: true, message: "Pause" };
+}
+
+/** Manually resume a paused shower. Also used by the auto-resume sweep. */
+export async function resumeShower(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (sess.status !== "PAUSED") return { ok: false, message: "Ikke på pause" };
+
+  const remainingMs = sess.pauseRemainingMs ?? 0;
+  const newEndsAt = new Date(Date.now() + remainingMs);
+
+  await prisma.showerSess.update({
+    where: { id: showerSessionId },
+    data: {
+      status: "ACTIVE",
+      endsAt: newEndsAt,
+      pausedAt: null,
+      pauseRemainingMs: null,
+      pauseResumedAt: new Date(),
+    },
+  });
+
+  try { await ha.turnOn(sess.shower.switchEntityId); } catch (e) { console.error("Shower resume on:", e); }
+
+  return { ok: true, message: "Fortsat" };
+}
+
+/**
+ * Buy more minutes while a session is active/paused.
+ * Returns paymentLink that the client must redirect to.
+ */
+export async function extendShowerPayment(
+  showerSessionId: number,
+  extraMinutes: number,
+): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (sess.status !== "ACTIVE" && sess.status !== "PAUSED") {
+    return { ok: false, message: "Kan kun forlænge en aktiv session" };
+  }
+
+  const extra = Math.round(extraMinutes);
+  if (extra < sess.shower.minMinutes || extra > sess.shower.maxMinutes) {
+    return { ok: false, message: `Køb mellem ${sess.shower.minMinutes} og ${sess.shower.maxMinutes} minutter` };
+  }
+
+  const price = +(extra * sess.shower.pricePerMinute).toFixed(2);
+
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+
+  if (settings.quickpay_enabled !== "true") {
+    await prisma.showerSess.update({
+      where: { id: showerSessionId },
+      data: { pendingMinutes: extra },
+    });
+    await applyShowerExtension(showerSessionId);
+    return { ok: true, message: `Forlænget med ${extra} minutter` };
+  }
+
+  try {
+    const { createPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("SX", showerSessionId);
+
+    const { paymentId, paymentLink } = await createPaymentLink({
+      orderId,
+      amount: price,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}/shower/active/${showerSessionId}?extended=1`,
+      cancelUrl: `${baseUrl}/shower/active/${showerSessionId}?extend_cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    await prisma.showerSess.update({
+      where: { id: showerSessionId },
+      data: { pendingMinutes: extra, paymentId: String(paymentId) },
+    });
+
+    return { ok: true, message: "Går til betaling...", paymentLink };
+  } catch (e) {
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Admin manual stop. */
+export async function adminStopShower(showerSessionId: number) {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return { ok: false, message: "Session ikke fundet" };
+
+  await prisma.showerSess.update({
+    where: { id: showerSessionId },
+    data: { status: "COMPLETED", endsAt: new Date(), pausedAt: null, pauseRemainingMs: null },
+  });
+
+  try { await ha.turnOff(sess.shower.switchEntityId); } catch (e) {
+    return { ok: false, message: `Stoppet i DB men kunne ikke slukke relæ: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  return { ok: true, message: "Bad stoppet" };
+}
+
+/**
+ * Background sweep — runs every 5s from the scheduler.
+ *  - Auto-resume paused sessions after 5 min
+ *  - Close expired active sessions (turn off valve)
+ *  - Cancel old pending sessions
+ */
+export async function checkShowerSessions() {
+  const now = new Date();
+
+  // 1) Auto-resume pauses that hit the 5 min cap
+  const cutoff = new Date(now.getTime() - PAUSE_MAX_MS);
+  const expiredPauses = await prisma.showerSess.findMany({
+    where: { status: "PAUSED", pausedAt: { lte: cutoff } },
+    include: { shower: true },
+  });
+  for (const sess of expiredPauses) {
+    const remainingMs = sess.pauseRemainingMs ?? 0;
+    const newEndsAt = new Date(Date.now() + remainingMs);
+    await prisma.showerSess.update({
+      where: { id: sess.id },
+      data: {
+        status: "ACTIVE",
+        endsAt: newEndsAt,
+        pausedAt: null,
+        pauseRemainingMs: null,
+        pauseResumedAt: new Date(),
+      },
+    });
+    try { await ha.turnOn(sess.shower.switchEntityId); } catch (e) { console.error("Auto-resume on:", e); }
+  }
+
+  // 2) Expire active sessions whose endsAt has passed
+  const expired = await prisma.showerSess.findMany({
+    where: { status: "ACTIVE", endsAt: { lte: now } },
+    include: { shower: true },
+  });
+  for (const sess of expired) {
+    try { await ha.turnOff(sess.shower.switchEntityId); } catch (e) { console.error("Shower close:", e); }
+    await prisma.showerSess.update({
+      where: { id: sess.id },
+      data: { status: "COMPLETED" },
+    });
+  }
+
+  // 3) Clean up stale pending sessions
+  await expireStaleShowerPendings();
+
+  return {
+    autoResumed: expiredPauses.length,
+    completed: expired.length,
+  };
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyCallbackChecksum, isPaymentAccepted } from "@/lib/quickpay";
-import { activateLaundrySession } from "@/lib/actions";
+import { activateLaundrySession, activateShowerSession, applyShowerExtension } from "@/lib/actions";
 
 // QuickPay sends POST callback when payment status changes
 export async function POST(req: NextRequest) {
@@ -62,6 +62,23 @@ export async function POST(req: NextRequest) {
       await activateLaundrySession(laundrySess.id);
       console.log(`QuickPay: Laundry session ${laundrySess.id} activated`);
       return NextResponse.json({ status: "ok", type: "laundry", id: laundrySess.id });
+    }
+
+    // 3b. Check shower payments — either an initial purchase (PENDING)
+    // or an extension on an active/paused session.
+    const showerSess = await prisma.showerSess.findFirst({
+      where: { paymentId: quickpayId },
+    });
+
+    if (showerSess) {
+      if (showerSess.status === "PENDING") {
+        await activateShowerSession(showerSess.id);
+        console.log(`QuickPay: Shower session ${showerSess.id} activated`);
+      } else if (showerSess.status === "ACTIVE" || showerSess.status === "PAUSED") {
+        await applyShowerExtension(showerSess.id);
+        console.log(`QuickPay: Shower session ${showerSess.id} extended`);
+      }
+      return NextResponse.json({ status: "ok", type: "shower", id: showerSess.id });
     }
 
     // 4. Check prepaid top-up payments (stored in session notes as TOPUP:paymentId:amount)

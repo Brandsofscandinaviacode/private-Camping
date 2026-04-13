@@ -1,63 +1,109 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Plus, Save, Trash2, Loader2, WashingMachine } from "lucide-react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { Plus, Save, Trash2, Loader2, Droplets, QrCode, Download } from "lucide-react";
+import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
-  createLaundryMachine,
-  updateLaundryMachine,
-  deleteLaundryMachine,
+  createShower,
+  updateShower,
+  deleteShower,
 } from "@/lib/actions";
 
-interface Machine {
+interface Shower {
   id: number;
   name: string;
-  kind: string;
   switchEntityId: string;
-  durationMinutes: number;
-  pricePerUse: number;
+  pricePerMinute: number;
+  minMinutes: number;
+  maxMinutes: number;
   enabled: boolean;
   code: string | null;
   location: string | null;
 }
 
-interface LaundrySettingsProps {
-  machines: Machine[];
+interface Props {
+  showers: Shower[];
+  baseUrl: string;
 }
 
-function MachineRow({ machine }: { machine: Machine }) {
+function QRPreview({ url }: { url: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [, setRendered] = useState(false);
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, url, {
+        width: 200,
+        margin: 2,
+        color: { dark: "#000000", light: "#FFFFFF" },
+      }).then(() => setRendered(true));
+    }
+  }, [url]);
+
+  return (
+    <div className="flex flex-col items-center gap-2 py-2">
+      <canvas ref={canvasRef} className="rounded-lg border border-border/60" />
+      <p className="text-[10px] text-muted-foreground text-center break-all max-w-[200px]">{url}</p>
+    </div>
+  );
+}
+
+function ShowerRow({ shower, baseUrl }: { shower: Shower; baseUrl: string }) {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState({
-    name: machine.name,
-    kind: machine.kind,
-    switchEntityId: machine.switchEntityId,
-    durationMinutes: String(machine.durationMinutes),
-    pricePerUse: String(machine.pricePerUse),
-    enabled: machine.enabled,
-    code: machine.code ?? "",
-    location: machine.location ?? "",
+    name: shower.name,
+    switchEntityId: shower.switchEntityId,
+    pricePerMinute: String(shower.pricePerMinute),
+    minMinutes: String(shower.minMinutes),
+    maxMinutes: String(shower.maxMinutes),
+    enabled: shower.enabled,
+    code: shower.code ?? "",
+    location: shower.location ?? "",
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+
+  const qrUrl = (() => {
+    const base = baseUrl || (typeof window !== "undefined" ? window.location.origin : "");
+    return `${base}/shower/${shower.id}`;
+  })();
+
+  async function downloadQR() {
+    try {
+      const dataUrl = await QRCode.toDataURL(qrUrl, {
+        width: 512,
+        margin: 2,
+        color: { dark: "#000000", light: "#FFFFFF" },
+      });
+      const a = document.createElement("a");
+      a.download = `qr-bad-${shower.name.toLowerCase().replace(/\s+/g, "-")}.png`;
+      a.href = dataUrl;
+      a.click();
+    } catch (e) {
+      console.error("QR generation error:", e);
+    }
+  }
 
   function handleSave() {
     setError(null);
-    if (values.code && !/^\d{4}$/.test(values.code)) {
-      setError("Koden skal være 4 cifre");
+    if (values.code && !/^1\d{3}$/.test(values.code)) {
+      setError("Kode skal være 4 cifre og starte med 1 (1xxx)");
       return;
     }
     startTransition(async () => {
       try {
-        await updateLaundryMachine(machine.id, {
+        await updateShower(shower.id, {
           name: values.name,
-          kind: values.kind,
           switchEntityId: values.switchEntityId,
-          durationMinutes: parseInt(values.durationMinutes, 10) || 60,
-          pricePerUse: parseFloat(values.pricePerUse) || 0,
+          pricePerMinute: parseFloat(values.pricePerMinute) || 0,
+          minMinutes: parseInt(values.minMinutes, 10) || 2,
+          maxMinutes: parseInt(values.maxMinutes, 10) || 30,
           enabled: values.enabled,
           code: values.code.trim() || null,
           location: values.location.trim() || null,
@@ -72,7 +118,7 @@ function MachineRow({ machine }: { machine: Machine }) {
 
   function handleDelete() {
     startTransition(async () => {
-      await deleteLaundryMachine(machine.id);
+      await deleteShower(shower.id);
     });
   }
 
@@ -80,8 +126,8 @@ function MachineRow({ machine }: { machine: Machine }) {
     <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <WashingMachine className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium text-sm">{machine.name}</span>
+          <Droplets className="h-4 w-4 text-muted-foreground" />
+          <span className="font-medium text-sm">{shower.name}</span>
         </div>
         <Switch
           checked={values.enabled}
@@ -102,70 +148,75 @@ function MachineRow({ machine }: { machine: Machine }) {
           <Input
             value={values.switchEntityId}
             onChange={(e) => setValues((v) => ({ ...v, switchEntityId: e.target.value }))}
-            placeholder="switch.washing_machine"
+            placeholder="switch.shower_1"
+            className="mt-1"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <Label className="text-xs text-muted-foreground">Pris pr. min (DKK)</Label>
+          <Input
+            type="number"
+            step="0.25"
+            value={values.pricePerMinute}
+            onChange={(e) => setValues((v) => ({ ...v, pricePerMinute: e.target.value }))}
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Min. min</Label>
+          <Input
+            type="number"
+            value={values.minMinutes}
+            onChange={(e) => setValues((v) => ({ ...v, minMinutes: e.target.value }))}
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Max. min</Label>
+          <Input
+            type="number"
+            value={values.maxMinutes}
+            onChange={(e) => setValues((v) => ({ ...v, maxMinutes: e.target.value }))}
             className="mt-1"
           />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <Label className="text-xs text-muted-foreground">Type</Label>
-          <select
-            value={values.kind}
-            onChange={(e) => setValues((v) => ({ ...v, kind: e.target.value }))}
-            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="WASHER">Vaskemaskine</option>
-            <option value="DRYER">Tørretumbler</option>
-          </select>
-        </div>
-        <div>
-          <Label className="text-xs text-muted-foreground">Varighed (minutter)</Label>
-          <Input
-            type="number"
-            value={values.durationMinutes}
-            onChange={(e) => setValues((v) => ({ ...v, durationMinutes: e.target.value }))}
-            className="mt-1"
-          />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label className="text-xs text-muted-foreground">Pris pr. vask (DKK)</Label>
-          <Input
-            type="number"
-            step="0.5"
-            value={values.pricePerUse}
-            onChange={(e) => setValues((v) => ({ ...v, pricePerUse: e.target.value }))}
-            className="mt-1"
-          />
-        </div>
-        <div>
-          <Label className="text-xs text-muted-foreground">
-            4-cifret kode ({values.kind === "DRYER" ? "3xxx" : "2xxx"})
-          </Label>
+          <Label className="text-xs text-muted-foreground">4-cifret kode (1xxx)</Label>
           <Input
             value={values.code}
             onChange={(e) => setValues((v) => ({ ...v, code: e.target.value.replace(/\D/g, "").slice(0, 4) }))}
-            placeholder={values.kind === "DRYER" ? "3001" : "2001"}
+            placeholder="1001"
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Lokation</Label>
+          <Input
+            value={values.location}
+            onChange={(e) => setValues((v) => ({ ...v, location: e.target.value }))}
+            placeholder="Bygning A"
             className="mt-1"
           />
         </div>
       </div>
-      <div>
-        <Label className="text-xs text-muted-foreground">Lokation</Label>
-        <Input
-          value={values.location}
-          onChange={(e) => setValues((v) => ({ ...v, location: e.target.value }))}
-          placeholder="Bygning A, Vaskerum 1"
-          className="mt-1"
-        />
-      </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
-      <div className="flex items-center gap-2 pt-1">
+      {showQR && <QRPreview url={qrUrl} />}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         <Button size="sm" disabled={isPending} onClick={handleSave}>
           <Save className="h-3 w-3 mr-1.5" />
           {saved ? "Gemt!" : "Gem"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setShowQR((v) => !v)}>
+          <QrCode className="h-3 w-3 mr-1.5" />
+          {showQR ? "Skjul QR" : "Vis QR"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={downloadQR}>
+          <Download className="h-3 w-3 mr-1.5" />
+          Download PNG
         </Button>
         {!confirmDelete ? (
           <Button variant="outline" size="sm" onClick={() => setConfirmDelete(true)}>
@@ -187,14 +238,14 @@ function MachineRow({ machine }: { machine: Machine }) {
   );
 }
 
-export function LaundrySettings({ machines }: LaundrySettingsProps) {
+export function ShowerSettings({ showers, baseUrl }: Props) {
   const [isPending, startTransition] = useTransition();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newKind, setNewKind] = useState("WASHER");
   const [newEntity, setNewEntity] = useState("");
-  const [newDuration, setNewDuration] = useState("60");
-  const [newPrice, setNewPrice] = useState("25");
+  const [newPrice, setNewPrice] = useState("2");
+  const [newMin, setNewMin] = useState("2");
+  const [newMax, setNewMax] = useState("30");
   const [newCode, setNewCode] = useState("");
   const [newLocation, setNewLocation] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
@@ -202,26 +253,26 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
   function handleAdd() {
     if (!newName.trim() || !newEntity.trim()) return;
     setAddError(null);
-    if (newCode && !/^\d{4}$/.test(newCode)) {
-      setAddError("Koden skal være 4 cifre");
+    if (newCode && !/^1\d{3}$/.test(newCode)) {
+      setAddError("Kode skal være 4 cifre og starte med 1 (1xxx)");
       return;
     }
     startTransition(async () => {
       try {
-        await createLaundryMachine({
+        await createShower({
           name: newName.trim(),
-          kind: newKind,
           switchEntityId: newEntity.trim(),
-          durationMinutes: parseInt(newDuration, 10) || 60,
-          pricePerUse: parseFloat(newPrice) || 25,
+          pricePerMinute: parseFloat(newPrice) || 2,
+          minMinutes: parseInt(newMin, 10) || 2,
+          maxMinutes: parseInt(newMax, 10) || 30,
           code: newCode.trim() || null,
           location: newLocation.trim() || null,
         });
         setNewName("");
-        setNewKind("WASHER");
         setNewEntity("");
-        setNewDuration("60");
-        setNewPrice("25");
+        setNewPrice("2");
+        setNewMin("2");
+        setNewMax("30");
         setNewCode("");
         setNewLocation("");
         setShowAdd(false);
@@ -234,88 +285,86 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold mb-1">Vaskerum</h2>
+        <h2 className="text-lg font-semibold mb-1">Bade</h2>
         <p className="text-sm text-muted-foreground mb-5">
-          Tilføj vaskemaskiner og tørretumblere som gæster kan betale og starte fra gæsteportalen.
-          Hver maskine styres af et Shelly-relæ via Home Assistant.
+          Opret bade med Shelly-ventil. Gæster køber et antal minutter og kan
+          pause op til 5 min. undervejs. Hver session auto-lukker når tiden er gået.
         </p>
       </div>
 
-      {machines.length === 0 && !showAdd && (
+      {showers.length === 0 && !showAdd && (
         <p className="text-sm text-muted-foreground py-4">
-          Ingen maskiner oprettet endnu.
+          Ingen bade oprettet endnu.
         </p>
       )}
 
       <div className="space-y-3">
-        {machines.map((m) => (
-          <MachineRow key={m.id} machine={m} />
+        {showers.map((s) => (
+          <ShowerRow key={s.id} shower={s} baseUrl={baseUrl} />
         ))}
       </div>
 
       {showAdd ? (
         <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 space-y-3">
-          <h3 className="font-medium text-sm">Ny maskine</h3>
+          <h3 className="font-medium text-sm">Nyt bad</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground">Navn *</Label>
               <Input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Vaskemaskine 1"
+                placeholder="Bad 1"
                 className="mt-1"
                 autoFocus
               />
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Type</Label>
-              <select
-                value={newKind}
-                onChange={(e) => setNewKind(e.target.value)}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="WASHER">Vaskemaskine</option>
-                <option value="DRYER">Tørretumbler</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Switch Entity ID *</Label>
-            <Input
-              value={newEntity}
-              onChange={(e) => setNewEntity(e.target.value)}
-              placeholder="switch.washer_1"
-              className="mt-1"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Varighed (min)</Label>
+              <Label className="text-xs text-muted-foreground">Switch Entity ID *</Label>
               <Input
-                type="number"
-                value={newDuration}
-                onChange={(e) => setNewDuration(e.target.value)}
+                value={newEntity}
+                onChange={(e) => setNewEntity(e.target.value)}
+                placeholder="switch.shower_1"
                 className="mt-1"
               />
             </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
             <div>
-              <Label className="text-xs text-muted-foreground">Pris (DKK)</Label>
+              <Label className="text-xs text-muted-foreground">Pris/min (DKK)</Label>
               <Input
                 type="number"
-                step="0.5"
+                step="0.25"
                 value={newPrice}
                 onChange={(e) => setNewPrice(e.target.value)}
                 className="mt-1"
               />
             </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Min. min</Label>
+              <Input
+                type="number"
+                value={newMin}
+                onChange={(e) => setNewMin(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Max. min</Label>
+              <Input
+                type="number"
+                value={newMax}
+                onChange={(e) => setNewMax(e.target.value)}
+                className="mt-1"
+              />
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs text-muted-foreground">4-cifret kode ({newKind === "DRYER" ? "3xxx" : "2xxx"})</Label>
+              <Label className="text-xs text-muted-foreground">4-cifret kode (1xxx)</Label>
               <Input
                 value={newCode}
                 onChange={(e) => setNewCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder={newKind === "DRYER" ? "3001" : "2001"}
+                placeholder="1001"
                 className="mt-1"
               />
             </div>
@@ -341,7 +390,7 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
       ) : (
         <Button variant="outline" size="sm" onClick={() => setShowAdd(true)}>
           <Plus className="h-3.5 w-3.5 mr-1.5" />
-          Tilføj maskine
+          Tilføj bad
         </Button>
       )}
     </div>

@@ -1,4 +1,4 @@
-import { getGlobalSettings, getUnits, getLaundryMachines } from "@/lib/actions";
+import { getGlobalSettings, getUnits, getLaundryMachines, getShowers } from "@/lib/actions";
 import { requireAuth } from "@/lib/auth";
 import { GeneralSettings, HASettings, NotificationSettings, PaymentSettings, GuestPortalSettings } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
@@ -6,6 +6,7 @@ import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SystemStatus } from "@/components/admin/system-status";
 import { SettingsTabs } from "@/components/admin/settings-tabs";
 import { LaundrySettings } from "@/components/admin/laundry-settings";
+import { ShowerSettings } from "@/components/admin/shower-settings";
 import { Home, Caravan, MapPin } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +28,11 @@ const typeIcons: Record<string, typeof Home> = {
 
 export default async function SettingsPage() {
   const session = await requireAuth();
-  const [settings, units, laundryMachines] = await Promise.all([
+  const [settings, units, laundryMachines, showers] = await Promise.all([
     getGlobalSettings(),
     getUnits(),
     getLaundryMachines(),
+    getShowers(),
   ]);
 
   const sortedUnits = [...units].sort((a, b) => {
@@ -113,7 +115,8 @@ export default async function SettingsPage() {
           payment: <PaymentSettings settings={settings} />,
           guest: <GuestPortalSettings settings={settings} />,
           hardware: hardwareContent,
-          laundry: <LaundrySettings machines={laundryMachines.map((m) => ({ id: m.id, name: m.name, switchEntityId: m.switchEntityId, durationMinutes: m.durationMinutes, pricePerUse: m.pricePerUse, enabled: m.enabled }))} />,
+          laundry: <LaundrySettings machines={laundryMachines.map((m) => ({ id: m.id, name: m.name, kind: m.kind, switchEntityId: m.switchEntityId, durationMinutes: m.durationMinutes, pricePerUse: m.pricePerUse, enabled: m.enabled, code: m.code, location: m.location }))} />,
+          showers: <ShowerSettings baseUrl={settings.site_url || ""} showers={showers.map((s) => ({ id: s.id, name: s.name, switchEntityId: s.switchEntityId, pricePerMinute: s.pricePerMinute, minMinutes: s.minMinutes, maxMinutes: s.maxMinutes, enabled: s.enabled, code: s.code, location: s.location }))} />,
           system: systemContent,
         }}
       </SettingsTabs>
