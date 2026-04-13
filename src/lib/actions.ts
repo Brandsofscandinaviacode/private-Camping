@@ -503,6 +503,10 @@ export async function checkOut(sessionId: number) {
     // Fallback to fixed price
   }
 
+  // Per-booking overrides trump global pricing
+  if (session.pricePerKwhOverride != null) effectiveElPrice = session.pricePerKwhOverride;
+  const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+
   let endKwh: number | null = null;
   let endHeatingKwh: number | null = null;
   let endWaterLiters: number | null = null;
@@ -529,7 +533,7 @@ export async function checkOut(sessionId: number) {
     totalElectricityCost = (totalElectricityCost ?? 0) + heatingCost;
   }
   if (endWaterLiters !== null && session.startWaterLiters !== null) {
-    totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * pricing.pricePerLiterWater;
+    totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * waterRate;
   }
 
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0);
@@ -609,6 +613,13 @@ export async function getLiveConsumption(sessionId: number) {
     // Fallback to fixed price
   }
 
+  // Per-booking override takes precedence over the global/effective price
+  if (session.pricePerKwhOverride != null) {
+    effectiveElPrice = session.pricePerKwhOverride;
+    spotPrice = null;
+  }
+  const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+
   let currentKwh: number | null = null;
   let usedKwhMain: number | null = null;
   let currentHeatingKwh: number | null = null;
@@ -664,7 +675,7 @@ export async function getLiveConsumption(sessionId: number) {
     } else if (currentWaterLiters !== null && session.startWaterLiters !== null) {
       const baselineWater = latestPaidInvoice?.endWaterLiters ?? session.startWaterLiters;
       usedWaterLiters = Math.max(0, currentWaterLiters - baselineWater);
-      waterCost = usedWaterLiters * pricing.pricePerLiterWater;
+      waterCost = usedWaterLiters * waterRate;
     }
   }
 
@@ -1079,13 +1090,19 @@ export async function createMonthlyInvoice(unitId: number) {
     // Fallback to fixed price
   }
 
+  // Per-booking override on the active session takes precedence
+  if (activeSession?.pricePerKwhOverride != null) {
+    effectiveElPrice = activeSession.pricePerKwhOverride;
+  }
+  const waterRate = activeSession?.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+
   const mainElecCost = (endKwh !== null && startKwh !== null)
     ? Math.max(0, endKwh - startKwh) * effectiveElPrice : 0;
   const heatingElecCost = (endHeatingKwh !== null && startHeatingKwh !== null)
     ? Math.max(0, endHeatingKwh - startHeatingKwh) * effectiveElPrice : 0;
   const electricityCost = mainElecCost + heatingElecCost;
   const waterCost = (endWaterLiters !== null && startWaterLiters !== null)
-    ? Math.max(0, endWaterLiters - startWaterLiters) * pricing.pricePerLiterWater : 0;
+    ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
 
   const invoice = await prisma.invoice.create({
     data: {
@@ -1433,6 +1450,8 @@ export async function updateSessionDetails(
     endHeatingKwh?: number | null;
     startWaterLiters?: number | null;
     endWaterLiters?: number | null;
+    pricePerKwhOverride?: number | null;
+    pricePerLiterWaterOverride?: number | null;
   }
 ) {
   const updateData: Record<string, unknown> = {};
@@ -1448,9 +1467,16 @@ export async function updateSessionDetails(
   if (data.endHeatingKwh !== undefined) updateData.endHeatingKwh = data.endHeatingKwh;
   if (data.startWaterLiters !== undefined) updateData.startWaterLiters = data.startWaterLiters;
   if (data.endWaterLiters !== undefined) updateData.endWaterLiters = data.endWaterLiters;
+  if (data.pricePerKwhOverride !== undefined) updateData.pricePerKwhOverride = data.pricePerKwhOverride;
+  if (data.pricePerLiterWaterOverride !== undefined) updateData.pricePerLiterWaterOverride = data.pricePerLiterWaterOverride;
 
-  // If consumption was manually edited, recalculate costs
-  if (data.startKwh !== undefined || data.endKwh !== undefined || data.startHeatingKwh !== undefined || data.endHeatingKwh !== undefined || data.startWaterLiters !== undefined || data.endWaterLiters !== undefined) {
+  // If consumption OR any price override was manually edited, recalculate costs
+  const needsRecalc = data.startKwh !== undefined || data.endKwh !== undefined
+    || data.startHeatingKwh !== undefined || data.endHeatingKwh !== undefined
+    || data.startWaterLiters !== undefined || data.endWaterLiters !== undefined
+    || data.pricePerKwhOverride !== undefined || data.pricePerLiterWaterOverride !== undefined;
+
+  if (needsRecalc) {
     const session = await prisma.session.findUnique({ where: { id: sessionId } });
     if (session) {
       const pricing = await getPricing();
@@ -1461,16 +1487,22 @@ export async function updateSessionDetails(
       const startWater = data.startWaterLiters !== undefined ? data.startWaterLiters : session.startWaterLiters;
       const endWater = data.endWaterLiters !== undefined ? data.endWaterLiters : session.endWaterLiters;
 
+      // Use per-booking override when set, otherwise fall back to the global price
+      const kwhRate = (data.pricePerKwhOverride !== undefined ? data.pricePerKwhOverride : session.pricePerKwhOverride)
+        ?? pricing.pricePerKwh;
+      const waterRate = (data.pricePerLiterWaterOverride !== undefined ? data.pricePerLiterWaterOverride : session.pricePerLiterWaterOverride)
+        ?? pricing.pricePerLiterWater;
+
       let elCostCalc = 0;
       let hasElCalc = false;
       if (startKwh != null && endKwh != null) {
         const usedKwh = Math.max(0, endKwh - startKwh);
-        elCostCalc += usedKwh * pricing.pricePerKwh;
+        elCostCalc += usedKwh * kwhRate;
         hasElCalc = true;
       }
       if (startHeatingKwh != null && endHeatingKwh != null) {
         const usedHeating = Math.max(0, endHeatingKwh - startHeatingKwh);
-        elCostCalc += usedHeating * pricing.pricePerKwh;
+        elCostCalc += usedHeating * kwhRate;
         hasElCalc = true;
       }
       if (hasElCalc) {
@@ -1478,7 +1510,7 @@ export async function updateSessionDetails(
       }
       if (startWater != null && endWater != null) {
         const usedWater = Math.max(0, endWater - startWater);
-        updateData.totalWaterCost = parseFloat((usedWater * pricing.pricePerLiterWater).toFixed(2));
+        updateData.totalWaterCost = parseFloat((usedWater * waterRate).toFixed(2));
       }
       const elCost = (updateData.totalElectricityCost as number | undefined) ?? session.totalElectricityCost ?? 0;
       const waterCost = (updateData.totalWaterCost as number | undefined) ?? session.totalWaterCost ?? 0;

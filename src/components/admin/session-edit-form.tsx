@@ -22,6 +22,11 @@ interface SessionEditFormProps {
   hasHeatingMeter: boolean;
   startWaterLiters: number | null;
   endWaterLiters: number | null;
+  pricePerKwhOverride: number | null;
+  pricePerLiterWaterOverride: number | null;
+  defaultPricePerKwh: number;
+  defaultPricePerLiterWater: number;
+  hasWaterMeter: boolean;
   isActive: boolean;
 }
 
@@ -40,6 +45,11 @@ export function SessionEditForm({
   hasHeatingMeter,
   startWaterLiters: initialStartWater,
   endWaterLiters: initialEndWater,
+  pricePerKwhOverride: initialKwhOverride,
+  pricePerLiterWaterOverride: initialWaterOverride,
+  defaultPricePerKwh,
+  defaultPricePerLiterWater,
+  hasWaterMeter,
   isActive,
 }: SessionEditFormProps) {
   const [isPending, startTransition] = useTransition();
@@ -59,6 +69,8 @@ export function SessionEditForm({
     endHeatingKwh: initialEndHeatingKwh !== null ? String(initialEndHeatingKwh) : "",
     startWaterLiters: initialStartWater !== null ? String(initialStartWater) : "",
     endWaterLiters: initialEndWater !== null ? String(initialEndWater) : "",
+    pricePerKwhOverride: initialKwhOverride !== null ? String(initialKwhOverride) : "",
+    pricePerLiterWaterOverride: initialWaterOverride !== null ? String(initialWaterOverride) : "",
   });
 
   function handleSave() {
@@ -76,6 +88,8 @@ export function SessionEditForm({
         endHeatingKwh: values.endHeatingKwh !== "" ? parseFloat(values.endHeatingKwh) : null,
         startWaterLiters: values.startWaterLiters !== "" ? parseFloat(values.startWaterLiters) : null,
         endWaterLiters: values.endWaterLiters !== "" ? parseFloat(values.endWaterLiters) : null,
+        pricePerKwhOverride: values.pricePerKwhOverride !== "" ? parseFloat(values.pricePerKwhOverride) : null,
+        pricePerLiterWaterOverride: values.pricePerLiterWaterOverride !== "" ? parseFloat(values.pricePerLiterWaterOverride) : null,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -243,6 +257,42 @@ export function SessionEditForm({
               />
             </div>
           </div>
+
+          {/* Per-booking price overrides */}
+          <p className="text-xs font-medium text-muted-foreground mt-4 mb-2">
+            Pris for denne booking (valgfri)
+          </p>
+          <div className={`grid gap-3 ${hasWaterMeter ? "grid-cols-2" : "grid-cols-1"}`}>
+            <div>
+              <Label className="text-xs text-muted-foreground">Pris pr. kWh (DKK)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={values.pricePerKwhOverride}
+                onChange={(e) => h("pricePerKwhOverride", e.target.value)}
+                placeholder={`Standard: ${defaultPricePerKwh.toFixed(2)}`}
+                className="mt-1"
+              />
+            </div>
+            {hasWaterMeter && (
+              <div>
+                <Label className="text-xs text-muted-foreground">Pris pr. liter (DKK)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={values.pricePerLiterWaterOverride}
+                  onChange={(e) => h("pricePerLiterWaterOverride", e.target.value)}
+                  placeholder={`Standard: ${defaultPricePerLiterWater.toFixed(2)}`}
+                  className="mt-1"
+                />
+              </div>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-1.5">
+            Lad felterne stå tomme for at bruge standardpriserne fra indstillingerne.
+          </p>
         </div>
 
         <div>

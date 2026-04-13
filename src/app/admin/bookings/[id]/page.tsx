@@ -176,6 +176,11 @@ export default async function BookingDetailPage({
             hasHeatingMeter={hasHeatingMeter}
             startWaterLiters={session.startWaterLiters}
             endWaterLiters={session.endWaterLiters}
+            pricePerKwhOverride={session.pricePerKwhOverride}
+            pricePerLiterWaterOverride={session.pricePerLiterWaterOverride}
+            defaultPricePerKwh={pricing.pricePerKwh}
+            defaultPricePerLiterWater={pricing.pricePerLiterWater}
+            hasWaterMeter={!!session.unit.hardware?.hasWater}
             isActive={isActive}
           />
         </div>

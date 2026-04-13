@@ -162,6 +162,12 @@ model Session {
   totalWaterCost       Float?
   totalCost            Float?
 
+  // Per-booking price overrides (DKK). Admin can override the global rates
+  // when manually editing a booking — e.g. to charge a flat rate agreed
+  // with the guest, independent of the pricing_mode setting.
+  pricePerKwhOverride     Float?
+  pricePerLiterWaterOverride Float?
+
   // External booking system price (added to total)
   externalPrice       Float?
   externalDescription String?
