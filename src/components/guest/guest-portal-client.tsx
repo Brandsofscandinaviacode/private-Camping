@@ -603,8 +603,8 @@ export function GuestPortalClient({
           );
         })()}
 
-        {/* ═══ Unpaid invoice banner — for fastliggere ═══ */}
-        {isLongTerm && unpaidInvoices.length > 0 && (
+        {/* ═══ Unpaid invoice banner — fastliggere + short-term postpaid ═══ */}
+        {unpaidInvoices.length > 0 && (
           <Card className="border-amber-300 bg-amber-50">
             <CardContent className="py-4 space-y-3">
               <div className="flex items-start gap-3">
@@ -777,8 +777,8 @@ export function GuestPortalClient({
           </Card>
         )}
 
-        {/* ═══ Invoices for long-term renters — collapsible ═══ */}
-        {isLongTerm && relevantInvoices.length > 0 && (
+        {/* ═══ Invoices — collapsible, fastliggere + short-term postpaid ═══ */}
+        {relevantInvoices.length > 0 && (
           <Section
             icon={<Receipt className="h-4 w-4 text-primary" />}
             title={`${tx.yourInvoices} (${relevantInvoices.length})`}

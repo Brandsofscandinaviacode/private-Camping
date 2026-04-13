@@ -33,11 +33,24 @@ export default async function GuestPortalPage({
       de: globalSettings[`practical_info_${typeKey}_de`] || null,
     };
 
-    // If this is a fastligger, load invoices too
+    // Load invoices for long-term (fastligger) OR short-term postpaid bookings.
+    // Short-term invoices are scoped to the session's time range so previous
+    // guests' invoices on the same unit don't leak in.
     const isFastligger = session.unit.isLongTerm;
+    const isPostpaid = (session.billingMode || "POSTPAID") !== "PREPAID";
     const invoices = isFastligger
       ? await prisma.invoice.findMany({
           where: { unitId: session.unitId },
+          orderBy: { periodEnd: "desc" },
+          take: 12,
+        })
+      : isPostpaid
+      ? await prisma.invoice.findMany({
+          where: {
+            unitId: session.unitId,
+            periodEnd: { gte: session.checkInTime },
+            ...(session.checkOutTime ? { periodStart: { lte: session.checkOutTime } } : {}),
+          },
           orderBy: { periodEnd: "desc" },
           take: 12,
         })

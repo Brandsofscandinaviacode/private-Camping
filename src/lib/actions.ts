@@ -973,8 +973,35 @@ export async function createMonthlyInvoice(unitId: number) {
 
   const pricing = await getPricing();
   const now = new Date();
-  const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+  // Find the active postpaid session first — for short-term bookings the
+  // invoice period should span the session (check-in → now), not a calendar
+  // month. Long-term (fastligger) keeps calendar-month billing.
+  const activeSessionForPeriod = !unit.isLongTerm
+    ? await prisma.session.findFirst({
+        where: { unitId, status: "ACTIVE", billingMode: { not: "PREPAID" } },
+        orderBy: { checkInTime: "desc" },
+      })
+    : null;
+
+  // Use the last invoice's periodEnd as the start of the new period if it
+  // falls after the session check-in — prevents overlapping periods when
+  // multiple invoices are created for the same session.
+  const lastInvoiceForPeriod = activeSessionForPeriod
+    ? await prisma.invoice.findFirst({
+        where: { unitId },
+        orderBy: { id: "desc" },
+      })
+    : null;
+
+  const periodStart = activeSessionForPeriod
+    ? (lastInvoiceForPeriod && lastInvoiceForPeriod.periodEnd > activeSessionForPeriod.checkInTime
+        ? lastInvoiceForPeriod.periodEnd
+        : activeSessionForPeriod.checkInTime)
+    : new Date(now.getFullYear(), now.getMonth(), 1);
+  const periodEnd = activeSessionForPeriod
+    ? now
+    : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
   const hw = unit.hardware;
 
@@ -1281,9 +1308,30 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) return { ok: false, message: "Faktura ikke fundet" };
 
-  const guestName = unit.longTermGuestName || "Lejer";
-  const guestEmail = unit.longTermGuestEmail;
-  const guestPhone = unit.longTermGuestPhone;
+  // Long-term units store guest info on the unit; for short-term bookings
+  // we look up the most relevant session (active first, then the newest that
+  // overlaps the invoice period) and use its guest info + portal token.
+  let guestName = unit.longTermGuestName || "Lejer";
+  let guestEmail: string | null = unit.longTermGuestEmail;
+  let guestPhone: string | null = unit.longTermGuestPhone;
+  let portalToken: string | null = unit.longTermPortalToken;
+
+  if (!unit.isLongTerm) {
+    const relevantSession = await prisma.session.findFirst({
+      where: {
+        unitId,
+        billingMode: { not: "PREPAID" },
+        checkInTime: { lte: invoice.periodEnd },
+      },
+      orderBy: [{ status: "asc" }, { checkInTime: "desc" }],
+    });
+    if (relevantSession) {
+      guestName = relevantSession.guestName || guestName;
+      guestEmail = relevantSession.guestEmail || null;
+      guestPhone = relevantSession.guestPhone || null;
+      portalToken = relevantSession.guestPortalToken;
+    }
+  }
 
   if (!guestEmail && !guestPhone) {
     return { ok: false, message: "Ingen email eller telefon registreret på lejeren" };
@@ -1291,9 +1339,7 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
 
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
-  const portalUrl = unit.longTermPortalToken
-    ? `${baseUrl}/guest/${unit.longTermPortalToken}`
-    : baseUrl;
+  const portalUrl = portalToken ? `${baseUrl}/guest/${portalToken}` : baseUrl;
 
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
   const unitName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
@@ -2061,7 +2107,21 @@ export async function createInvoicePayment(invoiceId: number) {
 
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
-  const portalToken = invoice.unit.longTermPortalToken;
+  let portalToken: string | null = invoice.unit.longTermPortalToken;
+
+  // For short-term invoices the unit has no longTermPortalToken — fall back
+  // to the session whose period overlaps the invoice.
+  if (!portalToken) {
+    const relevantSession = await prisma.session.findFirst({
+      where: {
+        unitId: invoice.unitId,
+        billingMode: { not: "PREPAID" },
+        checkInTime: { lte: invoice.periodEnd },
+      },
+      orderBy: [{ status: "asc" }, { checkInTime: "desc" }],
+    });
+    if (relevantSession) portalToken = relevantSession.guestPortalToken;
+  }
 
   const { createPaymentLink, generateOrderId } = await import("./quickpay");
   const orderId = generateOrderId("I", invoiceId);
