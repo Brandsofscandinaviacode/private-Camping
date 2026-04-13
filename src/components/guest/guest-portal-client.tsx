@@ -20,6 +20,8 @@ import {
   ChevronLeft,
   ChevronRight,
   CalendarClock,
+  Wind,
+  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -81,8 +83,9 @@ interface GuestPortalClientProps {
   unitType: string;
   practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
-  laundryMachines: { id: number; name: string; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null }[];
+  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null }[];
   laundryCredit: number;
+  showers: { id: number; name: string; location: string | null; pricePerMinute: number; minMinutes: number; maxMinutes: number; available: boolean; minutesLeft: number }[];
   nextInvoiceDay: number | null; // 1-31 or null
 }
 
@@ -158,6 +161,7 @@ export function GuestPortalClient({
   siteMapUrl,
   laundryMachines,
   laundryCredit,
+  showers,
   nextInvoiceDay,
 }: GuestPortalClientProps) {
   const [locale, setLocale] = useState<Locale>(() => {
@@ -246,7 +250,8 @@ export function GuestPortalClient({
 
   const formatDKK = (v: number | null) => v !== null ? `${v.toFixed(2)} DKK` : "—";
 
-  const hasServices = hasClimate || hasSmartLock || laundryMachines.length > 0;
+  const hasServiceItems = laundryMachines.length > 0 || showers.length > 0;
+  const hasServices = hasClimate || hasSmartLock || hasServiceItems;
   const hasPracticalInfo = !!(practicalInfo[locale] || practicalInfo.da);
   const hasInfoSection = hasPracticalInfo || !!siteMapUrl;
 
@@ -649,15 +654,21 @@ export function GuestPortalClient({
             defaultOpen={true}
           >
             <div className="space-y-4">
-              {/* Laundry */}
-              {laundryMachines.length > 0 && (
-                <LaundrySection machines={laundryMachines} token={token} locale={locale} credit={laundryCredit} />
+              {/* Services drill-down (Bad / Vaskemaskine / Tørretumbler) */}
+              {hasServiceItems && (
+                <GuestServicesSection
+                  showers={showers}
+                  machines={laundryMachines}
+                  token={token}
+                  locale={locale}
+                  credit={laundryCredit}
+                />
               )}
 
               {/* Climate */}
               {hasClimate && (
                 <div className="space-y-2">
-                  {laundryMachines.length > 0 && <Separator />}
+                  {hasServiceItems && <Separator />}
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <Thermometer className="h-4 w-4 text-blue-400" />
                     {tx.temperature}
@@ -678,7 +689,7 @@ export function GuestPortalClient({
               {/* Smart Lock */}
               {hasSmartLock && (
                 <div className="space-y-2">
-                  {(hasClimate || laundryMachines.length > 0) && <Separator />}
+                  {(hasClimate || hasServiceItems) && <Separator />}
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <DoorOpen className="h-4 w-4 text-primary" />
                     {tx.door}
@@ -833,22 +844,31 @@ export function GuestPortalClient({
   );
 }
 
-// ── Laundry Section (inline, no card wrapper) ──
-function LaundrySection({
+// ── Services Section (drill-down: type → location → items) ──
+type ServiceType = "shower" | "washer" | "dryer";
+const NO_LOCATION_KEY = "__nolocation__";
+
+function GuestServicesSection({
+  showers: initialShowers,
   machines: initialMachines,
   token,
   locale,
   credit,
 }: {
+  showers: GuestPortalClientProps["showers"];
   machines: GuestPortalClientProps["laundryMachines"];
   token: string;
   locale: string;
   credit: number;
 }) {
+  const [showers, setShowers] = useState(initialShowers);
   const [machines, setMachines] = useState(initialMachines);
-  const [startingId, setStartingId] = useState<number | null>(null);
+  const [selectedType, setSelectedType] = useState<ServiceType | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
+  const [startingId, setStartingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // Refresh availability periodically
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -859,8 +879,81 @@ function LaundrySection({
     return () => clearInterval(interval);
   }, []);
 
-  async function handleStart(machineId: number) {
-    setStartingId(machineId);
+  // Keep initial showers fresh when server re-renders
+  useEffect(() => { setShowers(initialShowers); }, [initialShowers]);
+
+  const labels = {
+    chooseType: locale === "en" ? "Choose service" : locale === "de" ? "Service wählen" : "Vælg service",
+    chooseLocation: locale === "en" ? "Choose location" : locale === "de" ? "Ort wählen" : "Vælg lokation",
+    back: locale === "en" ? "Back" : locale === "de" ? "Zurück" : "Tilbage",
+    shower: locale === "en" ? "Shower" : locale === "de" ? "Dusche" : "Bad",
+    washer: locale === "en" ? "Washer" : locale === "de" ? "Waschmaschine" : "Vaskemaskine",
+    dryer: locale === "en" ? "Dryer" : locale === "de" ? "Trockner" : "Tørretumbler",
+    noLocation: locale === "en" ? "No location" : locale === "de" ? "Ohne Ort" : "Uden lokation",
+    available: locale === "en" ? "Available" : locale === "de" ? "Verfügbar" : "Ledig",
+    inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
+    minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
+    start: locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start",
+    choose: locale === "en" ? "Choose" : locale === "de" ? "Wählen" : "Vælg",
+    perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
+    perMinute: locale === "en" ? "per minute" : locale === "de" ? "pro Minute" : "pr. min",
+    items: locale === "en" ? "items" : locale === "de" ? "Stück" : "stk",
+  };
+  const creditLabel = locale === "en" ? "Credit" : locale === "de" ? "Guthaben" : "Kredit";
+  const freeLabel = locale === "en" ? "Free" : locale === "de" ? "Gratis" : "Gratis";
+
+  const washers = machines.filter((m) => m.kind === "WASHER");
+  const dryers = machines.filter((m) => m.kind === "DRYER");
+
+  const typeCards: { type: ServiceType; count: number; icon: React.ReactNode; label: string; accent: string }[] = [
+    showers.length > 0 && {
+      type: "shower" as ServiceType,
+      count: showers.length,
+      icon: <Droplets className="h-5 w-5" />,
+      label: labels.shower,
+      accent: "text-sky-500",
+    },
+    washers.length > 0 && {
+      type: "washer" as ServiceType,
+      count: washers.length,
+      icon: <WashingMachine className="h-5 w-5" />,
+      label: labels.washer,
+      accent: "text-blue-500",
+    },
+    dryers.length > 0 && {
+      type: "dryer" as ServiceType,
+      count: dryers.length,
+      icon: <Wind className="h-5 w-5" />,
+      label: labels.dryer,
+      accent: "text-purple-500",
+    },
+  ].filter(Boolean) as { type: ServiceType; count: number; icon: React.ReactNode; label: string; accent: string }[];
+
+  function getLocationsFor(type: ServiceType): { key: string; label: string; count: number }[] {
+    const items: { location: string | null }[] =
+      type === "shower" ? showers : type === "washer" ? washers : dryers;
+    const byLocation: Record<string, { label: string; count: number }> = {};
+    for (const it of items) {
+      const key = it.location?.trim() || NO_LOCATION_KEY;
+      const label = it.location?.trim() || labels.noLocation;
+      if (byLocation[key]) byLocation[key].count += 1;
+      else byLocation[key] = { label, count: 1 };
+    }
+    return Object.entries(byLocation)
+      .map(([key, v]) => ({ key, label: v.label, count: v.count }))
+      .sort((a, b) => a.label.localeCompare(b.label, "da-DK"));
+  }
+
+  function getItemsFor(type: ServiceType, locKey: string) {
+    if (type === "shower") {
+      return showers.filter((s) => (s.location?.trim() || NO_LOCATION_KEY) === locKey);
+    }
+    const pool = type === "washer" ? washers : dryers;
+    return pool.filter((m) => (m.location?.trim() || NO_LOCATION_KEY) === locKey);
+  }
+
+  async function handleStartMachine(machineId: number) {
+    setStartingId(`m-${machineId}`);
     setMessage(null);
     try {
       const res = await createLaundryPayment(machineId, token);
@@ -876,19 +969,12 @@ function LaundrySection({
     }
   }
 
-  const labels = {
-    title: locale === "en" ? "Laundry" : locale === "de" ? "Waschraum" : "Vaskerum",
-    available: locale === "en" ? "Available" : locale === "de" ? "Verfügbar" : "Ledig",
-    inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
-    minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
-    start: locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start",
-    perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
-  };
+  function handleStartShower(showerId: number) {
+    setStartingId(`s-${showerId}`);
+    window.location.href = `/shower/${showerId}`;
+  }
 
-  const creditLabel = locale === "en" ? "Credit" : locale === "de" ? "Guthaben" : "Kredit";
-  const freeLabel = locale === "en" ? "Free" : locale === "de" ? "Gratis" : "Gratis";
-
-  function buttonLabel(m: typeof machines[0]) {
+  function machineButtonLabel(m: GuestPortalClientProps["laundryMachines"][number]) {
     if (credit >= m.pricePerUse) return freeLabel;
     if (credit > 0) {
       const toPay = m.pricePerUse - credit;
@@ -897,47 +983,166 @@ function LaundrySection({
     return labels.start;
   }
 
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <WashingMachine className="h-4 w-4 text-blue-500" />
-          {labels.title}
-        </div>
-        {credit > 0 && (
-          <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
-            {creditLabel}: {credit.toFixed(0)} DKK
-          </span>
-        )}
-      </div>
-      {machines.map((m) => (
-        <div key={m.id} className="flex items-center justify-between py-2 border-b last:border-0">
-          <div>
-            <p className="text-sm font-medium">{m.name}</p>
-            <p className="text-xs text-muted-foreground">
-              {m.available ? (
-                <span className="text-green-600">{labels.available}</span>
-              ) : (
-                <span className="text-orange-600">
-                  {labels.inUse} — {m.minutesLeft} {labels.minutesLeft}
-                </span>
-              )}
-              {" · "}{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}
-            </p>
+  // ── Step 1: Type selection ──
+  if (!selectedType) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <WashingMachine className="h-4 w-4 text-blue-500" />
+            {labels.chooseType}
           </div>
-          <Button
-            size="sm"
-            disabled={!m.available || startingId !== null}
-            onClick={() => handleStart(m.id)}
-          >
-            {startingId === m.id ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              buttonLabel(m)
-            )}
-          </Button>
+          {credit > 0 && (
+            <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+              {creditLabel}: {credit.toFixed(0)} DKK
+            </span>
+          )}
         </div>
-      ))}
+        <div className="grid grid-cols-1 gap-2">
+          {typeCards.map((tc) => (
+            <button
+              key={tc.type}
+              onClick={() => setSelectedType(tc.type)}
+              className="flex items-center gap-3 px-3 py-3 rounded-lg border border-border/60 hover:border-primary/40 hover:bg-muted/30 transition-colors text-left"
+            >
+              <span className={tc.accent}>{tc.icon}</span>
+              <span className="flex-1">
+                <span className="text-sm font-medium block">{tc.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {tc.count} {labels.items}
+                </span>
+              </span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const typeLabel =
+    selectedType === "shower" ? labels.shower : selectedType === "washer" ? labels.washer : labels.dryer;
+
+  // ── Step 2: Location selection ──
+  if (!selectedLocation) {
+    const locations = getLocationsFor(selectedType);
+    // Skip this step if there's only one location
+    if (locations.length === 1) {
+      // Defer to avoid setState during render
+      queueMicrotask(() => setSelectedLocation(locations[0].key));
+    }
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setSelectedType(null)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            {labels.back}
+          </button>
+          <span className="text-sm font-medium">{typeLabel}</span>
+          <span className="w-12" />
+        </div>
+        <p className="text-xs text-muted-foreground">{labels.chooseLocation}</p>
+        <div className="grid grid-cols-1 gap-2">
+          {locations.map((loc) => (
+            <button
+              key={loc.key}
+              onClick={() => setSelectedLocation(loc.key)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border/60 hover:border-primary/40 hover:bg-muted/30 transition-colors text-left"
+            >
+              <MapPin className="h-4 w-4 text-muted-foreground" />
+              <span className="flex-1 text-sm">{loc.label}</span>
+              <span className="text-xs text-muted-foreground">{loc.count}</span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Step 3: Items list ──
+  const items = getItemsFor(selectedType, selectedLocation);
+  const locationLabel = selectedLocation === NO_LOCATION_KEY
+    ? labels.noLocation
+    : items[0]?.location?.trim() || selectedLocation;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setSelectedLocation(null)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          {labels.back}
+        </button>
+        <span className="text-sm font-medium">
+          {typeLabel} · {locationLabel}
+        </span>
+        <span className="w-12" />
+      </div>
+      <div className="space-y-1">
+        {selectedType === "shower"
+          ? (items as GuestPortalClientProps["showers"]).map((s) => (
+              <div key={s.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div>
+                  <p className="text-sm font-medium">{s.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {s.available ? (
+                      <span className="text-green-600">{labels.available}</span>
+                    ) : (
+                      <span className="text-orange-600">
+                        {labels.inUse} — {s.minutesLeft} {labels.minutesLeft}
+                      </span>
+                    )}
+                    {" · "}{s.pricePerMinute.toFixed(2)} DKK {labels.perMinute}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={!s.available || startingId !== null}
+                  onClick={() => handleStartShower(s.id)}
+                >
+                  {startingId === `s-${s.id}` ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    labels.choose
+                  )}
+                </Button>
+              </div>
+            ))
+          : (items as GuestPortalClientProps["laundryMachines"]).map((m) => (
+              <div key={m.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div>
+                  <p className="text-sm font-medium">{m.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {m.available ? (
+                      <span className="text-green-600">{labels.available}</span>
+                    ) : (
+                      <span className="text-orange-600">
+                        {labels.inUse} — {m.minutesLeft} {labels.minutesLeft}
+                      </span>
+                    )}
+                    {" · "}{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={!m.available || startingId !== null}
+                  onClick={() => handleStartMachine(m.id)}
+                >
+                  {startingId === `m-${m.id}` ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    machineButtonLabel(m)
+                  )}
+                </Button>
+              </div>
+            ))}
+      </div>
       {message && (
         <div className={`text-sm p-2 rounded-lg ${message.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
           {message.text}

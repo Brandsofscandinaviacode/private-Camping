@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getSessionByToken, getUnitByPortalToken, getActiveSession, getGlobalSettings, getGuestLaundryMachines } from "@/lib/actions";
+import { getSessionByToken, getUnitByPortalToken, getActiveSession, getGlobalSettings, getGuestLaundryMachines, getGuestShowers } from "@/lib/actions";
 import { prisma } from "@/lib/prisma";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
 
@@ -17,7 +17,10 @@ export default async function GuestPortalPage({
   const invoiceDay = globalSettings.invoice_email_day ? parseInt(globalSettings.invoice_email_day, 10) || null : null;
 
   // Try session-based token first
-  const laundryMachines = await getGuestLaundryMachines();
+  const [laundryMachines, showers] = await Promise.all([
+    getGuestLaundryMachines(),
+    getGuestShowers(),
+  ]);
 
   // Try session-based token first
   const session = await getSessionByToken(token);
@@ -82,6 +85,7 @@ export default async function GuestPortalPage({
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
+        showers={showers}
         laundryCredit={session.laundryCredit ?? 0}
         nextInvoiceDay={isFastligger ? invoiceDay : null}
       />
@@ -142,6 +146,7 @@ export default async function GuestPortalPage({
         practicalInfo={practicalInfo}
         siteMapUrl={siteMapUrl}
         laundryMachines={laundryMachines}
+        showers={showers}
         laundryCredit={activeSession?.laundryCredit ?? 0}
         nextInvoiceDay={invoiceDay}
       />

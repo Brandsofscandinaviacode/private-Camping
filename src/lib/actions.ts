@@ -2414,11 +2414,48 @@ export async function getGuestLaundryMachines() {
     return {
       id: m.id,
       name: m.name,
+      kind: (m.kind || "WASHER") as "WASHER" | "DRYER",
+      location: m.location,
       durationMinutes: m.durationMinutes,
       pricePerUse: m.pricePerUse,
       available: !isRunning,
       minutesLeft,
       endsAt: isRunning ? activeSession.endsAt.toISOString() : null,
+    };
+  });
+}
+
+export async function getGuestShowers() {
+  await expireStaleShowerPendings();
+
+  const showers = await prisma.shower.findMany({
+    where: { enabled: true },
+    orderBy: [{ location: "asc" }, { name: "asc" }],
+    include: {
+      sessions: {
+        where: { status: { in: ["ACTIVE", "PAUSED"] } },
+        take: 1,
+        orderBy: { startedAt: "desc" },
+      },
+    },
+  });
+
+  const now = new Date();
+  return showers.map((s) => {
+    const active = s.sessions[0] || null;
+    const isBusy = !!active && new Date(active.endsAt) > now;
+    const minutesLeft = isBusy
+      ? Math.max(0, Math.round((new Date(active!.endsAt).getTime() - now.getTime()) / 60000))
+      : 0;
+    return {
+      id: s.id,
+      name: s.name,
+      location: s.location,
+      pricePerMinute: s.pricePerMinute,
+      minMinutes: s.minMinutes,
+      maxMinutes: s.maxMinutes,
+      available: !isBusy,
+      minutesLeft,
     };
   });
 }
