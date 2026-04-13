@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Plus, Save, Trash2, Loader2, WashingMachine } from "lucide-react";
+import { Plus, Save, Trash2, Loader2, WashingMachine, Wind } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,11 +24,14 @@ interface Machine {
   location: string | null;
 }
 
+type KindFilter = "WASHER" | "DRYER" | "ALL";
+
 interface LaundrySettingsProps {
   machines: Machine[];
+  kind?: KindFilter;
 }
 
-function MachineRow({ machine }: { machine: Machine }) {
+function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boolean }) {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState({
     name: machine.name,
@@ -80,7 +83,11 @@ function MachineRow({ machine }: { machine: Machine }) {
     <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <WashingMachine className="h-4 w-4 text-muted-foreground" />
+          {values.kind === "DRYER" ? (
+            <Wind className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <WashingMachine className="h-4 w-4 text-muted-foreground" />
+          )}
           <span className="font-medium text-sm">{machine.name}</span>
         </div>
         <Switch
@@ -107,18 +114,20 @@ function MachineRow({ machine }: { machine: Machine }) {
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label className="text-xs text-muted-foreground">Type</Label>
-          <select
-            value={values.kind}
-            onChange={(e) => setValues((v) => ({ ...v, kind: e.target.value }))}
-            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="WASHER">Vaskemaskine</option>
-            <option value="DRYER">Tørretumbler</option>
-          </select>
-        </div>
+      <div className={`grid ${kindLocked ? "grid-cols-1" : "grid-cols-2"} gap-3`}>
+        {!kindLocked && (
+          <div>
+            <Label className="text-xs text-muted-foreground">Type</Label>
+            <select
+              value={values.kind}
+              onChange={(e) => setValues((v) => ({ ...v, kind: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="WASHER">Vaskemaskine</option>
+              <option value="DRYER">Tørretumbler</option>
+            </select>
+          </div>
+        )}
         <div>
           <Label className="text-xs text-muted-foreground">Varighed (minutter)</Label>
           <Input
@@ -187,11 +196,45 @@ function MachineRow({ machine }: { machine: Machine }) {
   );
 }
 
-export function LaundrySettings({ machines }: LaundrySettingsProps) {
+export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps) {
+  const kindLocked = kind !== "ALL";
+  const filteredMachines = kindLocked ? machines.filter((m) => m.kind === kind) : machines;
+
+  const titles = {
+    WASHER: {
+      heading: "Vaskemaskiner",
+      description:
+        "Tilføj vaskemaskiner som gæster kan betale og starte fra gæsteportalen. Hver maskine styres af et Shelly-relæ via Home Assistant.",
+      addLabel: "Tilføj vaskemaskine",
+      newHeading: "Ny vaskemaskine",
+      emptyLabel: "Ingen vaskemaskiner oprettet endnu.",
+      placeholder: "Vaskemaskine 1",
+    },
+    DRYER: {
+      heading: "Tørretumblere",
+      description:
+        "Tilføj tørretumblere som gæster kan betale og starte fra gæsteportalen. Hver tumbler styres af et Shelly-relæ via Home Assistant.",
+      addLabel: "Tilføj tørretumbler",
+      newHeading: "Ny tørretumbler",
+      emptyLabel: "Ingen tørretumblere oprettet endnu.",
+      placeholder: "Tørretumbler 1",
+    },
+    ALL: {
+      heading: "Vaskerum",
+      description:
+        "Tilføj vaskemaskiner og tørretumblere som gæster kan betale og starte fra gæsteportalen. Hver maskine styres af et Shelly-relæ via Home Assistant.",
+      addLabel: "Tilføj maskine",
+      newHeading: "Ny maskine",
+      emptyLabel: "Ingen maskiner oprettet endnu.",
+      placeholder: "Vaskemaskine 1",
+    },
+  } as const;
+  const t = titles[kind];
+
   const [isPending, startTransition] = useTransition();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newKind, setNewKind] = useState("WASHER");
+  const [newKind, setNewKind] = useState<"WASHER" | "DRYER">(kindLocked ? kind : "WASHER");
   const [newEntity, setNewEntity] = useState("");
   const [newDuration, setNewDuration] = useState("60");
   const [newPrice, setNewPrice] = useState("25");
@@ -218,7 +261,7 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
           location: newLocation.trim() || null,
         });
         setNewName("");
-        setNewKind("WASHER");
+        setNewKind(kindLocked ? kind : "WASHER");
         setNewEntity("");
         setNewDuration("60");
         setNewPrice("25");
@@ -234,50 +277,47 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold mb-1">Vaskerum</h2>
-        <p className="text-sm text-muted-foreground mb-5">
-          Tilføj vaskemaskiner og tørretumblere som gæster kan betale og starte fra gæsteportalen.
-          Hver maskine styres af et Shelly-relæ via Home Assistant.
-        </p>
+        <h2 className="text-lg font-semibold mb-1">{t.heading}</h2>
+        <p className="text-sm text-muted-foreground mb-5">{t.description}</p>
       </div>
 
-      {machines.length === 0 && !showAdd && (
-        <p className="text-sm text-muted-foreground py-4">
-          Ingen maskiner oprettet endnu.
-        </p>
+      {filteredMachines.length === 0 && !showAdd && (
+        <p className="text-sm text-muted-foreground py-4">{t.emptyLabel}</p>
       )}
 
       <div className="space-y-3">
-        {machines.map((m) => (
-          <MachineRow key={m.id} machine={m} />
+        {filteredMachines.map((m) => (
+          <MachineRow key={m.id} machine={m} kindLocked={kindLocked} />
         ))}
       </div>
 
       {showAdd ? (
         <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 space-y-3">
-          <h3 className="font-medium text-sm">Ny maskine</h3>
-          <div className="grid grid-cols-2 gap-3">
+          <h3 className="font-medium text-sm">{t.newHeading}</h3>
+          <div className={`grid ${kindLocked ? "grid-cols-1" : "grid-cols-2"} gap-3`}>
             <div>
               <Label className="text-xs text-muted-foreground">Navn *</Label>
               <Input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Vaskemaskine 1"
+                placeholder={t.placeholder}
                 className="mt-1"
                 autoFocus
               />
             </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Type</Label>
-              <select
-                value={newKind}
-                onChange={(e) => setNewKind(e.target.value)}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="WASHER">Vaskemaskine</option>
-                <option value="DRYER">Tørretumbler</option>
-              </select>
-            </div>
+            {!kindLocked && (
+              <div>
+                <Label className="text-xs text-muted-foreground">Type</Label>
+                <select
+                  value={newKind}
+                  onChange={(e) => setNewKind(e.target.value as "WASHER" | "DRYER")}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="WASHER">Vaskemaskine</option>
+                  <option value="DRYER">Tørretumbler</option>
+                </select>
+              </div>
+            )}
           </div>
           <div>
             <Label className="text-xs text-muted-foreground">Switch Entity ID *</Label>
@@ -341,7 +381,7 @@ export function LaundrySettings({ machines }: LaundrySettingsProps) {
       ) : (
         <Button variant="outline" size="sm" onClick={() => setShowAdd(true)}>
           <Plus className="h-3.5 w-3.5 mr-1.5" />
-          Tilføj maskine
+          {t.addLabel}
         </Button>
       )}
     </div>

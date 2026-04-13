@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users, WashingMachine, Droplets } from "lucide-react";
+import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users } from "lucide-react";
 
 const tabs = [
   { id: "general", label: "Generelt", icon: Settings },
@@ -10,8 +10,6 @@ const tabs = [
   { id: "payment", label: "Betaling", icon: CreditCard },
   { id: "guest", label: "Gæsteportal", icon: Users },
   { id: "hardware", label: "Pladser", icon: MapPin },
-  { id: "laundry", label: "Vaskerum", icon: WashingMachine },
-  { id: "showers", label: "Bade", icon: Droplets },
   { id: "system", label: "System", icon: Activity },
 ] as const;
 
