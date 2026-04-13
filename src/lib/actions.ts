@@ -589,6 +589,279 @@ export async function checkOut(sessionId: number) {
 }
 
 // ──────────────────────────────────────────────
+// SESSION STATEMENT — breakdown per billing period for a booking
+// Used by the printable /admin/bookings/[id]/statement page.
+// Combines prior invoices + any un-invoiced remainder into one consolidated
+// list of periods with cost + paid amount, so the admin can hand the guest
+// a complete overview of their stay.
+// ──────────────────────────────────────────────
+export interface StatementPeriod {
+  label: string;                 // "April 2026" or date range
+  periodStart: Date;
+  periodEnd: Date;
+  electricityKwh: number | null;
+  electricityCost: number;
+  waterLiters: number | null;
+  waterCost: number;
+  totalAmount: number;
+  paidAmount: number;            // 0 or totalAmount
+  paymentStatus: "PAID" | "PENDING" | "OVERDUE" | "DRAFT" | "UNINVOICED";
+  invoiceId: number | null;      // null for the un-invoiced remainder
+}
+
+export interface SessionStatement {
+  session: {
+    id: number;
+    guestName: string;
+    guestEmail: string | null;
+    guestPhone: string | null;
+    bookingRef: string | null;
+    checkInTime: Date;
+    checkOutTime: Date | null;
+    status: "ACTIVE" | "COMPLETED";
+    isLongTerm: boolean;
+  };
+  unit: {
+    id: number;
+    name: string;
+    type: string;
+  };
+  periods: StatementPeriod[];
+  totals: {
+    electricityCost: number;
+    waterCost: number;
+    totalCost: number;
+    totalPaid: number;
+    owed: number;            // total - paid, clamped; amounts < 1 DKK are treated as 0
+  };
+  generatedAt: Date;
+  currency: string;
+}
+
+export async function getSessionStatement(sessionId: number): Promise<SessionStatement | null> {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: { include: { hardware: true } } },
+  });
+  if (!session) return null;
+
+  const pricing = await getPricing();
+
+  // Effective rates (honor per-booking overrides)
+  let effectiveElPrice = pricing.pricePerKwh;
+  try {
+    const effective = await getEffectiveElPricing();
+    effectiveElPrice = effective.pricePerKwh;
+  } catch {
+    // Fallback to fixed price
+  }
+  if (session.pricePerKwhOverride != null) effectiveElPrice = session.pricePerKwhOverride;
+  const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+
+  // Load invoices that overlap this session's timespan. For long-term tenants
+  // we still scope by session period so a statement covers just this stay.
+  const sessionStart = session.checkInTime;
+  const sessionEnd = session.checkOutTime ?? new Date();
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      unitId: session.unitId,
+      periodEnd: { gte: sessionStart },
+      periodStart: { lte: sessionEnd },
+    },
+    orderBy: { periodStart: "asc" },
+  });
+
+  const fmtMonth = (d: Date) => d.toLocaleDateString("da-DK", { month: "long", year: "numeric" });
+  const fmtRange = (a: Date, b: Date) => {
+    const sameMonth = a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+    if (sameMonth) return fmtMonth(a);
+    return `${a.toLocaleDateString("da-DK")} – ${b.toLocaleDateString("da-DK")}`;
+  };
+
+  const periods: StatementPeriod[] = invoices.map((inv) => {
+    const elKwh = (inv.endKwh != null && inv.startKwh != null)
+      ? Math.max(0, inv.endKwh - inv.startKwh) : null;
+    const heatKwh = (inv.endHeatingKwh != null && inv.startHeatingKwh != null)
+      ? Math.max(0, inv.endHeatingKwh - inv.startHeatingKwh) : null;
+    const combinedKwh = (elKwh !== null || heatKwh !== null)
+      ? (elKwh ?? 0) + (heatKwh ?? 0) : null;
+    const waterL = (inv.endWaterLiters != null && inv.startWaterLiters != null)
+      ? Math.max(0, inv.endWaterLiters - inv.startWaterLiters) : null;
+    const status = inv.status as "PAID" | "PENDING" | "OVERDUE" | "DRAFT";
+    return {
+      label: fmtRange(inv.periodStart, inv.periodEnd),
+      periodStart: inv.periodStart,
+      periodEnd: inv.periodEnd,
+      electricityKwh: combinedKwh,
+      electricityCost: inv.electricityCost,
+      waterLiters: waterL,
+      waterCost: inv.waterCost,
+      totalAmount: inv.totalAmount,
+      paidAmount: status === "PAID" ? inv.totalAmount : 0,
+      paymentStatus: status,
+      invoiceId: inv.id,
+    };
+  });
+
+  // Compute the "remainder" period — consumption since the last invoice (or
+  // since check-in if none) that has not yet been billed. For ACTIVE sessions
+  // we read live meters; for COMPLETED sessions we use session.endKwh.
+  const hw = session.unit.hardware;
+  const lastInvoice = invoices.length > 0 ? invoices[invoices.length - 1] : null;
+  const remainderStart = lastInvoice ? lastInvoice.periodEnd : session.checkInTime;
+  const remainderEnd = session.checkOutTime ?? new Date();
+
+  let remainderStartKwh: number | null = null;
+  let remainderEndKwh: number | null = null;
+  let remainderStartHeating: number | null = null;
+  let remainderEndHeating: number | null = null;
+  let remainderStartWater: number | null = null;
+  let remainderEndWater: number | null = null;
+
+  if (session.status === "ACTIVE") {
+    if (hw?.hasElectricity && hw.electricityMeterEntityId) {
+      remainderStartKwh = lastInvoice?.endKwh ?? session.startKwh;
+      try {
+        remainderEndKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+      } catch {
+        remainderEndKwh = null;
+      }
+    }
+    if (hw?.hasHeating && hw.heatingMeterEntityId) {
+      remainderStartHeating = lastInvoice?.endHeatingKwh ?? session.startHeatingKwh;
+      try {
+        remainderEndHeating = await ha.getEntityNumericState(hw.heatingMeterEntityId);
+      } catch {
+        remainderEndHeating = null;
+      }
+    }
+    if (hw?.hasWater && hw.waterMeterEntityId) {
+      remainderStartWater = lastInvoice?.endWaterLiters ?? session.startWaterLiters;
+      try {
+        remainderEndWater = await ha.getEntityNumericState(hw.waterMeterEntityId);
+      } catch {
+        remainderEndWater = null;
+      }
+    }
+  } else {
+    // COMPLETED — use stored readings
+    remainderStartKwh = lastInvoice?.endKwh ?? session.startKwh;
+    remainderEndKwh = session.endKwh;
+    remainderStartHeating = lastInvoice?.endHeatingKwh ?? session.startHeatingKwh;
+    remainderEndHeating = session.endHeatingKwh;
+    remainderStartWater = lastInvoice?.endWaterLiters ?? session.startWaterLiters;
+    remainderEndWater = session.endWaterLiters;
+  }
+
+  const remMainKwh = (remainderEndKwh != null && remainderStartKwh != null)
+    ? Math.max(0, remainderEndKwh - remainderStartKwh) : null;
+  const remHeatKwh = (remainderEndHeating != null && remainderStartHeating != null)
+    ? Math.max(0, remainderEndHeating - remainderStartHeating) : null;
+  const remCombinedKwh = (remMainKwh !== null || remHeatKwh !== null)
+    ? (remMainKwh ?? 0) + (remHeatKwh ?? 0) : null;
+  const remWaterL = (remainderEndWater != null && remainderStartWater != null)
+    ? Math.max(0, remainderEndWater - remainderStartWater) : null;
+
+  const remElectricityCost = (remCombinedKwh ?? 0) * effectiveElPrice;
+  const remWaterCost = (remWaterL ?? 0) * waterRate;
+  const remTotal = remElectricityCost + remWaterCost;
+
+  // Only include the remainder as a period if it has > 0 consumption
+  if (remCombinedKwh != null || remWaterL != null) {
+    const hasAny = (remCombinedKwh ?? 0) > 0 || (remWaterL ?? 0) > 0;
+    if (hasAny) {
+      periods.push({
+        label: session.status === "ACTIVE"
+          ? `Ikke-faktureret forbrug (indtil nu)`
+          : fmtRange(remainderStart, remainderEnd),
+        periodStart: remainderStart,
+        periodEnd: remainderEnd,
+        electricityKwh: remCombinedKwh,
+        electricityCost: remElectricityCost,
+        waterLiters: remWaterL,
+        waterCost: remWaterCost,
+        totalAmount: remTotal,
+        paidAmount: 0,
+        paymentStatus: "UNINVOICED",
+        invoiceId: null,
+      });
+    }
+  }
+
+  const totalElectricity = periods.reduce((s, p) => s + p.electricityCost, 0);
+  const totalWater = periods.reduce((s, p) => s + p.waterCost, 0);
+  const totalCost = periods.reduce((s, p) => s + p.totalAmount, 0);
+  const totalPaid = periods.reduce((s, p) => s + p.paidAmount, 0);
+  const rawOwed = totalCost - totalPaid;
+  // Amounts under 1 DKK are considered rounding noise and ignored
+  const owed = rawOwed < 1 ? 0 : rawOwed;
+
+  return {
+    session: {
+      id: session.id,
+      guestName: session.guestName,
+      guestEmail: session.guestEmail,
+      guestPhone: session.guestPhone,
+      bookingRef: session.bookingRef,
+      checkInTime: session.checkInTime,
+      checkOutTime: session.checkOutTime,
+      status: session.status as "ACTIVE" | "COMPLETED",
+      isLongTerm: session.unit.isLongTerm,
+    },
+    unit: {
+      id: session.unit.id,
+      name: session.unit.name,
+      type: session.unit.type,
+    },
+    periods,
+    totals: {
+      electricityCost: totalElectricity,
+      waterCost: totalWater,
+      totalCost,
+      totalPaid,
+      owed,
+    },
+    generatedAt: new Date(),
+    currency: pricing.currency,
+  };
+}
+
+// ──────────────────────────────────────────────
+// CHECK-OUT WITH STATEMENT — wraps checkOut() and, for postpaid bookings,
+// attempts to generate a final invoice for any un-invoiced remainder so the
+// printed statement fully reflects what the guest is being charged. If the
+// remainder is below 1 DKK we silently skip invoice creation.
+// ──────────────────────────────────────────────
+export async function checkOutWithStatement(sessionId: number) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { unitId: true, billingMode: true, status: true },
+  });
+  if (!session) throw new Error("Session ikke fundet");
+
+  if (session.status === "ACTIVE") {
+    await checkOut(sessionId);
+  }
+
+  // For postpaid bookings, try to create a closing invoice covering any
+  // consumption since the last invoice. Ignored if under the 1 DKK threshold.
+  if (session.billingMode !== "PREPAID") {
+    try {
+      await createMonthlyInvoice(session.unitId);
+    } catch (e) {
+      // Expected when there's no un-invoiced consumption or it's < 1 DKK.
+      if (!(e instanceof Error) || !e.message.includes("mindst 1 DKK")) {
+        console.error("checkOutWithStatement invoice fejl:", e);
+      }
+    }
+  }
+
+  revalidatePath(`/admin/bookings/${sessionId}`);
+  revalidatePath(`/admin/bookings/${sessionId}/statement`);
+  return { ok: true };
+}
+
+// ──────────────────────────────────────────────
 // LIVE CONSUMPTION
 // ──────────────────────────────────────────────
 export async function getLiveConsumption(sessionId: number) {
@@ -1104,6 +1377,11 @@ export async function createMonthlyInvoice(unitId: number) {
   const waterCost = (endWaterLiters !== null && startWaterLiters !== null)
     ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
 
+  const totalAmount = electricityCost + waterCost;
+  if (totalAmount < 1) {
+    throw new Error("Beløbet skal være mindst 1 DKK — intet nyt forbrug siden sidste faktura");
+  }
+
   const invoice = await prisma.invoice.create({
     data: {
       unitId,
@@ -1117,7 +1395,7 @@ export async function createMonthlyInvoice(unitId: number) {
       endWaterLiters,
       electricityCost,
       waterCost,
-      totalAmount: electricityCost + waterCost,
+      totalAmount,
       status: "PENDING",
       paymentToken: uuidv4(),
     },

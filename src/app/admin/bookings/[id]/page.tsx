@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Zap, Droplets, Flame, Calendar, Mail, Hash, Phone, Receipt } from "lucide-react";
+import { ArrowLeft, Zap, Droplets, Flame, Calendar, Mail, Hash, Phone, Receipt, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { getSessionById, getPricing } from "@/lib/actions";
@@ -12,6 +12,7 @@ import { ConsumptionChart } from "@/components/admin/consumption-chart";
 import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
+import { BookingCheckoutButton } from "@/components/admin/booking-checkout-button";
 
 export const dynamic = "force-dynamic";
 
@@ -408,6 +409,41 @@ export default async function BookingDetailPage({
               </div>
             );
           })()}
+
+          {/* Check-out / statement actions */}
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+            <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary" />
+              <h2 className="font-semibold">Opgørelse</h2>
+            </div>
+            <div className="p-5 space-y-3">
+              {isActive && !session.unit.isLongTerm ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Checker gæsten ud, aflæser målere, opretter afsluttende faktura
+                    hvis der er nyt forbrug, og åbner en udskrivbar opgørelse.
+                  </p>
+                  <BookingCheckoutButton
+                    sessionId={session.id}
+                    guestName={session.guestName}
+                    unitName={session.unit.name}
+                  />
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Udskriftsvenlig opgørelse med forbrug pr. periode og skyldigt beløb.
+                  </p>
+                  <Link href={`/admin/bookings/${session.id}/statement`}>
+                    <Button variant="outline" className="w-full">
+                      <FileText className="h-4 w-4 mr-2" />
+                      Vis opgørelse
+                    </Button>
+                  </Link>
+                </>
+              )}
+            </div>
+          </div>
 
           {session.billingMode !== "PREPAID" && (
             <SessionActions

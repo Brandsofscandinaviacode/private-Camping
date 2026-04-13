@@ -109,3 +109,14 @@
   --text-sm: 1rem;
   --text-sm--line-height: 1.5rem;
 }
+
+/* Print styles — used by /admin/bookings/[id]/statement */
+@media print {
+  @page {
+    margin: 1.5cm;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+}
