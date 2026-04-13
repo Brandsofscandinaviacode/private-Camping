@@ -227,9 +227,10 @@ export async function getAvailableDateRange(area: "DK1" | "DK2" = "DK1"): Promis
 }
 
 // Get the current hour's spot price in DKK/kWh
-// READ-ONLY from cache — never calls the API. The cron job refreshes
-// the cache, so this path stays fast and independent of upstream availability.
-// Falls back to the most recent cached price if the exact current hour is missing.
+// Reads from cache first. If the cache has nothing at all for the requested
+// area, falls back to fetching from the API (which also populates the cache),
+// so the dashboard stays consistent with the Elpriser chart even if the cron
+// job hasn't run yet.
 export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<number | null> {
   try {
     const now = new Date();
@@ -256,7 +257,21 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
       });
       if (latest) return latest.priceDKK / 1000;
     } catch {
-      // DB error — no cached data available
+      // DB error — fall through to API
+    }
+
+    // 3. Cache is empty — fetch from API (fetchSpotPrices caches what it gets)
+    try {
+      const records = await fetchSpotPrices(area);
+      if (records.length > 0) {
+        // Prefer the record matching the current Danish hour, else latest
+        const match = records.find((r) => r.HourDK.startsWith(currentDanishHour));
+        if (match) return match.SpotPriceDKK / 1000;
+        const latestRecord = records.reduce((a, b) => (a.HourDK > b.HourDK ? a : b));
+        return latestRecord.SpotPriceDKK / 1000;
+      }
+    } catch (e) {
+      console.error("getCurrentSpotPrice API fallback fejl:", e);
     }
 
     return null;
