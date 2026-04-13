@@ -9,6 +9,7 @@ import { SessionActions } from "@/components/admin/session-actions";
 import { SessionEditForm } from "@/components/admin/session-edit-form";
 import { LaundryCreditSection } from "@/components/admin/laundry-credit";
 import { ConsumptionChart } from "@/components/admin/consumption-chart";
+import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
 
@@ -179,8 +180,16 @@ export default async function BookingDetailPage({
           />
         </div>
 
-        {/* ═══ Forbrug (fordeling + live + trend) ═══ */}
+        {/* ═══ Forbrug (live + fordeling + trend) ═══ */}
         <div className="space-y-5">
+          {isActive && (
+            <LiveConsumption
+              sessionId={session.id}
+              hasElectricity={!!session.unit.hardware?.hasElectricity}
+              hasWater={!!session.unit.hardware?.hasWater}
+            />
+          )}
+
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Forbrugsfordeling</h2>
