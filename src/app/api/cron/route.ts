@@ -8,23 +8,20 @@ import {
   checkShowerSessions,
   checkOverdueInvoices,
   checkPrepaidBalances,
+  tickAllSessionConsumption,
 } from "@/lib/actions";
 import { refreshSpotPriceCache, cleanOldSpotPrices } from "@/lib/energi-data-service";
 
-// GET /api/cron — Called periodically (e.g. every 15 min via cron or HA automation)
-// Logs consumption, checks alarms, and auto-sends invoices on the configured day
-// Example cron: */15 * * * * curl http://localhost:3000/api/cron
+// GET /api/cron — Called periodically (every 10 min via cron or HA automation)
+// Logs consumption, ticks session accumulators against the current spot price,
+// checks alarms, and auto-sends invoices on the configured day.
+// IMPORTANT: run at least every 10 min so time-weighted spot-price billing
+// stays accurate (worst-case discretisation error = the tick interval).
+// Example cron: */10 * * * * curl http://localhost:3000/api/cron
 export async function GET() {
   try {
-    await logAllConsumption();
-    const { alerts } = await checkConsumptionAlarms();
-    const invoiceResult = await autoCreateAndSendInvoices();
-    const laundryResult = await checkLaundryMachines();
-    const showerResult = await checkShowerSessions();
-    const overdueResult = await checkOverdueInvoices();
-    const prepaidResult = await checkPrepaidBalances();
-
-    // Refresh spot price cache (proactive — keeps data fresh even if no page visits)
+    // Refresh spot prices BEFORE ticking sessions — the tick reads the
+    // current hour's spot price, so we want it as fresh as possible.
     let spotCacheResult = { fetched: 0, cleaned: 0 };
     try {
       const refreshed = await refreshSpotPriceCache();
@@ -33,6 +30,17 @@ export async function GET() {
     } catch {
       // Non-critical — don't fail the cron
     }
+
+    // Tick every active session: delta × current hourly spot price → accumulator
+    const tickResult = await tickAllSessionConsumption();
+
+    await logAllConsumption();
+    const { alerts } = await checkConsumptionAlarms();
+    const invoiceResult = await autoCreateAndSendInvoices();
+    const laundryResult = await checkLaundryMachines();
+    const showerResult = await checkShowerSessions();
+    const overdueResult = await checkOverdueInvoices();
+    const prepaidResult = await checkPrepaidBalances();
 
     // Track last run time and count
     await updateMultipleSettings([
@@ -52,6 +60,7 @@ export async function GET() {
       overdue: overdueResult,
       prepaid: prepaidResult,
       spotCache: spotCacheResult,
+      consumptionTick: tickResult,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

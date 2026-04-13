@@ -483,6 +483,14 @@ async function sendCheckInNotificationAsync(
 // CHECK-OUT FLOW
 // ──────────────────────────────────────────────
 export async function checkOut(sessionId: number) {
+  // Final tick first — ensures the accumulator captures every second of
+  // consumption up to this instant at the correct hourly spot prices.
+  try {
+    await tickSessionConsumption(sessionId);
+  } catch (e) {
+    console.error("checkOut: final tick fejlede:", e);
+  }
+
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
@@ -494,46 +502,57 @@ export async function checkOut(sessionId: number) {
   const hw = session.unit.hardware;
   const pricing = await getPricing();
 
-  // Get effective electricity price at checkout time
-  let effectiveElPrice = pricing.pricePerKwh;
-  try {
-    const effective = await getEffectiveElPricing();
-    effectiveElPrice = effective.pricePerKwh;
-  } catch {
-    // Fallback to fixed price
+  // End-of-session meter readings come from the latest tick — guaranteed
+  // in-sync with the accumulator because tick just ran. Fall back to a
+  // direct HA read only if the tick couldn't capture the value.
+  let endKwh: number | null = session.lastTickKwh;
+  let endHeatingKwh: number | null = session.lastTickHeatingKwh;
+  let endWaterLiters: number | null = session.lastTickWaterLiters;
+
+  if (endKwh === null && hw?.hasElectricity && hw.electricityMeterEntityId) {
+    try { endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+  }
+  if (endHeatingKwh === null && hw?.hasHeating && hw.heatingMeterEntityId) {
+    try { endHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId); } catch {}
+  }
+  if (endWaterLiters === null && hw?.hasWater && hw.waterMeterEntityId) {
+    try { endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
   }
 
-  // Per-booking overrides trump global pricing
-  if (session.pricePerKwhOverride != null) effectiveElPrice = session.pricePerKwhOverride;
-  const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+  // Costs come straight from the accumulator — that's the time-weighted
+  // sum of (delta × hourly spot price) across every tick, which is the
+  // correct billable amount regardless of what the price is right now.
+  // If the accumulator is zero (e.g. legacy session pre-dating the feature),
+  // fall back to the old snapshot calculation so we never undercount.
+  let totalElectricityCost: number | null = session.accumulatedElCost > 0
+    ? session.accumulatedElCost : null;
+  let totalWaterCost: number | null = session.accumulatedWaterCost > 0
+    ? session.accumulatedWaterCost : null;
 
-  let endKwh: number | null = null;
-  let endHeatingKwh: number | null = null;
-  let endWaterLiters: number | null = null;
+  if (totalElectricityCost === null || totalWaterCost === null) {
+    // Legacy fallback: snapshot price × total delta
+    let effectiveElPrice = pricing.pricePerKwh;
+    try {
+      const effective = await getEffectiveElPricing();
+      effectiveElPrice = effective.pricePerKwh;
+    } catch {
+      // Fallback to fixed price
+    }
+    if (session.pricePerKwhOverride != null) effectiveElPrice = session.pricePerKwhOverride;
+    const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
 
-  if (hw?.hasElectricity && hw.electricityMeterEntityId) {
-    endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-  }
-  if (hw?.hasHeating && hw.heatingMeterEntityId) {
-    endHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
-  }
-  if (hw?.hasWater && hw.waterMeterEntityId) {
-    endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
-  }
-
-  let totalElectricityCost: number | null = null;
-  let totalWaterCost: number | null = null;
-
-  // Combine main electricity + heating kWh into a single electricity cost
-  if (endKwh !== null && session.startKwh !== null) {
-    totalElectricityCost = Math.max(0, endKwh - session.startKwh) * effectiveElPrice;
-  }
-  if (endHeatingKwh !== null && session.startHeatingKwh !== null) {
-    const heatingCost = Math.max(0, endHeatingKwh - session.startHeatingKwh) * effectiveElPrice;
-    totalElectricityCost = (totalElectricityCost ?? 0) + heatingCost;
-  }
-  if (endWaterLiters !== null && session.startWaterLiters !== null) {
-    totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * waterRate;
+    if (totalElectricityCost === null) {
+      if (endKwh !== null && session.startKwh !== null) {
+        totalElectricityCost = Math.max(0, endKwh - session.startKwh) * effectiveElPrice;
+      }
+      if (endHeatingKwh !== null && session.startHeatingKwh !== null) {
+        const heatingCost = Math.max(0, endHeatingKwh - session.startHeatingKwh) * effectiveElPrice;
+        totalElectricityCost = (totalElectricityCost ?? 0) + heatingCost;
+      }
+    }
+    if (totalWaterCost === null && endWaterLiters !== null && session.startWaterLiters !== null) {
+      totalWaterCost = Math.max(0, endWaterLiters - session.startWaterLiters) * waterRate;
+    }
   }
 
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0);
@@ -639,11 +658,27 @@ export interface SessionStatement {
 }
 
 export async function getSessionStatement(sessionId: number): Promise<SessionStatement | null> {
-  const session = await prisma.session.findUnique({
+  const initial = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
   });
-  if (!session) return null;
+  if (!initial) return null;
+
+  // For ACTIVE sessions, tick first so the "remainder" reflects time-weighted
+  // spot-price billing up to now (same numbers as /api/cron would produce).
+  let session = initial;
+  if (initial.status === "ACTIVE") {
+    try {
+      await tickSessionConsumption(sessionId);
+      const reloaded = await prisma.session.findUnique({
+        where: { id: sessionId },
+        include: { unit: { include: { hardware: true } } },
+      });
+      if (reloaded) session = reloaded;
+    } catch (e) {
+      console.error("getSessionStatement: tick fejl", e);
+    }
+  }
 
   const pricing = await getPricing();
 
@@ -762,8 +797,18 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
   const remWaterL = (remainderEndWater != null && remainderStartWater != null)
     ? Math.max(0, remainderEndWater - remainderStartWater) : null;
 
-  const remElectricityCost = (remCombinedKwh ?? 0) * effectiveElPrice;
-  const remWaterCost = (remWaterL ?? 0) * waterRate;
+  // Prefer the time-weighted accumulator (populated by 10-min cron ticks) so
+  // the remainder is billed against the actual hourly spot price in effect
+  // when each kWh was consumed. Fall back to snapshot pricing for sessions
+  // pre-dating the accumulator or with no tick history.
+  const useAccumulatorForRemainder =
+    session.accumulatedElCost > 0 || session.accumulatedWaterCost > 0;
+  const remElectricityCost = useAccumulatorForRemainder
+    ? session.accumulatedElCost
+    : (remCombinedKwh ?? 0) * effectiveElPrice;
+  const remWaterCost = useAccumulatorForRemainder
+    ? session.accumulatedWaterCost
+    : (remWaterL ?? 0) * waterRate;
   const remTotal = remElectricityCost + remWaterCost;
 
   // Only include the remainder as a period if it has > 0 consumption
@@ -862,103 +907,285 @@ export async function checkOutWithStatement(sessionId: number) {
 }
 
 // ──────────────────────────────────────────────
-// LIVE CONSUMPTION
+// TIME-WEIGHTED CONSUMPTION TICK
+//
+// Called by cron every 10 min (and ad-hoc before billing actions). Reads
+// the current meter values from Home Assistant, computes the delta since
+// the previous tick, and multiplies that delta by the *current* hourly spot
+// price to produce a correctly time-weighted cost. The result is added to
+// the session's `accumulatedElCost` / `accumulatedWaterCost`.
+//
+// This is the core of spot-price billing: if the guest uses 1 kWh between
+// 17-18 (spot 2 kr) and 1 kWh between 18-19 (spot 1 kr), the accumulator
+// gains 2 + 1 = 3 kr across the two hours, regardless of what the price
+// is at invoice time. The worst-case discretisation error equals the tick
+// interval — at 10-min ticks it's ~10 min of consumption priced into the
+// neighbouring hour at the hour boundary.
 // ──────────────────────────────────────────────
-export async function getLiveConsumption(sessionId: number) {
+export async function tickSessionConsumption(sessionId: number): Promise<{
+  addedKwh: number;
+  addedElCost: number;
+  addedLiters: number;
+  addedWaterCost: number;
+  elPriceAtTick: number;
+  spotPrice: number | null;
+} | null> {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
   });
-
   if (!session || session.status !== "ACTIVE") return null;
+
+  const hw = session.unit.hardware;
+  if (!hw) return null;
+
+  const pricing = await getPricing();
+
+  // Effective price right now (honour per-booking override over spot mode)
+  let elPrice = pricing.pricePerKwh;
+  let spotPrice: number | null = null;
+  if (session.pricePerKwhOverride != null) {
+    elPrice = session.pricePerKwhOverride;
+  } else {
+    try {
+      const effective = await getEffectiveElPricing();
+      elPrice = effective.pricePerKwh;
+      spotPrice = effective.spotPrice;
+    } catch {
+      // Fallback to fixed price — already in elPrice
+    }
+  }
+  const waterPrice = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+
+  // Read meters (each isolated — one failing doesn't abort the others)
+  let currentKwh: number | null = null;
+  let currentHeatingKwh: number | null = null;
+  let currentWaterLiters: number | null = null;
+  if (hw.hasElectricity && hw.electricityMeterEntityId) {
+    try { currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+  }
+  if (hw.hasHeating && hw.heatingMeterEntityId) {
+    try { currentHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId); } catch {}
+  }
+  if (hw.hasWater && hw.waterMeterEntityId) {
+    try { currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+  }
+
+  let addElKwh = 0;
+  let addElCost = 0;
+  let addWaterLiters = 0;
+  let addWaterCost = 0;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updateData: Record<string, any> = {};
+
+  // Main electricity
+  if (currentKwh !== null) {
+    const baseline = session.lastTickKwh ?? session.startKwh;
+    if (baseline !== null) {
+      const delta = Math.max(0, currentKwh - baseline);
+      addElKwh += delta;
+      addElCost += delta * elPrice;
+    } else {
+      // First observation for this session — capture baseline for future ticks
+      updateData.startKwh = currentKwh;
+    }
+    updateData.lastTickKwh = currentKwh;
+  }
+
+  // Heating electricity (still electricity — rolls into the same accumulator)
+  if (currentHeatingKwh !== null) {
+    const baseline = session.lastTickHeatingKwh ?? session.startHeatingKwh;
+    if (baseline !== null) {
+      const delta = Math.max(0, currentHeatingKwh - baseline);
+      addElKwh += delta;
+      addElCost += delta * elPrice;
+    } else {
+      updateData.startHeatingKwh = currentHeatingKwh;
+    }
+    updateData.lastTickHeatingKwh = currentHeatingKwh;
+  }
+
+  // Water (fixed rate, but accumulated for consistency)
+  if (currentWaterLiters !== null) {
+    const baseline = session.lastTickWaterLiters ?? session.startWaterLiters;
+    if (baseline !== null) {
+      const delta = Math.max(0, currentWaterLiters - baseline);
+      addWaterLiters += delta;
+      addWaterCost += delta * waterPrice;
+    } else {
+      updateData.startWaterLiters = currentWaterLiters;
+    }
+    updateData.lastTickWaterLiters = currentWaterLiters;
+  }
+
+  const hasAnyRead = currentKwh !== null || currentHeatingKwh !== null || currentWaterLiters !== null;
+  if (hasAnyRead) {
+    if (addElKwh > 0) {
+      updateData.accumulatedElCost = { increment: addElCost };
+      updateData.accumulatedElKwh = { increment: addElKwh };
+    }
+    if (addWaterLiters > 0) {
+      updateData.accumulatedWaterCost = { increment: addWaterCost };
+      updateData.accumulatedWaterLiters = { increment: addWaterLiters };
+    }
+    updateData.lastTickAt = new Date();
+    await prisma.session.update({ where: { id: sessionId }, data: updateData });
+  }
+
+  return {
+    addedKwh: addElKwh,
+    addedElCost: addElCost,
+    addedLiters: addWaterLiters,
+    addedWaterCost: addWaterCost,
+    elPriceAtTick: elPrice,
+    spotPrice,
+  };
+}
+
+// Tick every active session — invoked from the cron route.
+export async function tickAllSessionConsumption(): Promise<{
+  ticked: number;
+  totalKwh: number;
+  totalElCost: number;
+}> {
+  const active = await prisma.session.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true },
+  });
+
+  let ticked = 0;
+  let totalKwh = 0;
+  let totalElCost = 0;
+  for (const s of active) {
+    try {
+      const result = await tickSessionConsumption(s.id);
+      if (result) {
+        ticked++;
+        totalKwh += result.addedKwh;
+        totalElCost += result.addedElCost;
+      }
+    } catch (e) {
+      console.error(`tickSessionConsumption fejl (session ${s.id}):`, e);
+    }
+  }
+  return { ticked, totalKwh, totalElCost };
+}
+
+// ──────────────────────────────────────────────
+// LIVE CONSUMPTION
+//
+// Shows what the guest currently owes based on the *accumulated* cost
+// (time-weighted against the hourly spot price up to the last tick) plus
+// an "ongoing delta" since the last tick at the current spot price — so
+// the display stays smooth even between ticks without writing to the DB.
+// If `lastTickAt` is older than 60s we opportunistically trigger a tick
+// so an operator viewing the booking gets near-live updates.
+// ──────────────────────────────────────────────
+export async function getLiveConsumption(sessionId: number) {
+  const initial = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: { include: { hardware: true } } },
+  });
+
+  if (!initial || initial.status !== "ACTIVE") return null;
+
+  // Opportunistic tick — keeps the accumulator fresh when someone is actively
+  // viewing the booking. Cron is the guarantee (every 10 min); this is the
+  // nicety for the operator UI.
+  const STALE_TICK_MS = 60 * 1000;
+  const isStale = !initial.lastTickAt || (Date.now() - initial.lastTickAt.getTime() > STALE_TICK_MS);
+  let session = initial;
+  if (isStale) {
+    try {
+      await tickSessionConsumption(sessionId);
+      // Reload with the fresh accumulator values
+      const reloaded = await prisma.session.findUnique({
+        where: { id: sessionId },
+        include: { unit: { include: { hardware: true } } },
+      });
+      if (reloaded) session = reloaded;
+    } catch (e) {
+      console.error("getLiveConsumption tick fejl:", e);
+    }
+  }
 
   const hw = session.unit.hardware;
   const pricing = await getPricing();
 
-  // Get effective electricity price (spot/minimum/fixed)
+  // Current effective price for the "ongoing delta" display (since last tick)
   let effectiveElPrice = pricing.pricePerKwh;
   let spotPrice: number | null = null;
-  try {
-    const effective = await getEffectiveElPricing();
-    effectiveElPrice = effective.pricePerKwh;
-    spotPrice = effective.spotPrice;
-  } catch {
-    // Fallback to fixed price
-  }
-
-  // Per-booking override takes precedence over the global/effective price
   if (session.pricePerKwhOverride != null) {
     effectiveElPrice = session.pricePerKwhOverride;
-    spotPrice = null;
+  } else {
+    try {
+      const effective = await getEffectiveElPricing();
+      effectiveElPrice = effective.pricePerKwh;
+      spotPrice = effective.spotPrice;
+    } catch {
+      // Fallback to fixed price
+    }
   }
   const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
 
+  // Read the latest meter values — used to compute the ongoing delta
   let currentKwh: number | null = null;
-  let usedKwhMain: number | null = null;
   let currentHeatingKwh: number | null = null;
-  let usedKwhHeating: number | null = null;
-  let usedKwh: number | null = null;
-  let electricityCost: number | null = null;
   let currentWaterLiters: number | null = null;
-  let usedWaterLiters: number | null = null;
-  let waterCost: number | null = null;
-
-  // Use latest PAID invoice's end readings as baseline (so paid amounts are excluded)
-  const latestPaidInvoice = await prisma.invoice.findFirst({
-    where: { unitId: session.unitId, status: "PAID" },
-    orderBy: { periodEnd: "desc" },
-  });
-
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
-    currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-    if (currentKwh !== null && session.startKwh === null) {
-      // Auto-capture baseline if it was missing at check-in
-      await prisma.session.update({ where: { id: sessionId }, data: { startKwh: currentKwh } });
-      usedKwhMain = 0;
-    } else if (currentKwh !== null && session.startKwh !== null) {
-      const baselineKwh = latestPaidInvoice?.endKwh ?? session.startKwh;
-      usedKwhMain = Math.max(0, currentKwh - baselineKwh);
-    }
+    try { currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
   }
-
   if (hw?.hasHeating && hw.heatingMeterEntityId) {
-    currentHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
-    if (currentHeatingKwh !== null && session.startHeatingKwh === null) {
-      await prisma.session.update({ where: { id: sessionId }, data: { startHeatingKwh: currentHeatingKwh } });
-      usedKwhHeating = 0;
-    } else if (currentHeatingKwh !== null && session.startHeatingKwh !== null) {
-      const baselineHeating = latestPaidInvoice?.endHeatingKwh ?? session.startHeatingKwh;
-      usedKwhHeating = Math.max(0, currentHeatingKwh - baselineHeating);
-    }
+    try { currentHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId); } catch {}
   }
-
-  // Combined kWh + cost — used for guest portal and overall billing
-  if (usedKwhMain !== null || usedKwhHeating !== null) {
-    usedKwh = (usedKwhMain ?? 0) + (usedKwhHeating ?? 0);
-    electricityCost = usedKwh * effectiveElPrice;
-  }
-
   if (hw?.hasWater && hw.waterMeterEntityId) {
-    currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
-    if (currentWaterLiters !== null && session.startWaterLiters === null) {
-      // Auto-capture baseline if it was missing at check-in
-      await prisma.session.update({ where: { id: sessionId }, data: { startWaterLiters: currentWaterLiters } });
-      usedWaterLiters = 0;
-      waterCost = 0;
-    } else if (currentWaterLiters !== null && session.startWaterLiters !== null) {
-      const baselineWater = latestPaidInvoice?.endWaterLiters ?? session.startWaterLiters;
-      usedWaterLiters = Math.max(0, currentWaterLiters - baselineWater);
-      waterCost = usedWaterLiters * waterRate;
-    }
+    try { currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
   }
+
+  // Ongoing deltas since the last tick (priced at the current rate)
+  const ongoingMainKwh = (currentKwh !== null && session.lastTickKwh !== null)
+    ? Math.max(0, currentKwh - session.lastTickKwh) : 0;
+  const ongoingHeatingKwh = (currentHeatingKwh !== null && session.lastTickHeatingKwh !== null)
+    ? Math.max(0, currentHeatingKwh - session.lastTickHeatingKwh) : 0;
+  const ongoingWaterLiters = (currentWaterLiters !== null && session.lastTickWaterLiters !== null)
+    ? Math.max(0, currentWaterLiters - session.lastTickWaterLiters) : 0;
+  const ongoingElCost = (ongoingMainKwh + ongoingHeatingKwh) * effectiveElPrice;
+  const ongoingWaterCost = ongoingWaterLiters * waterRate;
+
+  // Breakdown for the admin UI: used* are the totals this accumulator has
+  // seen so far, split between main and heating. We reconstruct the split
+  // using the raw meter start baselines — it's only for display.
+  const baselineMain = session.startKwh;
+  const baselineHeating = session.startHeatingKwh;
+  const baselineWater = session.startWaterLiters;
+
+  const usedKwhMain = (currentKwh !== null && baselineMain !== null)
+    ? Math.max(0, currentKwh - baselineMain) : null;
+  const usedKwhHeating = (currentHeatingKwh !== null && baselineHeating !== null)
+    ? Math.max(0, currentHeatingKwh - baselineHeating) : null;
+  const usedWaterLiters = (currentWaterLiters !== null && baselineWater !== null)
+    ? Math.max(0, currentWaterLiters - baselineWater) : null;
+
+  // Total used kWh/cost = accumulator (time-weighted) + ongoing delta (live)
+  const usedKwh = session.accumulatedElKwh + ongoingMainKwh + ongoingHeatingKwh;
+  const electricityCost = session.accumulatedElCost + ongoingElCost;
+  const waterUsed = session.accumulatedWaterLiters + ongoingWaterLiters;
+  const waterCost = session.accumulatedWaterCost + ongoingWaterCost;
 
   return {
-    currentKwh, usedKwh, electricityCost,
-    // Separate breakdown for admin UI — guest portal uses the combined `usedKwh`
-    usedKwhMain, usedKwhHeating, currentHeatingKwh,
+    currentKwh,
+    usedKwh,
+    electricityCost,
+    // Split for admin UI (raw "since check-in" values — for display only)
+    usedKwhMain,
+    usedKwhHeating,
+    currentHeatingKwh,
     hasHeatingMeter: !!(hw?.hasHeating && hw.heatingMeterEntityId),
-    currentWaterLiters, usedWaterLiters, waterCost,
-    totalLiveCost: (electricityCost ?? 0) + (waterCost ?? 0),
+    currentWaterLiters,
+    usedWaterLiters: waterUsed > 0 ? waterUsed : usedWaterLiters,
+    waterCost,
+    totalLiveCost: electricityCost + waterCost,
     currency: pricing.currency,
     pricePerKwh: effectiveElPrice,
     spotPrice,
@@ -1354,28 +1581,53 @@ export async function createMonthlyInvoice(unitId: number) {
     }
   }
 
-  // Get effective electricity price for invoice
-  let effectiveElPrice = pricing.pricePerKwh;
-  try {
-    const effective = await getEffectiveElPricing();
-    effectiveElPrice = effective.pricePerKwh;
-  } catch {
-    // Fallback to fixed price
+  // Tick the active session first so the accumulator is current right up
+  // to this moment — the invoice total will come from that accumulator so
+  // spot-price billing is time-weighted, not a snapshot.
+  if (activeSession) {
+    try {
+      await tickSessionConsumption(activeSession.id);
+    } catch (e) {
+      console.error("createMonthlyInvoice: tick fejlede:", e);
+    }
   }
+  // Reload the session with fresh accumulator values
+  const sessionForBilling = activeSession
+    ? await prisma.session.findUnique({ where: { id: activeSession.id } })
+    : null;
 
-  // Per-booking override on the active session takes precedence
-  if (activeSession?.pricePerKwhOverride != null) {
-    effectiveElPrice = activeSession.pricePerKwhOverride;
+  // If we have a real accumulator, use it verbatim — it's the
+  // time-weighted truth. Otherwise fall back to snapshot pricing.
+  let electricityCost: number;
+  let waterCost: number;
+  const useAccumulator = sessionForBilling && sessionForBilling.accumulatedElCost > 0;
+
+  if (useAccumulator) {
+    electricityCost = sessionForBilling.accumulatedElCost;
+    waterCost = sessionForBilling.accumulatedWaterCost;
+  } else {
+    // Legacy snapshot pricing — used for units without an active session
+    // or for brand-new sessions where no tick has accumulated anything.
+    let effectiveElPrice = pricing.pricePerKwh;
+    try {
+      const effective = await getEffectiveElPricing();
+      effectiveElPrice = effective.pricePerKwh;
+    } catch {
+      // Fallback to fixed price
+    }
+    if (activeSession?.pricePerKwhOverride != null) {
+      effectiveElPrice = activeSession.pricePerKwhOverride;
+    }
+    const waterRate = activeSession?.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+
+    const mainElecCost = (endKwh !== null && startKwh !== null)
+      ? Math.max(0, endKwh - startKwh) * effectiveElPrice : 0;
+    const heatingElecCost = (endHeatingKwh !== null && startHeatingKwh !== null)
+      ? Math.max(0, endHeatingKwh - startHeatingKwh) * effectiveElPrice : 0;
+    electricityCost = mainElecCost + heatingElecCost;
+    waterCost = (endWaterLiters !== null && startWaterLiters !== null)
+      ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
   }
-  const waterRate = activeSession?.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
-
-  const mainElecCost = (endKwh !== null && startKwh !== null)
-    ? Math.max(0, endKwh - startKwh) * effectiveElPrice : 0;
-  const heatingElecCost = (endHeatingKwh !== null && startHeatingKwh !== null)
-    ? Math.max(0, endHeatingKwh - startHeatingKwh) * effectiveElPrice : 0;
-  const electricityCost = mainElecCost + heatingElecCost;
-  const waterCost = (endWaterLiters !== null && startWaterLiters !== null)
-    ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
 
   const totalAmount = electricityCost + waterCost;
   if (totalAmount < 1) {
@@ -1400,6 +1652,21 @@ export async function createMonthlyInvoice(unitId: number) {
       paymentToken: uuidv4(),
     },
   });
+
+  // Reset the accumulator — that consumption is now billed on the invoice.
+  // Keep lastTick* values so the *next* tick computes delta from the same
+  // meter reading and we don't double-charge the hour this tick happened in.
+  if (useAccumulator && sessionForBilling) {
+    await prisma.session.update({
+      where: { id: sessionForBilling.id },
+      data: {
+        accumulatedElCost: 0,
+        accumulatedElKwh: 0,
+        accumulatedWaterCost: 0,
+        accumulatedWaterLiters: 0,
+      },
+    });
+  }
 
   revalidatePath(`/admin/units/${unitId}`);
   return invoice;
@@ -1513,13 +1780,6 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
   const settings = await getGlobalSettings();
   if (settings.prepaid_auto_power_off !== "true") return { powerOff: 0 };
 
-  const pricing = await getPricing();
-  let effectiveElPrice = pricing.pricePerKwh;
-  try {
-    const effective = await getEffectiveElPricing();
-    effectiveElPrice = effective.pricePerKwh;
-  } catch {}
-
   // Find all active PREPAID sessions
   const sessions = await prisma.session.findMany({
     where: { status: "ACTIVE", billingMode: "PREPAID" },
@@ -1532,25 +1792,18 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
     if (!session.prepaidAmount || !hw?.electricitySwitchEntityId) continue;
     const switchEntity = hw.electricitySwitchEntityId;
 
-    let currentCost = 0;
-    if (hw.hasElectricity && hw.electricityMeterEntityId && session.startKwh != null) {
-      const currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-      if (currentKwh !== null) {
-        currentCost += Math.max(0, currentKwh - session.startKwh) * effectiveElPrice;
-      }
-    }
-    if (hw.hasHeating && hw.heatingMeterEntityId && session.startHeatingKwh != null) {
-      const currentHeating = await ha.getEntityNumericState(hw.heatingMeterEntityId);
-      if (currentHeating !== null) {
-        currentCost += Math.max(0, currentHeating - session.startHeatingKwh) * effectiveElPrice;
-      }
-    }
-    if (hw.hasWater && hw.waterMeterEntityId && session.startWaterLiters != null) {
-      const currentWater = await ha.getEntityNumericState(hw.waterMeterEntityId);
-      if (currentWater !== null) {
-        currentCost += Math.max(0, currentWater - session.startWaterLiters) * pricing.pricePerLiterWater;
-      }
-    }
+    // Tick to refresh accumulator against the current spot price — prepaid
+    // balance should be measured against the time-weighted real cost, not
+    // a snapshot. The cron already ticks, but we do it here too so the
+    // cutoff decision uses the freshest possible numbers.
+    try {
+      await tickSessionConsumption(session.id);
+    } catch {}
+
+    const refreshed = await prisma.session.findUnique({ where: { id: session.id } });
+    if (!refreshed) continue;
+
+    const currentCost = refreshed.accumulatedElCost + refreshed.accumulatedWaterCost;
 
     if (currentCost >= session.prepaidAmount) {
       try {

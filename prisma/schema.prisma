@@ -168,6 +168,20 @@ model Session {
   pricePerKwhOverride     Float?
   pricePerLiterWaterOverride Float?
 
+  // Time-weighted billing accumulators. Updated by tickSessionConsumption
+  // (cron every 10 min) — each tick reads the meter, computes the delta
+  // since the last tick, and adds `delta × current hourly spot price` to
+  // accumulatedElCost. This way the guest is billed against the actual
+  // spot price in the hour the kWh was consumed, not a single snapshot.
+  accumulatedElCost       Float     @default(0)
+  accumulatedElKwh        Float     @default(0)
+  accumulatedWaterCost    Float     @default(0)
+  accumulatedWaterLiters  Float     @default(0)
+  lastTickKwh             Float?
+  lastTickHeatingKwh      Float?
+  lastTickWaterLiters     Float?
+  lastTickAt              DateTime?
+
   // External booking system price (added to total)
   externalPrice       Float?
   externalDescription String?
