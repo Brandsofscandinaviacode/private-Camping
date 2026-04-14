@@ -65,7 +65,16 @@ export function SystemStatus() {
     setTestingCron(true);
     setCronTestResult(null);
     try {
-      const res = await fetch("/api/cron");
+      if (!apiKey) {
+        setCronTestResult({
+          ok: false,
+          message: "Ingen API-nøgle konfigureret. Indstil én nedenfor under 'REST API' før du kører cron.",
+        });
+        return;
+      }
+      const res = await fetch("/api/cron", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
       const json = await res.json();
       if (json.ok) {
         setCronTestResult({ ok: true, message: `Cron kørte succesfuldt. ${json.alerts} alarmer.` });
@@ -195,15 +204,15 @@ export function SystemStatus() {
           {!status.cronLastRun && (
             <div className="mt-2 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground space-y-1.5">
               <p className="font-medium">Opsætning af cron:</p>
-              <p>Kør dette på din Raspberry Pi:</p>
+              <p>Sæt først en API-nøgle nedenfor under &quot;REST API&quot;, og kør så på din Raspberry Pi:</p>
               <code className="block bg-background p-2 rounded text-xs font-mono">
                 crontab -e
               </code>
-              <p>Tilføj denne linje:</p>
+              <p>Tilføj denne linje (udskift <code className="bg-background px-1 rounded">DIN_API_NØGLE</code>):</p>
               <code className="block bg-background p-2 rounded text-xs font-mono break-all">
-                */15 * * * * curl -s http://localhost:3000/api/cron &gt; /dev/null
+                */10 * * * * curl -s -H &quot;Authorization: Bearer DIN_API_NØGLE&quot; http://localhost:3000/api/cron &gt; /dev/null
               </code>
-              <p>Dette logger forbrug hvert 15. minut.</p>
+              <p>Kør mindst hvert 10. minut — dette logger forbrug og opdaterer tidsvægtet spotpris-afregning.</p>
             </div>
           )}
         </div>

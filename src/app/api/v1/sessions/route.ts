@@ -29,23 +29,66 @@ export async function GET(req: NextRequest) {
       unitId: s.unitId,
       unitName: s.unit.name,
       unitType: s.unit.type,
+
+      // Guest
       guestName: s.guestName,
       guestEmail: s.guestEmail,
       guestPhone: s.guestPhone,
       bookingRef: s.bookingRef,
+
+      // Status
       status: s.status,
       paymentStatus: s.paymentStatus,
+      paymentId: s.paymentId,
+      paidAt: s.paidAt?.toISOString() ?? null,
+
+      // Timing
       checkInTime: s.checkInTime.toISOString(),
       checkOutTime: s.checkOutTime?.toISOString() ?? null,
+      expectedCheckOut: s.expectedCheckOut?.toISOString() ?? null,
+
+      // Meter readings — main electricity
       startKwh: s.startKwh,
       endKwh: s.endKwh,
+      // Heating (separate relay/meter on some units)
+      startHeatingKwh: s.startHeatingKwh,
+      endHeatingKwh: s.endHeatingKwh,
+      // Water
       startWaterLiters: s.startWaterLiters,
       endWaterLiters: s.endWaterLiters,
+
+      // Billing — final totals (populated at check-out)
       totalElectricityCost: s.totalElectricityCost,
       totalWaterCost: s.totalWaterCost,
       totalCost: s.totalCost,
+
+      // Time-weighted billing — running totals updated every 10 min by
+      // the cron tick. For ACTIVE sessions these are the authoritative
+      // values; totalElectricityCost above is still null until checkout.
+      accumulatedElCost: s.accumulatedElCost,
+      accumulatedElKwh: s.accumulatedElKwh,
+      accumulatedWaterCost: s.accumulatedWaterCost,
+      accumulatedWaterLiters: s.accumulatedWaterLiters,
+      lastTickAt: s.lastTickAt?.toISOString() ?? null,
+
+      // Billing mode
+      billingMode: s.billingMode,
+      prepaidAmount: s.prepaidAmount,
+
+      // Per-booking price overrides (null = use global pricing)
+      pricePerKwhOverride: s.pricePerKwhOverride,
+      pricePerLiterWaterOverride: s.pricePerLiterWaterOverride,
+
+      // External booking system price (added to forbrug)
       externalPrice: s.externalPrice,
       externalDescription: s.externalDescription,
+
+      // Laundry credit (admin-issued)
+      laundryCredit: s.laundryCredit,
+
+      // Admin notes
+      notes: s.notes,
+
       guestPortalToken: s.guestPortalToken,
     })),
   });

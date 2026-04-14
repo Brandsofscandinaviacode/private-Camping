@@ -2398,29 +2398,118 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
     orderBy: { checkInTime: "desc" },
   });
 
+  // CSV-escape a cell: wrap in quotes if it contains semicolons, newlines
+  // or quotes, and double-quote any embedded quotes.
+  const esc = (v: string | number | null | undefined): string => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    if (s.includes(";") || s.includes("\n") || s.includes('"')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
-  const header = "ID;Enhed;Type;Gæst;Email;Telefon;Check-in;Check-out;El (kWh);El (DKK);Vand (L);Vand (DKK);Total (DKK);Betaling;Betalt dato;Booking nr.\n";
+  const header = [
+    "ID",
+    "Enhed",
+    "Type",
+    "Status",
+    "Gæst",
+    "Email",
+    "Telefon",
+    "Check-in",
+    "Check-out",
+    "Forventet check-out",
+    "El hoved (kWh)",
+    "Varme (kWh)",
+    "El total (kWh)",
+    "El (DKK)",
+    "Vand (L)",
+    "Vand (DKK)",
+    "Total forbrug (DKK)",
+    "Ekstern pris (DKK)",
+    "Ekstern beskrivelse",
+    "Vaskerikredit (DKK)",
+    "Grand total (DKK)",
+    "Afregningsmåde",
+    "Forudbetalt (DKK)",
+    "Pris override (DKK/kWh)",
+    "Pris override (DKK/L vand)",
+    "Betaling",
+    "Betalings-ID",
+    "Betalt dato",
+    "Booking nr.",
+    "Notat",
+  ].join(";") + "\n";
+
   const rows = sessions.map((s) => {
     const type = typeLabels[s.unit.type] || s.unit.type;
-    const usedKwh = (s.endKwh !== null && s.startKwh !== null) ? (s.endKwh - s.startKwh).toFixed(2) : "";
-    const usedWater = (s.endWaterLiters !== null && s.startWaterLiters !== null) ? (s.endWaterLiters - s.startWaterLiters).toFixed(0) : "";
+
+    // Use real end readings for COMPLETED sessions; for ACTIVE sessions the
+    // accumulator tracks consumption continuously so we report the running
+    // totals rather than empty cells.
+    const isActive = s.status === "ACTIVE";
+    const mainKwhDelta = (s.endKwh !== null && s.startKwh !== null)
+      ? (s.endKwh - s.startKwh)
+      : (isActive && s.lastTickKwh !== null && s.startKwh !== null)
+        ? (s.lastTickKwh - s.startKwh)
+        : null;
+    const heatKwhDelta = (s.endHeatingKwh !== null && s.startHeatingKwh !== null)
+      ? (s.endHeatingKwh - s.startHeatingKwh)
+      : (isActive && s.lastTickHeatingKwh !== null && s.startHeatingKwh !== null)
+        ? (s.lastTickHeatingKwh - s.startHeatingKwh)
+        : null;
+    const totalKwh = (mainKwhDelta ?? 0) + (heatKwhDelta ?? 0);
+    const hasKwh = mainKwhDelta !== null || heatKwhDelta !== null;
+
+    const waterDelta = (s.endWaterLiters !== null && s.startWaterLiters !== null)
+      ? (s.endWaterLiters - s.startWaterLiters)
+      : (isActive && s.lastTickWaterLiters !== null && s.startWaterLiters !== null)
+        ? (s.lastTickWaterLiters - s.startWaterLiters)
+        : null;
+
+    // Costs: prefer the completed totals; fall back to the accumulator for
+    // in-progress sessions so the export is actually useful.
+    const elCost = s.totalElectricityCost ?? (isActive && s.accumulatedElCost > 0 ? s.accumulatedElCost : null);
+    const waterCost = s.totalWaterCost ?? (isActive && s.accumulatedWaterCost > 0 ? s.accumulatedWaterCost : null);
+    const totalCost = s.totalCost ?? (elCost !== null || waterCost !== null ? (elCost ?? 0) + (waterCost ?? 0) : null);
+
+    // Grand total = forbrug + ekstern pris − vaskerikredit. This matches how
+    // the booking detail page computes the amount to charge the guest.
+    const grandTotal = (totalCost ?? 0) + (s.externalPrice ?? 0) - s.laundryCredit;
+
     return [
-      s.id,
-      `${type} ${s.unit.name}`,
-      type,
-      s.guestName,
-      s.guestEmail || "",
-      s.guestPhone || "",
-      s.checkInTime.toISOString().slice(0, 10),
-      s.checkOutTime?.toISOString().slice(0, 10) || "",
-      usedKwh,
-      s.totalElectricityCost?.toFixed(2) || "",
-      usedWater,
-      s.totalWaterCost?.toFixed(2) || "",
-      s.totalCost?.toFixed(2) || "",
-      s.paymentStatus,
-      s.paidAt?.toISOString().slice(0, 10) || "",
-      s.bookingRef || "",
+      esc(s.id),
+      esc(`${type} ${s.unit.name}`),
+      esc(type),
+      esc(s.status),
+      esc(s.guestName),
+      esc(s.guestEmail),
+      esc(s.guestPhone),
+      esc(s.checkInTime.toISOString().slice(0, 10)),
+      esc(s.checkOutTime?.toISOString().slice(0, 10)),
+      esc(s.expectedCheckOut?.toISOString().slice(0, 10)),
+      esc(mainKwhDelta !== null ? mainKwhDelta.toFixed(2) : ""),
+      esc(heatKwhDelta !== null ? heatKwhDelta.toFixed(2) : ""),
+      esc(hasKwh ? totalKwh.toFixed(2) : ""),
+      esc(elCost !== null ? elCost.toFixed(2) : ""),
+      esc(waterDelta !== null ? waterDelta.toFixed(0) : ""),
+      esc(waterCost !== null ? waterCost.toFixed(2) : ""),
+      esc(totalCost !== null ? totalCost.toFixed(2) : ""),
+      esc(s.externalPrice?.toFixed(2)),
+      esc(s.externalDescription),
+      esc(s.laundryCredit > 0 ? s.laundryCredit.toFixed(2) : ""),
+      esc(grandTotal !== 0 ? grandTotal.toFixed(2) : ""),
+      esc(s.billingMode),
+      esc(s.prepaidAmount?.toFixed(2)),
+      esc(s.pricePerKwhOverride?.toFixed(4)),
+      esc(s.pricePerLiterWaterOverride?.toFixed(4)),
+      esc(s.paymentStatus),
+      esc(s.paymentId),
+      esc(s.paidAt?.toISOString().slice(0, 10)),
+      esc(s.bookingRef),
+      esc(s.notes),
     ].join(";");
   });
 
@@ -2433,29 +2522,75 @@ export async function exportInvoicesCSV() {
     orderBy: { periodEnd: "desc" },
   });
 
+  const esc = (v: string | number | null | undefined): string => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    if (s.includes(";") || s.includes("\n") || s.includes('"')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
-  const header = "ID;Enhed;Type;Periode start;Periode slut;El start (kWh);El slut (kWh);El forbrug (kWh);El (DKK);Vand start (L);Vand slut (L);Vand forbrug (L);Vand (DKK);Total (DKK);Status;Betalt dato\n";
+  const header = [
+    "ID",
+    "Enhed",
+    "Type",
+    "Periode start",
+    "Periode slut",
+    "El start (kWh)",
+    "El slut (kWh)",
+    "El forbrug (kWh)",
+    "Varme start (kWh)",
+    "Varme slut (kWh)",
+    "Varme forbrug (kWh)",
+    "El+varme total (kWh)",
+    "El+varme (DKK)",
+    "Vand start (L)",
+    "Vand slut (L)",
+    "Vand forbrug (L)",
+    "Vand (DKK)",
+    "Total (DKK)",
+    "Status",
+    "Betalings-ID",
+    "Betalt dato",
+    "Betalings-link",
+  ].join(";") + "\n";
+
   const rows = invoices.map((inv) => {
     const type = typeLabels[inv.unit.type] || inv.unit.type;
-    const elUsed = (inv.endKwh !== null && inv.startKwh !== null) ? (inv.endKwh - inv.startKwh).toFixed(2) : "";
-    const waterUsed = (inv.endWaterLiters !== null && inv.startWaterLiters !== null) ? (inv.endWaterLiters - inv.startWaterLiters).toFixed(0) : "";
+    const elDelta = (inv.endKwh !== null && inv.startKwh !== null)
+      ? (inv.endKwh - inv.startKwh) : null;
+    const heatDelta = (inv.endHeatingKwh !== null && inv.startHeatingKwh !== null)
+      ? (inv.endHeatingKwh - inv.startHeatingKwh) : null;
+    const totalElKwh = (elDelta ?? 0) + (heatDelta ?? 0);
+    const hasAnyEl = elDelta !== null || heatDelta !== null;
+    const waterDelta = (inv.endWaterLiters !== null && inv.startWaterLiters !== null)
+      ? (inv.endWaterLiters - inv.startWaterLiters) : null;
+
     return [
-      inv.id,
-      `${type} ${inv.unit.name}`,
-      type,
-      inv.periodStart.toISOString().slice(0, 10),
-      inv.periodEnd.toISOString().slice(0, 10),
-      inv.startKwh?.toFixed(2) || "",
-      inv.endKwh?.toFixed(2) || "",
-      elUsed,
-      inv.electricityCost.toFixed(2),
-      inv.startWaterLiters?.toFixed(0) || "",
-      inv.endWaterLiters?.toFixed(0) || "",
-      waterUsed,
-      inv.waterCost.toFixed(2),
-      inv.totalAmount.toFixed(2),
-      inv.status,
-      inv.paidAt?.toISOString().slice(0, 10) || "",
+      esc(inv.id),
+      esc(`${type} ${inv.unit.name}`),
+      esc(type),
+      esc(inv.periodStart.toISOString().slice(0, 10)),
+      esc(inv.periodEnd.toISOString().slice(0, 10)),
+      esc(inv.startKwh?.toFixed(2)),
+      esc(inv.endKwh?.toFixed(2)),
+      esc(elDelta !== null ? elDelta.toFixed(2) : ""),
+      esc(inv.startHeatingKwh?.toFixed(2)),
+      esc(inv.endHeatingKwh?.toFixed(2)),
+      esc(heatDelta !== null ? heatDelta.toFixed(2) : ""),
+      esc(hasAnyEl ? totalElKwh.toFixed(2) : ""),
+      esc(inv.electricityCost.toFixed(2)),
+      esc(inv.startWaterLiters?.toFixed(0)),
+      esc(inv.endWaterLiters?.toFixed(0)),
+      esc(waterDelta !== null ? waterDelta.toFixed(0) : ""),
+      esc(inv.waterCost.toFixed(2)),
+      esc(inv.totalAmount.toFixed(2)),
+      esc(inv.status),
+      esc(inv.paymentId),
+      esc(inv.paidAt?.toISOString().slice(0, 10)),
+      esc(inv.paymentToken),
     ].join(";");
   });
 
