@@ -5,6 +5,22 @@ import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import * as ha from "./homeassistant";
 
+// Read a numeric HA entity and log (with context) on failure instead of
+// swallowing the error silently. Returns null on any failure so callers
+// can keep their null-check logic unchanged.
+async function safeReadMeter(
+  entityId: string,
+  context: string,
+): Promise<number | null> {
+  try {
+    return await ha.getEntityNumericState(entityId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`HA meter read failed [${context}] entity=${entityId}: ${msg}`);
+    return null;
+  }
+}
+
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
@@ -485,6 +501,9 @@ async function sendCheckInNotificationAsync(
 export async function checkOut(sessionId: number) {
   // Final tick first — ensures the accumulator captures every second of
   // consumption up to this instant at the correct hourly spot prices.
+  // The tick uses optimistic concurrency, so if a cron tick is racing
+  // us it's handled safely — we just re-read the session below and pick
+  // up the freshest accumulator state either way.
   try {
     await tickSessionConsumption(sessionId);
   } catch (e) {
@@ -510,13 +529,13 @@ export async function checkOut(sessionId: number) {
   let endWaterLiters: number | null = session.lastTickWaterLiters;
 
   if (endKwh === null && hw?.hasElectricity && hw.electricityMeterEntityId) {
-    try { endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+    endKwh = await safeReadMeter(hw.electricityMeterEntityId, `checkOut:el session=${sessionId}`);
   }
   if (endHeatingKwh === null && hw?.hasHeating && hw.heatingMeterEntityId) {
-    try { endHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId); } catch {}
+    endHeatingKwh = await safeReadMeter(hw.heatingMeterEntityId, `checkOut:heat session=${sessionId}`);
   }
   if (endWaterLiters === null && hw?.hasWater && hw.waterMeterEntityId) {
-    try { endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+    endWaterLiters = await safeReadMeter(hw.waterMeterEntityId, `checkOut:water session=${sessionId}`);
   }
 
   // Costs come straight from the accumulator — that's the time-weighted
@@ -595,7 +614,17 @@ export async function checkOut(sessionId: number) {
     updateData.paidAt = new Date();
   }
 
-  await prisma.session.update({ where: { id: sessionId }, data: updateData });
+  // Conditional update: fail if status changed between our read and write
+  // (concurrent checkOut call, admin double-click, etc.). Prevents double
+  // check-out and ensures concurrent cron ticks can no longer mutate this
+  // session via tickSessionConsumption's own status=ACTIVE guard.
+  const res = await prisma.session.updateMany({
+    where: { id: sessionId, status: "ACTIVE" },
+    data: updateData,
+  });
+  if (res.count === 0) {
+    throw new Error("Session allerede afsluttet eller ændret af en anden proces");
+  }
 
   // Only mark vacant for non-long-term
   if (!session.unit.isLongTerm) {
@@ -962,13 +991,13 @@ export async function tickSessionConsumption(sessionId: number): Promise<{
   let currentHeatingKwh: number | null = null;
   let currentWaterLiters: number | null = null;
   if (hw.hasElectricity && hw.electricityMeterEntityId) {
-    try { currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+    currentKwh = await safeReadMeter(hw.electricityMeterEntityId, `tick:el session=${sessionId}`);
   }
   if (hw.hasHeating && hw.heatingMeterEntityId) {
-    try { currentHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId); } catch {}
+    currentHeatingKwh = await safeReadMeter(hw.heatingMeterEntityId, `tick:heat session=${sessionId}`);
   }
   if (hw.hasWater && hw.waterMeterEntityId) {
-    try { currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+    currentWaterLiters = await safeReadMeter(hw.waterMeterEntityId, `tick:water session=${sessionId}`);
   }
 
   let addElKwh = 0;
@@ -1030,7 +1059,30 @@ export async function tickSessionConsumption(sessionId: number): Promise<{
       updateData.accumulatedWaterLiters = { increment: addWaterLiters };
     }
     updateData.lastTickAt = new Date();
-    await prisma.session.update({ where: { id: sessionId }, data: updateData });
+
+    // Optimistic concurrency: only apply the tick if the session's
+    // lastTickAt / status are still what we observed when we computed the
+    // delta. If another tick (cron, opportunistic UI read, checkOut) raced
+    // us, updateMany returns count=0 and we skip — no double-counting.
+    const res = await prisma.session.updateMany({
+      where: {
+        id: sessionId,
+        status: "ACTIVE",
+        lastTickAt: session.lastTickAt, // null matches null
+      },
+      data: updateData,
+    });
+    if (res.count === 0) {
+      // Lost the race — discard this tick's contribution.
+      return {
+        addedKwh: 0,
+        addedElCost: 0,
+        addedLiters: 0,
+        addedWaterCost: 0,
+        elPriceAtTick: elPrice,
+        spotPrice,
+      };
+    }
   }
 
   return {
@@ -1134,13 +1186,13 @@ export async function getLiveConsumption(sessionId: number) {
   let currentHeatingKwh: number | null = null;
   let currentWaterLiters: number | null = null;
   if (hw?.hasElectricity && hw.electricityMeterEntityId) {
-    try { currentKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+    currentKwh = await safeReadMeter(hw.electricityMeterEntityId, `live:el session=${sessionId}`);
   }
   if (hw?.hasHeating && hw.heatingMeterEntityId) {
-    try { currentHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId); } catch {}
+    currentHeatingKwh = await safeReadMeter(hw.heatingMeterEntityId, `live:heat session=${sessionId}`);
   }
   if (hw?.hasWater && hw.waterMeterEntityId) {
-    try { currentWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+    currentWaterLiters = await safeReadMeter(hw.waterMeterEntityId, `live:water session=${sessionId}`);
   }
 
   // Ongoing deltas since the last tick (priced at the current rate)
@@ -1787,10 +1839,16 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
   });
 
   let powerOff = 0;
+  // Bail out if the session tick data is older than this — we don't want to
+  // cut off a guest based on meter values captured 30 min ago. The next cron
+  // run will re-evaluate with fresh data.
+  const STALE_TICK_MS = 20 * 60 * 1000;
+
   for (const session of sessions) {
     const hw = session.unit.hardware;
     if (!session.prepaidAmount || !hw?.electricitySwitchEntityId) continue;
     const switchEntity = hw.electricitySwitchEntityId;
+    const prepaidAmount = session.prepaidAmount;
 
     // Tick to refresh accumulator against the current spot price — prepaid
     // balance should be measured against the time-weighted real cost, not
@@ -1798,20 +1856,38 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
     // cutoff decision uses the freshest possible numbers.
     try {
       await tickSessionConsumption(session.id);
-    } catch {}
+    } catch (e) {
+      console.error(`checkPrepaidBalances: tick fejlede for session ${session.id}:`, e);
+      // Fall through — we'll still read the accumulator, but the staleness
+      // guard below will skip the decision if data is too old.
+    }
 
-    const refreshed = await prisma.session.findUnique({ where: { id: session.id } });
-    if (!refreshed) continue;
+    // Atomic conditional update: only flip status & record the cutoff if
+    // (a) the session is still ACTIVE, (b) the latest tick is not stale,
+    // and (c) the time-weighted cost has actually hit the prepaid amount.
+    // This closes the TOCTOU window between "read balance" and "act on it".
+    const cutoff = new Date(Date.now() - STALE_TICK_MS);
+    const decision = await prisma.session.findFirst({
+      where: {
+        id: session.id,
+        status: "ACTIVE",
+        lastTickAt: { gte: cutoff },
+      },
+      select: {
+        accumulatedElCost: true,
+        accumulatedWaterCost: true,
+      },
+    });
+    if (!decision) continue; // status changed or tick data too stale
 
-    const currentCost = refreshed.accumulatedElCost + refreshed.accumulatedWaterCost;
+    const currentCost = decision.accumulatedElCost + decision.accumulatedWaterCost;
+    if (currentCost < prepaidAmount) continue;
 
-    if (currentCost >= session.prepaidAmount) {
-      try {
-        await ha.turnOff(switchEntity);
-        powerOff++;
-      } catch (e) {
-        console.error(`Prepaid auto power-off failed for session ${session.id}:`, e);
-      }
+    try {
+      await ha.turnOff(switchEntity);
+      powerOff++;
+    } catch (e) {
+      console.error(`Prepaid auto power-off failed for session ${session.id}:`, e);
     }
   }
 
@@ -2131,10 +2207,10 @@ export async function logAllConsumption() {
     let waterLiters: number | null = null;
 
     if (hw.hasElectricity && hw.electricityMeterEntityId) {
-      try { electricityKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId); } catch {}
+      electricityKwh = await safeReadMeter(hw.electricityMeterEntityId, `logAll:el unit=${unit.id}`);
     }
     if (hw.hasWater && hw.waterMeterEntityId) {
-      try { waterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId); } catch {}
+      waterLiters = await safeReadMeter(hw.waterMeterEntityId, `logAll:water unit=${unit.id}`);
     }
 
     if (electricityKwh !== null || waterLiters !== null) {

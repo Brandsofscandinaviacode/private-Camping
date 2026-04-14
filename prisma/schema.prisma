@@ -197,6 +197,8 @@ model Session {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([status])              // tickAllSessionConsumption, admin dashboards
+  @@index([unitId, status])      // getActiveSessionForUnit, getLiveConsumption
   @@map("sessions")
 }
 
@@ -242,6 +244,8 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([unitId, periodStart]) // getSessionStatement, monthly invoice lookup
+  @@index([status])              // checkOverdueInvoices
   @@map("invoices")
 }
 
@@ -258,6 +262,7 @@ model ConsumptionLog {
 
   recordedAt DateTime @default(now())
 
+  @@index([unitId, recordedAt]) // charts + checkConsumptionAlarms
   @@map("consumption_logs")
 }
 

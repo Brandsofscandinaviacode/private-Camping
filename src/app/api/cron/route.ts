@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   logAllConsumption,
   checkConsumptionAlarms,
@@ -11,14 +11,21 @@ import {
   tickAllSessionConsumption,
 } from "@/lib/actions";
 import { refreshSpotPriceCache, cleanOldSpotPrices } from "@/lib/energi-data-service";
+import { authenticateAPI } from "@/lib/api-auth";
 
 // GET /api/cron — Called periodically (every 10 min via cron or HA automation)
 // Logs consumption, ticks session accumulators against the current spot price,
 // checks alarms, and auto-sends invoices on the configured day.
 // IMPORTANT: run at least every 10 min so time-weighted spot-price billing
 // stays accurate (worst-case discretisation error = the tick interval).
-// Example cron: */10 * * * * curl http://localhost:3000/api/cron
-export async function GET() {
+// Requires Bearer auth — set the API key in Admin → Indstillinger → System.
+// Example cron: */10 * * * * curl -H "Authorization: Bearer <api_key>" http://localhost:3000/api/cron
+export async function GET(req: NextRequest) {
+  const auth = await authenticateAPI(req);
+  if (!auth.ok) {
+    return NextResponse.json({ ok: false, error: auth.error }, { status: 401 });
+  }
+
   try {
     // Refresh spot prices BEFORE ticking sessions — the tick reads the
     // current hour's spot price, so we want it as fresh as possible.
