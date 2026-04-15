@@ -19,21 +19,52 @@ interface CabinHardwareFormProps {
   cabin: { id: number; name: string; type: string };
   hardware: {
     hasElectricity: boolean;
+    electricitySource: string;
     electricitySwitchEntityId: string | null;
     electricityMeterEntityId: string | null;
     electricityPowerEntityId: string | null;
+    electricityMqttPrefix: string | null;
+    electricityMqttComponent: string | null;
     hasHeating: boolean;
+    heatingSource: string;
     heatingSwitchEntityId: string | null;
     heatingMeterEntityId: string | null;
     heatingPowerEntityId: string | null;
+    heatingMqttPrefix: string | null;
+    heatingMqttComponent: string | null;
     winterModeEnabled: boolean;
     hasWater: boolean;
+    waterSource: string;
     waterMeterEntityId: string | null;
+    waterMqttPrefix: string | null;
+    waterMqttComponent: string | null;
     hasClimate: boolean;
     climateEntityId: string | null;
     hasSmartLock: boolean;
     lockEntityId: string | null;
   } | null;
+}
+
+function SourceSelect({
+  value,
+  onChange,
+}: {
+  value: "HA" | "MQTT";
+  onChange: (v: "HA" | "MQTT") => void;
+}) {
+  return (
+    <div>
+      <Label className="text-xs text-muted-foreground">Hardware-kilde</Label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as "HA" | "MQTT")}
+        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+      >
+        <option value="HA">Home Assistant</option>
+        <option value="MQTT">MQTT (Shelly direkte)</option>
+      </select>
+    </div>
+  );
 }
 
 // Entity picker with search and "used by" indicator
@@ -186,16 +217,25 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
 
   const [values, setValues] = useState({
     hasElectricity: hardware?.hasElectricity ?? false,
+    electricitySource: (hardware?.electricitySource === "MQTT" ? "MQTT" : "HA") as "HA" | "MQTT",
     electricitySwitchEntityId: hardware?.electricitySwitchEntityId ?? "",
     electricityMeterEntityId: hardware?.electricityMeterEntityId ?? "",
     electricityPowerEntityId: hardware?.electricityPowerEntityId ?? "",
+    electricityMqttPrefix: hardware?.electricityMqttPrefix ?? "",
+    electricityMqttComponent: hardware?.electricityMqttComponent ?? "switch:0",
     hasHeating: hardware?.hasHeating ?? false,
+    heatingSource: (hardware?.heatingSource === "MQTT" ? "MQTT" : "HA") as "HA" | "MQTT",
     heatingSwitchEntityId: hardware?.heatingSwitchEntityId ?? "",
     heatingMeterEntityId: hardware?.heatingMeterEntityId ?? "",
     heatingPowerEntityId: hardware?.heatingPowerEntityId ?? "",
+    heatingMqttPrefix: hardware?.heatingMqttPrefix ?? "",
+    heatingMqttComponent: hardware?.heatingMqttComponent ?? "switch:0",
     winterModeEnabled: hardware?.winterModeEnabled ?? false,
     hasWater: hardware?.hasWater ?? false,
+    waterSource: (hardware?.waterSource === "MQTT" ? "MQTT" : "HA") as "HA" | "MQTT",
     waterMeterEntityId: hardware?.waterMeterEntityId ?? "",
+    waterMqttPrefix: hardware?.waterMqttPrefix ?? "",
+    waterMqttComponent: hardware?.waterMqttComponent ?? "",
     hasClimate: hardware?.hasClimate ?? false,
     climateEntityId: hardware?.climateEntityId ?? "",
     hasSmartLock: hardware?.hasSmartLock ?? false,
@@ -217,16 +257,25 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
     startTransition(async () => {
       await updateUnitHardware(cabin.id, {
         hasElectricity: values.hasElectricity,
-        electricitySwitchEntityId: values.electricitySwitchEntityId || null,
-        electricityMeterEntityId: values.electricityMeterEntityId || null,
-        electricityPowerEntityId: values.electricityPowerEntityId || null,
+        electricitySource: values.electricitySource,
+        electricitySwitchEntityId: values.electricitySource === "HA" ? values.electricitySwitchEntityId || null : null,
+        electricityMeterEntityId: values.electricitySource === "HA" ? values.electricityMeterEntityId || null : null,
+        electricityPowerEntityId: values.electricitySource === "HA" ? values.electricityPowerEntityId || null : null,
+        electricityMqttPrefix: values.electricitySource === "MQTT" ? values.electricityMqttPrefix.trim() || null : null,
+        electricityMqttComponent: values.electricitySource === "MQTT" ? values.electricityMqttComponent.trim() || null : null,
         hasHeating: values.hasHeating,
-        heatingSwitchEntityId: values.heatingSwitchEntityId || null,
-        heatingMeterEntityId: values.heatingMeterEntityId || null,
-        heatingPowerEntityId: values.heatingPowerEntityId || null,
+        heatingSource: values.heatingSource,
+        heatingSwitchEntityId: values.heatingSource === "HA" ? values.heatingSwitchEntityId || null : null,
+        heatingMeterEntityId: values.heatingSource === "HA" ? values.heatingMeterEntityId || null : null,
+        heatingPowerEntityId: values.heatingSource === "HA" ? values.heatingPowerEntityId || null : null,
+        heatingMqttPrefix: values.heatingSource === "MQTT" ? values.heatingMqttPrefix.trim() || null : null,
+        heatingMqttComponent: values.heatingSource === "MQTT" ? values.heatingMqttComponent.trim() || null : null,
         winterModeEnabled: values.winterModeEnabled,
         hasWater: values.hasWater,
-        waterMeterEntityId: values.waterMeterEntityId || null,
+        waterSource: values.waterSource,
+        waterMeterEntityId: values.waterSource === "HA" ? values.waterMeterEntityId || null : null,
+        waterMqttPrefix: values.waterSource === "MQTT" ? values.waterMqttPrefix.trim() || null : null,
+        waterMqttComponent: values.waterSource === "MQTT" ? values.waterMqttComponent.trim() || null : null,
         hasClimate: values.hasClimate,
         climateEntityId: values.climateEntityId || null,
         hasSmartLock: values.hasSmartLock,
@@ -286,39 +335,68 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             </div>
             {values.hasElectricity && (
               <div className="space-y-3 pl-3 border-l-2 border-border">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Relæ (tænd/sluk strøm)</Label>
-                  <EntityPicker
-                    value={values.electricitySwitchEntityId}
-                    onChange={(v) => setValues((s) => ({ ...s, electricitySwitchEntityId: v }))}
-                    entities={entities}
-                    loading={entitiesLoading}
-                    filterCategory={["switch"]}
-                    placeholder="Vælg switch entity..."
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Elmåler (kWh)</Label>
-                  <EntityPicker
-                    value={values.electricityMeterEntityId}
-                    onChange={(v) => setValues((s) => ({ ...s, electricityMeterEntityId: v }))}
-                    entities={entities}
-                    loading={entitiesLoading}
-                    filterCategory={["sensor_energy"]}
-                    placeholder="Vælg energi-sensor..."
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Live effekt (W) — valgfri</Label>
-                  <EntityPicker
-                    value={values.electricityPowerEntityId}
-                    onChange={(v) => setValues((s) => ({ ...s, electricityPowerEntityId: v }))}
-                    entities={entities}
-                    loading={entitiesLoading}
-                    filterCategory={["sensor_power"]}
-                    placeholder="Vælg effekt-sensor (W)..."
-                  />
-                </div>
+                <SourceSelect
+                  value={values.electricitySource}
+                  onChange={(v) => setValues((s) => ({ ...s, electricitySource: v }))}
+                />
+                {values.electricitySource === "HA" ? (
+                  <>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Relæ (tænd/sluk strøm)</Label>
+                      <EntityPicker
+                        value={values.electricitySwitchEntityId}
+                        onChange={(v) => setValues((s) => ({ ...s, electricitySwitchEntityId: v }))}
+                        entities={entities}
+                        loading={entitiesLoading}
+                        filterCategory={["switch"]}
+                        placeholder="Vælg switch entity..."
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Elmåler (kWh)</Label>
+                      <EntityPicker
+                        value={values.electricityMeterEntityId}
+                        onChange={(v) => setValues((s) => ({ ...s, electricityMeterEntityId: v }))}
+                        entities={entities}
+                        loading={entitiesLoading}
+                        filterCategory={["sensor_energy"]}
+                        placeholder="Vælg energi-sensor..."
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Live effekt (W) — valgfri</Label>
+                      <EntityPicker
+                        value={values.electricityPowerEntityId}
+                        onChange={(v) => setValues((s) => ({ ...s, electricityPowerEntityId: v }))}
+                        entities={entities}
+                        loading={entitiesLoading}
+                        filterCategory={["sensor_power"]}
+                        placeholder="Vælg effekt-sensor (W)..."
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">MQTT Prefix</Label>
+                      <Input
+                        value={values.electricityMqttPrefix}
+                        onChange={(e) => setValues((s) => ({ ...s, electricityMqttPrefix: e.target.value }))}
+                        placeholder="shellyplus1pm-abc123"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Komponent</Label>
+                      <Input
+                        value={values.electricityMqttComponent}
+                        onChange={(e) => setValues((s) => ({ ...s, electricityMqttComponent: e.target.value }))}
+                        placeholder="switch:0"
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -336,39 +414,68 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
             </div>
             {values.hasHeating && (
               <div className="space-y-3 pl-3 border-l-2 border-border">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Varmerelæ (tænd/sluk el-radiatorer)</Label>
-                  <EntityPicker
-                    value={values.heatingSwitchEntityId}
-                    onChange={(v) => setValues((s) => ({ ...s, heatingSwitchEntityId: v }))}
-                    entities={entities}
-                    loading={entitiesLoading}
-                    filterCategory={["switch"]}
-                    placeholder="Vælg switch entity..."
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Varmemåler (valgfri, separat kWh)</Label>
-                  <EntityPicker
-                    value={values.heatingMeterEntityId}
-                    onChange={(v) => setValues((s) => ({ ...s, heatingMeterEntityId: v }))}
-                    entities={entities}
-                    loading={entitiesLoading}
-                    filterCategory={["sensor_energy"]}
-                    placeholder="Vælg energi-sensor (valgfri)..."
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Live varmeeffekt (W) — valgfri</Label>
-                  <EntityPicker
-                    value={values.heatingPowerEntityId}
-                    onChange={(v) => setValues((s) => ({ ...s, heatingPowerEntityId: v }))}
-                    entities={entities}
-                    loading={entitiesLoading}
-                    filterCategory={["sensor_power"]}
-                    placeholder="Vælg effekt-sensor (W)..."
-                  />
-                </div>
+                <SourceSelect
+                  value={values.heatingSource}
+                  onChange={(v) => setValues((s) => ({ ...s, heatingSource: v }))}
+                />
+                {values.heatingSource === "HA" ? (
+                  <>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Varmerelæ (tænd/sluk el-radiatorer)</Label>
+                      <EntityPicker
+                        value={values.heatingSwitchEntityId}
+                        onChange={(v) => setValues((s) => ({ ...s, heatingSwitchEntityId: v }))}
+                        entities={entities}
+                        loading={entitiesLoading}
+                        filterCategory={["switch"]}
+                        placeholder="Vælg switch entity..."
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Varmemåler (valgfri, separat kWh)</Label>
+                      <EntityPicker
+                        value={values.heatingMeterEntityId}
+                        onChange={(v) => setValues((s) => ({ ...s, heatingMeterEntityId: v }))}
+                        entities={entities}
+                        loading={entitiesLoading}
+                        filterCategory={["sensor_energy"]}
+                        placeholder="Vælg energi-sensor (valgfri)..."
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Live varmeeffekt (W) — valgfri</Label>
+                      <EntityPicker
+                        value={values.heatingPowerEntityId}
+                        onChange={(v) => setValues((s) => ({ ...s, heatingPowerEntityId: v }))}
+                        entities={entities}
+                        loading={entitiesLoading}
+                        filterCategory={["sensor_power"]}
+                        placeholder="Vælg effekt-sensor (W)..."
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">MQTT Prefix</Label>
+                      <Input
+                        value={values.heatingMqttPrefix}
+                        onChange={(e) => setValues((s) => ({ ...s, heatingMqttPrefix: e.target.value }))}
+                        placeholder="shellyplus1pm-xyz"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Komponent</Label>
+                      <Input
+                        value={values.heatingMqttComponent}
+                        onChange={(e) => setValues((s) => ({ ...s, heatingMqttComponent: e.target.value }))}
+                        placeholder="switch:0"
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between pt-1">
                   <div>
                     <Label className="text-sm">Vinterdrift</Label>
@@ -403,16 +510,45 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
               />
             </div>
             {values.hasWater && (
-              <div className="pl-3 border-l-2 border-border">
-                <Label className="text-xs text-muted-foreground">Vandmåler (liter)</Label>
-                <EntityPicker
-                  value={values.waterMeterEntityId}
-                  onChange={(v) => setValues((s) => ({ ...s, waterMeterEntityId: v }))}
-                  entities={entities}
-                  loading={entitiesLoading}
-                  filterCategory={["sensor_water"]}
-                  placeholder="Vælg vand-sensor..."
+              <div className="space-y-3 pl-3 border-l-2 border-border">
+                <SourceSelect
+                  value={values.waterSource}
+                  onChange={(v) => setValues((s) => ({ ...s, waterSource: v }))}
                 />
+                {values.waterSource === "HA" ? (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Vandmåler (liter)</Label>
+                    <EntityPicker
+                      value={values.waterMeterEntityId}
+                      onChange={(v) => setValues((s) => ({ ...s, waterMeterEntityId: v }))}
+                      entities={entities}
+                      loading={entitiesLoading}
+                      filterCategory={["sensor_water"]}
+                      placeholder="Vælg vand-sensor..."
+                    />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">MQTT Prefix</Label>
+                      <Input
+                        value={values.waterMqttPrefix}
+                        onChange={(e) => setValues((s) => ({ ...s, waterMqttPrefix: e.target.value }))}
+                        placeholder="shellyuni-water"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Komponent</Label>
+                      <Input
+                        value={values.waterMqttComponent}
+                        onChange={(e) => setValues((s) => ({ ...s, waterMqttComponent: e.target.value }))}
+                        placeholder="input:0"
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

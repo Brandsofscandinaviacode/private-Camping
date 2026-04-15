@@ -16,7 +16,10 @@ import {
 interface Shower {
   id: number;
   name: string;
-  switchEntityId: string;
+  source: "HA" | "MQTT";
+  switchEntityId: string | null;
+  mqttPrefix: string | null;
+  mqttComponent: string | null;
   pricePerMinute: number;
   minMinutes: number;
   maxMinutes: number;
@@ -56,7 +59,10 @@ function ShowerRow({ shower, baseUrl }: { shower: Shower; baseUrl: string }) {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState({
     name: shower.name,
-    switchEntityId: shower.switchEntityId,
+    source: shower.source,
+    switchEntityId: shower.switchEntityId ?? "",
+    mqttPrefix: shower.mqttPrefix ?? "",
+    mqttComponent: shower.mqttComponent ?? "",
     pricePerMinute: String(shower.pricePerMinute),
     minMinutes: String(shower.minMinutes),
     maxMinutes: String(shower.maxMinutes),
@@ -96,11 +102,22 @@ function ShowerRow({ shower, baseUrl }: { shower: Shower; baseUrl: string }) {
       setError("Kode skal være 4 cifre og starte med 1 (1xxx)");
       return;
     }
+    if (values.source === "HA" && !values.switchEntityId.trim()) {
+      setError("Entity ID er påkrævet når kilden er Home Assistant");
+      return;
+    }
+    if (values.source === "MQTT" && (!values.mqttPrefix.trim() || !values.mqttComponent.trim())) {
+      setError("MQTT prefix og komponent er påkrævet");
+      return;
+    }
     startTransition(async () => {
       try {
         await updateShower(shower.id, {
           name: values.name,
-          switchEntityId: values.switchEntityId,
+          source: values.source,
+          switchEntityId: values.source === "HA" ? values.switchEntityId.trim() || null : null,
+          mqttPrefix: values.source === "MQTT" ? values.mqttPrefix.trim() || null : null,
+          mqttComponent: values.source === "MQTT" ? values.mqttComponent.trim() || null : null,
           pricePerMinute: parseFloat(values.pricePerMinute) || 0,
           minMinutes: parseInt(values.minMinutes, 10) || 2,
           maxMinutes: parseInt(values.maxMinutes, 10) || 30,
@@ -144,6 +161,19 @@ function ShowerRow({ shower, baseUrl }: { shower: Shower; baseUrl: string }) {
           />
         </div>
         <div>
+          <Label className="text-xs text-muted-foreground">Hardware-kilde</Label>
+          <select
+            value={values.source}
+            onChange={(e) => setValues((v) => ({ ...v, source: e.target.value as "HA" | "MQTT" }))}
+            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="HA">Home Assistant</option>
+            <option value="MQTT">MQTT (Shelly direkte)</option>
+          </select>
+        </div>
+      </div>
+      {values.source === "HA" ? (
+        <div>
           <Label className="text-xs text-muted-foreground">Switch Entity ID</Label>
           <Input
             value={values.switchEntityId}
@@ -152,7 +182,28 @@ function ShowerRow({ shower, baseUrl }: { shower: Shower; baseUrl: string }) {
             className="mt-1"
           />
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-xs text-muted-foreground">MQTT Prefix</Label>
+            <Input
+              value={values.mqttPrefix}
+              onChange={(e) => setValues((v) => ({ ...v, mqttPrefix: e.target.value }))}
+              placeholder="shellyplus1pm-abc123"
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground">Komponent</Label>
+            <Input
+              value={values.mqttComponent}
+              onChange={(e) => setValues((v) => ({ ...v, mqttComponent: e.target.value }))}
+              placeholder="switch:0"
+              className="mt-1"
+            />
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <div>
           <Label className="text-xs text-muted-foreground">Pris pr. min (DKK)</Label>
@@ -242,7 +293,10 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
   const [isPending, startTransition] = useTransition();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newSource, setNewSource] = useState<"HA" | "MQTT">("HA");
   const [newEntity, setNewEntity] = useState("");
+  const [newMqttPrefix, setNewMqttPrefix] = useState("");
+  const [newMqttComponent, setNewMqttComponent] = useState("switch:0");
   const [newPrice, setNewPrice] = useState("2");
   const [newMin, setNewMin] = useState("2");
   const [newMax, setNewMax] = useState("30");
@@ -250,8 +304,12 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
   const [newLocation, setNewLocation] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
 
+  const newEndpointValid =
+    newSource === "HA" ? newEntity.trim().length > 0
+      : newMqttPrefix.trim().length > 0 && newMqttComponent.trim().length > 0;
+
   function handleAdd() {
-    if (!newName.trim() || !newEntity.trim()) return;
+    if (!newName.trim() || !newEndpointValid) return;
     setAddError(null);
     if (newCode && !/^1\d{3}$/.test(newCode)) {
       setAddError("Kode skal være 4 cifre og starte med 1 (1xxx)");
@@ -261,7 +319,10 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
       try {
         await createShower({
           name: newName.trim(),
-          switchEntityId: newEntity.trim(),
+          source: newSource,
+          switchEntityId: newSource === "HA" ? newEntity.trim() || null : null,
+          mqttPrefix: newSource === "MQTT" ? newMqttPrefix.trim() || null : null,
+          mqttComponent: newSource === "MQTT" ? newMqttComponent.trim() || null : null,
           pricePerMinute: parseFloat(newPrice) || 2,
           minMinutes: parseInt(newMin, 10) || 2,
           maxMinutes: parseInt(newMax, 10) || 30,
@@ -269,7 +330,10 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
           location: newLocation.trim() || null,
         });
         setNewName("");
+        setNewSource("HA");
         setNewEntity("");
+        setNewMqttPrefix("");
+        setNewMqttComponent("switch:0");
         setNewPrice("2");
         setNewMin("2");
         setNewMax("30");
@@ -319,6 +383,19 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
               />
             </div>
             <div>
+              <Label className="text-xs text-muted-foreground">Hardware-kilde</Label>
+              <select
+                value={newSource}
+                onChange={(e) => setNewSource(e.target.value as "HA" | "MQTT")}
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="HA">Home Assistant</option>
+                <option value="MQTT">MQTT (Shelly direkte)</option>
+              </select>
+            </div>
+          </div>
+          {newSource === "HA" ? (
+            <div>
               <Label className="text-xs text-muted-foreground">Switch Entity ID *</Label>
               <Input
                 value={newEntity}
@@ -327,7 +404,28 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
                 className="mt-1"
               />
             </div>
-          </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">MQTT Prefix *</Label>
+                <Input
+                  value={newMqttPrefix}
+                  onChange={(e) => setNewMqttPrefix(e.target.value)}
+                  placeholder="shellyplus1pm-abc123"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Komponent *</Label>
+                <Input
+                  value={newMqttComponent}
+                  onChange={(e) => setNewMqttComponent(e.target.value)}
+                  placeholder="switch:0"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground">Pris/min (DKK)</Label>
@@ -380,7 +478,7 @@ export function ShowerSettings({ showers, baseUrl }: Props) {
           </div>
           {addError && <p className="text-xs text-red-600">{addError}</p>}
           <div className="flex gap-2">
-            <Button size="sm" disabled={isPending || !newName.trim() || !newEntity.trim()} onClick={handleAdd}>
+            <Button size="sm" disabled={isPending || !newName.trim() || !newEndpointValid} onClick={handleAdd}>
               {isPending ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Plus className="h-3 w-3 mr-1.5" />}
               Tilføj
             </Button>

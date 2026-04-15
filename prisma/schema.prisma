@@ -83,27 +83,44 @@ model UnitHardware {
   unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   // Electricity — main power relay + meter
-  hasElectricity           Boolean @default(false)
-  electricitySwitchEntityId String?   // Relay: turns power on/off at check-in/out
-  electricityMeterEntityId  String?   // Meter: measures total kWh consumption
-  electricityPowerEntityId  String?   // Instantaneous power draw in W (optional)
+  // `electricitySource` picks the transport: "HA" (Home Assistant REST API)
+  // or "MQTT" (direct to mosquitto broker). The fields used for each source
+  // are independent — users can configure both and switch between them.
+  hasElectricity            Boolean @default(false)
+  electricitySource         String  @default("HA")  // "HA" | "MQTT"
+  electricitySwitchEntityId String?   // HA: Relay entity (e.g. switch.hytte1_el)
+  electricityMeterEntityId  String?   // HA: Energy sensor entity (kWh)
+  electricityPowerEntityId  String?   // HA: Power sensor entity (W)
+  // MQTT: One Shelly Gen2/3+ component covers switch + meter + power.
+  // Example: prefix=shellyplus1pm-abc123, component=switch:0
+  // Status topic:  {prefix}/status/{component}  (retained JSON)
+  // Command topic: {prefix}/command/{component} (payload: "on"/"off")
+  electricityMqttPrefix     String?
+  electricityMqttComponent  String?
 
   // Heating — separate relay for electric radiators (no wifi thermostat)
-  hasHeating              Boolean @default(false)
-  heatingSwitchEntityId   String?   // Relay: controls heating independently
-  heatingMeterEntityId    String?   // Optional: separate meter for heating
-  heatingPowerEntityId    String?   // Instantaneous power draw in W (optional)
-  winterModeEnabled       Boolean @default(false)  // Keep heating on when vacant (protect cabin)
+  hasHeating             Boolean @default(false)
+  heatingSource          String  @default("HA")  // "HA" | "MQTT"
+  heatingSwitchEntityId  String?   // HA: Relay entity
+  heatingMeterEntityId   String?   // HA: Optional separate energy sensor (kWh)
+  heatingPowerEntityId   String?   // HA: Optional power sensor (W)
+  heatingMqttPrefix      String?
+  heatingMqttComponent   String?
+  winterModeEnabled      Boolean @default(false)  // Keep heating on when vacant (protect cabin)
 
-  // Water (LoRaWAN meter or similar)
-  hasWater            Boolean @default(false)
-  waterMeterEntityId  String?
+  // Water (LoRaWAN meter or Shelly pulse counter)
+  hasWater           Boolean @default(false)
+  waterSource        String  @default("HA")  // "HA" | "MQTT"
+  waterMeterEntityId String?
+  waterMqttPrefix    String?
+  waterMqttComponent String?   // e.g. switch:0 if behind a Shelly 1PM reading liters
 
   // Climate (wifi thermostat / heat pump — different from dumb radiator relay)
+  // HA only — Shelly does not cover climate control natively.
   hasClimate      Boolean @default(false)
   climateEntityId String?
 
-  // Smart Lock
+  // Smart Lock — HA only (Shelly does not cover smart locks natively)
   hasSmartLock  Boolean @default(false)
   lockEntityId  String?
 
@@ -288,7 +305,12 @@ model LaundryMachine {
   id               Int     @id @default(autoincrement())
   name             String                           // "Vaskemaskine 1", "Tørretumbler"
   kind             String  @default("WASHER")       // WASHER | DRYER
-  switchEntityId   String                           // HA switch entity to control
+  // Hardware transport: "HA" uses switchEntityId against Home Assistant,
+  // "MQTT" uses mqttPrefix+mqttComponent against the Mosquitto broker.
+  source           String  @default("HA")           // "HA" | "MQTT"
+  switchEntityId   String?                          // HA switch entity to control
+  mqttPrefix       String?                          // e.g. shellyplus1pm-abc123
+  mqttComponent    String?                          // e.g. switch:0
   durationMinutes  Int     @default(60)             // How long it runs per use
   pricePerUse      Float   @default(25)             // DKK per use
   enabled          Boolean @default(true)           // Admin can disable
@@ -312,7 +334,12 @@ model LaundryMachine {
 model Shower {
   id               Int     @id @default(autoincrement())
   name             String                           // "Bad 1"
-  switchEntityId   String                           // HA relay for the valve
+  // Hardware transport: "HA" uses switchEntityId against Home Assistant,
+  // "MQTT" uses mqttPrefix+mqttComponent against the Mosquitto broker.
+  source           String  @default("HA")           // "HA" | "MQTT"
+  switchEntityId   String?                          // HA relay for the valve
+  mqttPrefix       String?                          // e.g. shellyplus1pm-abc123
+  mqttComponent    String?                          // e.g. switch:0
   pricePerMinute   Float   @default(2)              // DKK per minute
   minMinutes       Int     @default(2)
   maxMinutes       Int     @default(30)
@@ -358,6 +385,8 @@ model ShowerSess {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([showerId, status])
+  @@index([status, endsAt])
   @@map("shower_sessions")
 }
 

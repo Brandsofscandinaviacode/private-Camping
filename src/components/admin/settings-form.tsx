@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useTransition, useRef } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -430,6 +430,197 @@ export function HASettings({ settings }: SettingsFormProps) {
 
       {/* Add Shelly Device */}
       <AddShellyDevice />
+    </div>
+  );
+}
+
+// ─── MQTT (MOSQUITTO) TAB ───
+export function MQTTSettings({ settings }: SettingsFormProps) {
+  const [values, setValues] = useState({
+    mqtt_enabled: settings.mqtt_enabled || "false",
+    mqtt_host: settings.mqtt_host || "localhost",
+    mqtt_port: settings.mqtt_port || "1883",
+    mqtt_username: settings.mqtt_username || "",
+    mqtt_password: settings.mqtt_password || "",
+  });
+  const { isPending, saved, handleSave } = useSave(values);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [reloading, setReloading] = useState(false);
+  const [reloadResult, setReloadResult] = useState<{ ok: boolean; connected: boolean } | null>(null);
+
+  function h(key: string, value: string) {
+    setValues((v) => ({ ...v, [key]: value }));
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testMqttConnection({
+        host: values.mqtt_host.trim(),
+        port: parseInt(values.mqtt_port, 10) || 1883,
+        username: values.mqtt_username,
+        password: values.mqtt_password,
+      });
+      setTestResult(result);
+    } catch {
+      setTestResult({ ok: false, message: "Uventet fejl under test" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleSaveAndReload() {
+    await updateMultipleSettings(Object.entries(values).map(([key, value]) => ({ key, value })));
+    setReloading(true);
+    setReloadResult(null);
+    try {
+      const res = await reloadMqttClient();
+      setReloadResult(res);
+    } catch {
+      setReloadResult({ ok: false, connected: false });
+    } finally {
+      setReloading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">MQTT broker (Mosquitto)</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Alternativ til Home Assistant for Shelly Gen3+ enheder. Vælges pr. enhed/bad/maskine under hardware-indstillingerne.
+          </p>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.mqtt_enabled === "true"}
+              onChange={(e) => h("mqtt_enabled", e.target.checked ? "true" : "false")}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <div>
+              <p className="text-sm font-medium">Aktivér MQTT broker</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                CampSense forbinder til brokeren og styrer/aflæser enheder direkte via MQTT
+              </p>
+            </div>
+          </label>
+
+          {values.mqtt_enabled === "true" && (
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 sm:col-span-1">
+                  <Label className="text-sm text-muted-foreground">Host</Label>
+                  <Input
+                    value={values.mqtt_host}
+                    onChange={(e) => h("mqtt_host", e.target.value)}
+                    placeholder="localhost"
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    Brug <code>localhost</code> hvis brokeren kører på samme server
+                  </p>
+                </div>
+                <div className="col-span-2 sm:col-span-1">
+                  <Label className="text-sm text-muted-foreground">Port</Label>
+                  <Input
+                    type="number"
+                    value={values.mqtt_port}
+                    onChange={(e) => h("mqtt_port", e.target.value)}
+                    placeholder="1883"
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    1883 for lokal, 8883 for TLS
+                  </p>
+                </div>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Brugernavn</Label>
+                <Input
+                  value={values.mqtt_username}
+                  onChange={(e) => h("mqtt_username", e.target.value)}
+                  placeholder="campsense"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Adgangskode</Label>
+                <Input
+                  type="password"
+                  value={values.mqtt_password}
+                  onChange={(e) => h("mqtt_password", e.target.value)}
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Opret med <code>mosquitto_passwd</code> på serveren
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
+                  {testing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wifi className="h-4 w-4 mr-2" />}
+                  {testing ? "Tester..." : "Test forbindelse"}
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSaveAndReload} disabled={reloading || isPending}>
+                  {reloading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Radio className="h-4 w-4 mr-2" />}
+                  {reloading ? "Genstarter..." : "Gem og genstart klient"}
+                </Button>
+              </div>
+              {testResult && (
+                <div className={`flex items-start gap-2.5 text-sm p-3 rounded-lg ${testResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                  {testResult.ok ? <Wifi className="h-4 w-4 shrink-0 mt-0.5" /> : <WifiOff className="h-4 w-4 shrink-0 mt-0.5" />}
+                  <span>{testResult.message}</span>
+                </div>
+              )}
+              {reloadResult && (
+                <div className={`flex items-start gap-2.5 text-sm p-3 rounded-lg ${reloadResult.connected ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                  {reloadResult.connected ? <Wifi className="h-4 w-4 shrink-0 mt-0.5" /> : <WifiOff className="h-4 w-4 shrink-0 mt-0.5" />}
+                  <span>
+                    {reloadResult.connected
+                      ? "MQTT-klienten er genstartet og forbundet"
+                      : "MQTT-klienten kunne ikke forbinde — tjek indstillinger"}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Sådan tilslutter du en Shelly Gen3+ direkte</h2>
+        </div>
+        <div className="p-5 text-sm text-muted-foreground space-y-3">
+          <p>
+            Shelly Gen3+ enheder kan sende status og modtage kommandoer direkte på MQTT — uden Home Assistant som mellemled.
+          </p>
+          <ol className="list-decimal pl-5 space-y-1.5">
+            <li>Åbn Shelly-enhedens web-UI (eller brug Shelly Smart-app&apos;en)</li>
+            <li>Gå til <strong>Settings → Connectivity → MQTT</strong></li>
+            <li>Sæt <strong>Enable MQTT</strong> til til</li>
+            <li>Sæt <strong>MQTT Prefix</strong> — dette ID bruges under hardware-opsætningen. Standard er fx <code>shellyplus1pm-abc123</code></li>
+            <li>Sæt <strong>Server</strong> til <code>{values.mqtt_host || "<din broker>"}:{values.mqtt_port || "1883"}</code></li>
+            <li>Indtast <strong>Username / Password</strong> svarende til det du har oprettet i Mosquitto</li>
+            <li>Gem og genstart enheden</li>
+          </ol>
+          <p className="text-xs">
+            Under hardware-opsætning pr. plads (eller under Bade/Vaskemaskiner) vælger du
+            &quot;MQTT (Shelly direkte)&quot; som kilde og indtaster prefix + komponent (fx <code>switch:0</code>).
+          </p>
+          <div className="rounded-lg bg-muted/50 p-3 text-xs">
+            <p className="font-medium text-foreground mb-1">Topic-konvention (Shelly Gen2/3+)</p>
+            <p>Status:  <code>{"{prefix}/status/{component}"}</code>  — fx <code>shellyplus1pm-abc123/status/switch:0</code></p>
+            <p>Command: <code>{"{prefix}/command/{component}"}</code>  — payload: <code>on</code> / <code>off</code> / <code>toggle</code></p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -25,7 +25,10 @@ export default async function AdminShowersPage() {
           showers={showers.map((s) => ({
             id: s.id,
             name: s.name,
+            source: (s.source === "MQTT" ? "MQTT" : "HA") as "HA" | "MQTT",
             switchEntityId: s.switchEntityId,
+            mqttPrefix: s.mqttPrefix,
+            mqttComponent: s.mqttComponent,
             pricePerMinute: s.pricePerMinute,
             minMinutes: s.minMinutes,
             maxMinutes: s.maxMinutes,

@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users } from "lucide-react";
+import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users, Radio } from "lucide-react";
 
 const tabs = [
   { id: "general", label: "Generelt", icon: Settings },
   { id: "ha", label: "Home Assistant", icon: Wifi },
+  { id: "mqtt", label: "MQTT", icon: Radio },
   { id: "notifications", label: "Notifikationer", icon: Bell },
   { id: "payment", label: "Betaling", icon: CreditCard },
   { id: "guest", label: "Gæsteportal", icon: Users },

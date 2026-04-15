@@ -16,7 +16,10 @@ interface Machine {
   id: number;
   name: string;
   kind: string;
-  switchEntityId: string;
+  source: "HA" | "MQTT";
+  switchEntityId: string | null;
+  mqttPrefix: string | null;
+  mqttComponent: string | null;
   durationMinutes: number;
   pricePerUse: number;
   enabled: boolean;
@@ -36,7 +39,10 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
   const [values, setValues] = useState({
     name: machine.name,
     kind: machine.kind,
-    switchEntityId: machine.switchEntityId,
+    source: machine.source,
+    switchEntityId: machine.switchEntityId ?? "",
+    mqttPrefix: machine.mqttPrefix ?? "",
+    mqttComponent: machine.mqttComponent ?? "",
     durationMinutes: String(machine.durationMinutes),
     pricePerUse: String(machine.pricePerUse),
     enabled: machine.enabled,
@@ -53,12 +59,23 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
       setError("Koden skal være 4 cifre");
       return;
     }
+    if (values.source === "HA" && !values.switchEntityId.trim()) {
+      setError("Entity ID er påkrævet når kilden er Home Assistant");
+      return;
+    }
+    if (values.source === "MQTT" && (!values.mqttPrefix.trim() || !values.mqttComponent.trim())) {
+      setError("MQTT prefix og komponent er påkrævet");
+      return;
+    }
     startTransition(async () => {
       try {
         await updateLaundryMachine(machine.id, {
           name: values.name,
           kind: values.kind,
-          switchEntityId: values.switchEntityId,
+          source: values.source,
+          switchEntityId: values.source === "HA" ? values.switchEntityId.trim() || null : null,
+          mqttPrefix: values.source === "MQTT" ? values.mqttPrefix.trim() || null : null,
+          mqttComponent: values.source === "MQTT" ? values.mqttComponent.trim() || null : null,
           durationMinutes: parseInt(values.durationMinutes, 10) || 60,
           pricePerUse: parseFloat(values.pricePerUse) || 0,
           enabled: values.enabled,
@@ -105,6 +122,19 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
           />
         </div>
         <div>
+          <Label className="text-xs text-muted-foreground">Hardware-kilde</Label>
+          <select
+            value={values.source}
+            onChange={(e) => setValues((v) => ({ ...v, source: e.target.value as "HA" | "MQTT" }))}
+            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="HA">Home Assistant</option>
+            <option value="MQTT">MQTT (Shelly direkte)</option>
+          </select>
+        </div>
+      </div>
+      {values.source === "HA" ? (
+        <div>
           <Label className="text-xs text-muted-foreground">Switch Entity ID</Label>
           <Input
             value={values.switchEntityId}
@@ -113,7 +143,28 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
             className="mt-1"
           />
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-xs text-muted-foreground">MQTT Prefix</Label>
+            <Input
+              value={values.mqttPrefix}
+              onChange={(e) => setValues((v) => ({ ...v, mqttPrefix: e.target.value }))}
+              placeholder="shellyplus1pm-abc123"
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground">Komponent</Label>
+            <Input
+              value={values.mqttComponent}
+              onChange={(e) => setValues((v) => ({ ...v, mqttComponent: e.target.value }))}
+              placeholder="switch:0"
+              className="mt-1"
+            />
+          </div>
+        </div>
+      )}
       <div className={`grid ${kindLocked ? "grid-cols-1" : "grid-cols-2"} gap-3`}>
         {!kindLocked && (
           <div>
@@ -235,15 +286,22 @@ export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<"WASHER" | "DRYER">(kindLocked ? kind : "WASHER");
+  const [newSource, setNewSource] = useState<"HA" | "MQTT">("HA");
   const [newEntity, setNewEntity] = useState("");
+  const [newMqttPrefix, setNewMqttPrefix] = useState("");
+  const [newMqttComponent, setNewMqttComponent] = useState("switch:0");
   const [newDuration, setNewDuration] = useState("60");
   const [newPrice, setNewPrice] = useState("25");
   const [newCode, setNewCode] = useState("");
   const [newLocation, setNewLocation] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
 
+  const newEndpointValid =
+    newSource === "HA" ? newEntity.trim().length > 0
+      : newMqttPrefix.trim().length > 0 && newMqttComponent.trim().length > 0;
+
   function handleAdd() {
-    if (!newName.trim() || !newEntity.trim()) return;
+    if (!newName.trim() || !newEndpointValid) return;
     setAddError(null);
     if (newCode && !/^\d{4}$/.test(newCode)) {
       setAddError("Koden skal være 4 cifre");
@@ -254,7 +312,10 @@ export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps
         await createLaundryMachine({
           name: newName.trim(),
           kind: newKind,
-          switchEntityId: newEntity.trim(),
+          source: newSource,
+          switchEntityId: newSource === "HA" ? newEntity.trim() || null : null,
+          mqttPrefix: newSource === "MQTT" ? newMqttPrefix.trim() || null : null,
+          mqttComponent: newSource === "MQTT" ? newMqttComponent.trim() || null : null,
           durationMinutes: parseInt(newDuration, 10) || 60,
           pricePerUse: parseFloat(newPrice) || 25,
           code: newCode.trim() || null,
@@ -262,7 +323,10 @@ export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps
         });
         setNewName("");
         setNewKind(kindLocked ? kind : "WASHER");
+        setNewSource("HA");
         setNewEntity("");
+        setNewMqttPrefix("");
+        setNewMqttComponent("switch:0");
         setNewDuration("60");
         setNewPrice("25");
         setNewCode("");
@@ -320,14 +384,48 @@ export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps
             )}
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Switch Entity ID *</Label>
-            <Input
-              value={newEntity}
-              onChange={(e) => setNewEntity(e.target.value)}
-              placeholder="switch.washer_1"
-              className="mt-1"
-            />
+            <Label className="text-xs text-muted-foreground">Hardware-kilde</Label>
+            <select
+              value={newSource}
+              onChange={(e) => setNewSource(e.target.value as "HA" | "MQTT")}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="HA">Home Assistant</option>
+              <option value="MQTT">MQTT (Shelly direkte)</option>
+            </select>
           </div>
+          {newSource === "HA" ? (
+            <div>
+              <Label className="text-xs text-muted-foreground">Switch Entity ID *</Label>
+              <Input
+                value={newEntity}
+                onChange={(e) => setNewEntity(e.target.value)}
+                placeholder="switch.washer_1"
+                className="mt-1"
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">MQTT Prefix *</Label>
+                <Input
+                  value={newMqttPrefix}
+                  onChange={(e) => setNewMqttPrefix(e.target.value)}
+                  placeholder="shellyplus1pm-abc123"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Komponent *</Label>
+                <Input
+                  value={newMqttComponent}
+                  onChange={(e) => setNewMqttComponent(e.target.value)}
+                  placeholder="switch:0"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground">Varighed (min)</Label>
@@ -371,7 +469,7 @@ export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps
           </div>
           {addError && <p className="text-xs text-red-600">{addError}</p>}
           <div className="flex gap-2">
-            <Button size="sm" disabled={isPending || !newName.trim() || !newEntity.trim()} onClick={handleAdd}>
+            <Button size="sm" disabled={isPending || !newName.trim() || !newEndpointValid} onClick={handleAdd}>
               {isPending ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Plus className="h-3 w-3 mr-1.5" />}
               Tilføj
             </Button>

@@ -4,19 +4,22 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import * as ha from "./homeassistant";
+import * as hardware from "./hardware";
+import type { HardwareEndpoint } from "./hardware";
+import { mqttClient, testMqttBroker } from "./mqtt-client";
 
-// Read a numeric HA entity and log (with context) on failure instead of
-// swallowing the error silently. Returns null on any failure so callers
-// can keep their null-check logic unchanged.
+// Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
+// failure with context instead of swallowing it silently and returns null on
+// any failure so callers can keep their null-check logic unchanged.
 async function safeReadMeter(
-  entityId: string,
+  ep: HardwareEndpoint,
   context: string,
 ): Promise<number | null> {
   try {
-    return await ha.getEntityNumericState(entityId);
+    return await hardware.readEnergyKwh(ep);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`HA meter read failed [${context}] entity=${entityId}: ${msg}`);
+    console.error(`meter read failed [${context}] ${hardware.endpointLabel(ep)}: ${msg}`);
     return null;
   }
 }
@@ -120,6 +123,48 @@ export async function testEntityId(entityId: string): Promise<{ ok: boolean; val
 }
 
 // ──────────────────────────────────────────────
+// MQTT Broker Testing
+// ──────────────────────────────────────────────
+export async function testMqttConnection(cfg?: {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+}): Promise<{ ok: boolean; message: string }> {
+  // If no cfg passed, use the currently-saved settings
+  let host: string;
+  let port: number;
+  let username: string;
+  let password: string;
+
+  if (cfg) {
+    ({ host, port, username, password } = cfg);
+  } else {
+    const settings = await prisma.globalSetting.findMany({
+      where: { key: { in: ["mqtt_host", "mqtt_port", "mqtt_username", "mqtt_password"] } },
+    });
+    const map = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+    host = map.mqtt_host || "localhost";
+    port = parseInt(map.mqtt_port || "1883", 10);
+    username = map.mqtt_username || "";
+    password = map.mqtt_password || "";
+  }
+
+  if (!host.trim()) return { ok: false, message: "MQTT host er tom" };
+  return testMqttBroker({ host, port, username, password });
+}
+
+/** Force the live MQTT client to pick up fresh GlobalSetting config. */
+export async function reloadMqttClient(): Promise<{ ok: boolean; connected: boolean }> {
+  try {
+    const c = await mqttClient.reconnect();
+    return { ok: true, connected: !!c?.connected };
+  } catch {
+    return { ok: false, connected: false };
+  }
+}
+
+// ──────────────────────────────────────────────
 // HA Entity Browser
 // ──────────────────────────────────────────────
 export type EntityCategory = "switch" | "sensor_energy" | "sensor_power" | "sensor_water" | "sensor_other" | "climate" | "lock" | "other";
@@ -187,18 +232,20 @@ async function getUsedEntityMap(): Promise<Map<string, string>> {
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
   const map = new Map<string, string>();
 
-  for (const hw of allHw) {
-    const unitName = `${typeLabels[hw.unit.type] || ""} ${hw.unit.name}`.trim();
+  for (const row of allHw) {
+    const unitName = `${typeLabels[row.unit.type] || ""} ${row.unit.name}`.trim();
+    // Only count HA entity IDs — MQTT prefixes are free-form and can legitimately
+    // be reused (e.g. different components of a Shelly Plus 2PM).
     const ids = [
-      hw.electricitySwitchEntityId,
-      hw.electricityMeterEntityId,
-      hw.electricityPowerEntityId,
-      hw.heatingSwitchEntityId,
-      hw.heatingMeterEntityId,
-      hw.heatingPowerEntityId,
-      hw.waterMeterEntityId,
-      hw.climateEntityId,
-      hw.lockEntityId,
+      row.electricitySwitchEntityId,
+      row.electricityMeterEntityId,
+      row.electricityPowerEntityId,
+      row.heatingSwitchEntityId,
+      row.heatingMeterEntityId,
+      row.heatingPowerEntityId,
+      row.waterMeterEntityId,
+      row.climateEntityId,
+      row.lockEntityId,
     ].filter(Boolean) as string[];
 
     for (const id of ids) {
@@ -295,16 +342,25 @@ export async function updateUnitHardware(
   unitId: number,
   data: {
     hasElectricity: boolean;
+    electricitySource: "HA" | "MQTT";
     electricitySwitchEntityId: string | null;
     electricityMeterEntityId: string | null;
     electricityPowerEntityId: string | null;
+    electricityMqttPrefix: string | null;
+    electricityMqttComponent: string | null;
     hasHeating: boolean;
+    heatingSource: "HA" | "MQTT";
     heatingSwitchEntityId: string | null;
     heatingMeterEntityId: string | null;
     heatingPowerEntityId: string | null;
+    heatingMqttPrefix: string | null;
+    heatingMqttComponent: string | null;
     winterModeEnabled: boolean;
     hasWater: boolean;
+    waterSource: "HA" | "MQTT";
     waterMeterEntityId: string | null;
+    waterMqttPrefix: string | null;
+    waterMqttComponent: string | null;
     hasClimate: boolean;
     climateEntityId: string | null;
     hasSmartLock: boolean;
@@ -329,14 +385,14 @@ export async function toggleWinterMode(unitId: number, enabled: boolean) {
 
   // If enabling winter mode, turn on heating immediately
   const hw = await prisma.unitHardware.findUnique({ where: { unitId } });
-  if (hw?.heatingSwitchEntityId) {
+  if (hardware.hasHeatingSwitch(hw)) {
     try {
       if (enabled) {
-        await ha.turnOn(hw.heatingSwitchEntityId);
+        await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true);
       }
       // Don't turn off here — that's handled by check-out logic
     } catch (e) {
-      console.error("Winter mode toggle HA error:", e);
+      console.error("Winter mode toggle error:", e);
     }
   }
 
@@ -425,31 +481,31 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   let startHeatingKwh: number | null = null;
   let startWaterLiters: number | null = null;
 
-  if (hw?.hasElectricity && hw.electricityMeterEntityId) {
-    startKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+  if (hardware.hasElectricityMeter(hw)) {
+    startKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `checkIn:el unit=${unitId}`);
   }
-  if (hw?.hasHeating && hw.heatingMeterEntityId) {
-    startHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
+  if (hardware.hasHeatingMeter(hw)) {
+    startHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `checkIn:heat unit=${unitId}`);
   }
-  if (hw?.hasWater && hw.waterMeterEntityId) {
-    startWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
+  if (hardware.hasWaterMeter(hw)) {
+    startWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `checkIn:water unit=${unitId}`);
   }
 
   // Turn on electricity
-  if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
-    try { await ha.turnOn(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
+  if (hardware.hasElectricitySwitch(hw)) {
+    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { console.error("checkIn el on:", e); }
   }
   // Turn on heating relay
-  if (hw?.hasHeating && hw.heatingSwitchEntityId) {
-    try { await ha.turnOn(hw.heatingSwitchEntityId); } catch (e) { console.error("HA:", e); }
+  if (hardware.hasHeatingSwitch(hw)) {
+    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { console.error("checkIn heat on:", e); }
   }
-  // Set climate
+  // Set climate (HA only)
   if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { console.error("HA:", e); }
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { console.error("HA climate:", e); }
   }
-  // Unlock door
+  // Unlock door (HA only)
   if (hw?.hasSmartLock && hw.lockEntityId) {
-    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
+    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { console.error("HA unlock:", e); }
   }
 
   const guestPortalToken = uuidv4();
@@ -528,14 +584,14 @@ export async function checkOut(sessionId: number) {
   let endHeatingKwh: number | null = session.lastTickHeatingKwh;
   let endWaterLiters: number | null = session.lastTickWaterLiters;
 
-  if (endKwh === null && hw?.hasElectricity && hw.electricityMeterEntityId) {
-    endKwh = await safeReadMeter(hw.electricityMeterEntityId, `checkOut:el session=${sessionId}`);
+  if (endKwh === null && hardware.hasElectricityMeter(hw)) {
+    endKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `checkOut:el session=${sessionId}`);
   }
-  if (endHeatingKwh === null && hw?.hasHeating && hw.heatingMeterEntityId) {
-    endHeatingKwh = await safeReadMeter(hw.heatingMeterEntityId, `checkOut:heat session=${sessionId}`);
+  if (endHeatingKwh === null && hardware.hasHeatingMeter(hw)) {
+    endHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `checkOut:heat session=${sessionId}`);
   }
-  if (endWaterLiters === null && hw?.hasWater && hw.waterMeterEntityId) {
-    endWaterLiters = await safeReadMeter(hw.waterMeterEntityId, `checkOut:water session=${sessionId}`);
+  if (endWaterLiters === null && hardware.hasWaterMeter(hw)) {
+    endWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `checkOut:water session=${sessionId}`);
   }
 
   // Costs come straight from the accumulator — that's the time-weighted
@@ -581,20 +637,20 @@ export async function checkOut(sessionId: number) {
   const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
 
   if (autoPowerOff) {
-    if (hw?.hasElectricity && hw.electricitySwitchEntityId) {
-      try { await ha.turnOff(hw.electricitySwitchEntityId); } catch (e) { console.error("HA:", e); }
+    if (hardware.hasElectricitySwitch(hw)) {
+      try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), false); } catch (e) { console.error("checkOut el off:", e); }
     }
     // Turn off heating unless winter mode is enabled (protect cabin from frost)
-    if (hw?.hasHeating && hw.heatingSwitchEntityId && !hw.winterModeEnabled) {
-      try { await ha.turnOff(hw.heatingSwitchEntityId); } catch (e) { console.error("HA:", e); }
+    if (hardware.hasHeatingSwitch(hw) && !hw!.winterModeEnabled) {
+      try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), false); } catch (e) { console.error("checkOut heat off:", e); }
     }
     if (hw?.hasSmartLock && hw.lockEntityId) {
-      try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA:", e); }
+      try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA lock:", e); }
     }
   }
-  // Always set climate to vacant temp
+  // Always set climate to vacant temp (HA only)
   if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { console.error("HA:", e); }
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { console.error("HA climate:", e); }
   }
 
   // For prepaid: mark as PAID since amount was collected upfront, no refund
@@ -783,29 +839,17 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
   let remainderEndWater: number | null = null;
 
   if (session.status === "ACTIVE") {
-    if (hw?.hasElectricity && hw.electricityMeterEntityId) {
+    if (hardware.hasElectricityMeter(hw)) {
       remainderStartKwh = lastInvoice?.endKwh ?? session.startKwh;
-      try {
-        remainderEndKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
-      } catch {
-        remainderEndKwh = null;
-      }
+      remainderEndKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `statement:el session=${session.id}`);
     }
-    if (hw?.hasHeating && hw.heatingMeterEntityId) {
+    if (hardware.hasHeatingMeter(hw)) {
       remainderStartHeating = lastInvoice?.endHeatingKwh ?? session.startHeatingKwh;
-      try {
-        remainderEndHeating = await ha.getEntityNumericState(hw.heatingMeterEntityId);
-      } catch {
-        remainderEndHeating = null;
-      }
+      remainderEndHeating = await safeReadMeter(hardware.heatingMeterEp(hw!), `statement:heat session=${session.id}`);
     }
-    if (hw?.hasWater && hw.waterMeterEntityId) {
+    if (hardware.hasWaterMeter(hw)) {
       remainderStartWater = lastInvoice?.endWaterLiters ?? session.startWaterLiters;
-      try {
-        remainderEndWater = await ha.getEntityNumericState(hw.waterMeterEntityId);
-      } catch {
-        remainderEndWater = null;
-      }
+      remainderEndWater = await safeReadMeter(hardware.waterMeterEp(hw!), `statement:water session=${session.id}`);
     }
   } else {
     // COMPLETED — use stored readings
@@ -990,14 +1034,14 @@ export async function tickSessionConsumption(sessionId: number): Promise<{
   let currentKwh: number | null = null;
   let currentHeatingKwh: number | null = null;
   let currentWaterLiters: number | null = null;
-  if (hw.hasElectricity && hw.electricityMeterEntityId) {
-    currentKwh = await safeReadMeter(hw.electricityMeterEntityId, `tick:el session=${sessionId}`);
+  if (hardware.hasElectricityMeter(hw)) {
+    currentKwh = await safeReadMeter(hardware.electricityMeterEp(hw), `tick:el session=${sessionId}`);
   }
-  if (hw.hasHeating && hw.heatingMeterEntityId) {
-    currentHeatingKwh = await safeReadMeter(hw.heatingMeterEntityId, `tick:heat session=${sessionId}`);
+  if (hardware.hasHeatingMeter(hw)) {
+    currentHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw), `tick:heat session=${sessionId}`);
   }
-  if (hw.hasWater && hw.waterMeterEntityId) {
-    currentWaterLiters = await safeReadMeter(hw.waterMeterEntityId, `tick:water session=${sessionId}`);
+  if (hardware.hasWaterMeter(hw)) {
+    currentWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw), `tick:water session=${sessionId}`);
   }
 
   let addElKwh = 0;
@@ -1185,14 +1229,14 @@ export async function getLiveConsumption(sessionId: number) {
   let currentKwh: number | null = null;
   let currentHeatingKwh: number | null = null;
   let currentWaterLiters: number | null = null;
-  if (hw?.hasElectricity && hw.electricityMeterEntityId) {
-    currentKwh = await safeReadMeter(hw.electricityMeterEntityId, `live:el session=${sessionId}`);
+  if (hardware.hasElectricityMeter(hw)) {
+    currentKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `live:el session=${sessionId}`);
   }
-  if (hw?.hasHeating && hw.heatingMeterEntityId) {
-    currentHeatingKwh = await safeReadMeter(hw.heatingMeterEntityId, `live:heat session=${sessionId}`);
+  if (hardware.hasHeatingMeter(hw)) {
+    currentHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `live:heat session=${sessionId}`);
   }
-  if (hw?.hasWater && hw.waterMeterEntityId) {
-    currentWaterLiters = await safeReadMeter(hw.waterMeterEntityId, `live:water session=${sessionId}`);
+  if (hardware.hasWaterMeter(hw)) {
+    currentWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `live:water session=${sessionId}`);
   }
 
   // Ongoing deltas since the last tick (priced at the current rate)
@@ -1233,7 +1277,7 @@ export async function getLiveConsumption(sessionId: number) {
     usedKwhMain,
     usedKwhHeating,
     currentHeatingKwh,
-    hasHeatingMeter: !!(hw?.hasHeating && hw.heatingMeterEntityId),
+    hasHeatingMeter: hardware.hasHeatingMeter(hw),
     currentWaterLiters,
     usedWaterLiters: waterUsed > 0 ? waterUsed : usedWaterLiters,
     waterCost,
@@ -1264,36 +1308,17 @@ export async function getLivePowerDraw(unitId: number): Promise<{
   if (!unit?.hardware) return null;
   const hw = unit.hardware;
 
-  const hasElectricityPower = !!(hw.hasElectricity && hw.electricityPowerEntityId);
-  const hasHeatingPower = !!(hw.hasHeating && hw.heatingPowerEntityId);
+  const hasElectricityPower = hardware.hasElectricityPower(hw);
+  const hasHeatingPower = hardware.hasHeatingPower(hw);
   if (!hasElectricityPower && !hasHeatingPower) return null;
 
   // Read the power sensors in parallel — each failure is isolated
   const [rawElec, rawHeat] = await Promise.all([
     hasElectricityPower
-      ? ha.getEntityNumericState(hw.electricityPowerEntityId!).then(async (v) => {
-          if (v === null) return null;
-          // Normalize to W — if the sensor reports kW, multiply by 1000
-          try {
-            const state = await ha.getEntityState(hw.electricityPowerEntityId!);
-            const unit = (state.attributes.unit_of_measurement as string | undefined)?.toLowerCase();
-            return unit === "kw" ? v * 1000 : v;
-          } catch {
-            return v;
-          }
-        })
+      ? hardware.readPowerWatts(hardware.electricityPowerEp(hw)).then((r) => r?.watts ?? null).catch(() => null)
       : Promise.resolve(null),
     hasHeatingPower
-      ? ha.getEntityNumericState(hw.heatingPowerEntityId!).then(async (v) => {
-          if (v === null) return null;
-          try {
-            const state = await ha.getEntityState(hw.heatingPowerEntityId!);
-            const unit = (state.attributes.unit_of_measurement as string | undefined)?.toLowerCase();
-            return unit === "kw" ? v * 1000 : v;
-          } catch {
-            return v;
-          }
-        })
+      ? hardware.readPowerWatts(hardware.heatingPowerEp(hw)).then((r) => r?.watts ?? null).catch(() => null)
       : Promise.resolve(null),
   ]);
 
@@ -1328,19 +1353,17 @@ export async function getUnitHAStates(unitId: number) {
   let locked: boolean | null = null;
   let anySuccess = false;
 
-  if (hw.hasElectricity && hw.electricitySwitchEntityId) {
+  if (hardware.hasElectricitySwitch(hw)) {
     try {
-      const state = await ha.getEntityState(hw.electricitySwitchEntityId);
-      powerOn = state.state === "on";
-      anySuccess = true;
-    } catch { /* entity unavailable */ }
+      const s = await hardware.getSwitchState(hardware.electricitySwitchEp(hw));
+      if (s !== null) { powerOn = s; anySuccess = true; }
+    } catch { /* endpoint unavailable */ }
   }
-  if (hw.hasHeating && hw.heatingSwitchEntityId) {
+  if (hardware.hasHeatingSwitch(hw)) {
     try {
-      const state = await ha.getEntityState(hw.heatingSwitchEntityId);
-      heatingOn = state.state === "on";
-      anySuccess = true;
-    } catch { /* entity unavailable */ }
+      const s = await hardware.getSwitchState(hardware.heatingSwitchEp(hw));
+      if (s !== null) { heatingOn = s; anySuccess = true; }
+    } catch { /* endpoint unavailable */ }
   }
   if (hw.hasClimate && hw.climateEntityId) {
     try {
@@ -1358,9 +1381,13 @@ export async function getUnitHAStates(unitId: number) {
     } catch { /* entity unavailable */ }
   }
 
-  // If no entities are configured, check basic HA connectivity
+  // If no endpoints were reachable, probe connectivity — prefer HA when any
+  // field is HA-sourced, otherwise report MQTT broker state.
   if (!anySuccess) {
-    const reachable = await ha.checkHAConnection();
+    const anyHA = [
+      hw.electricitySource, hw.heatingSource, hw.waterSource,
+    ].some((s) => s !== "MQTT") || hw.hasClimate || hw.hasSmartLock;
+    const reachable = anyHA ? await ha.checkHAConnection() : mqttClient.isConnected();
     return { powerOn, heatingOn, winterModeEnabled: hw.winterModeEnabled, temperature, locked, haReachable: reachable };
   }
 
@@ -1372,17 +1399,15 @@ export async function getUnitHAStates(unitId: number) {
 // ──────────────────────────────────────────────
 export async function togglePower(unitId: number, turnOn: boolean) {
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
-  if (!unit?.hardware?.electricitySwitchEntityId) return;
-  if (turnOn) { await ha.turnOn(unit.hardware.electricitySwitchEntityId); }
-  else { await ha.turnOff(unit.hardware.electricitySwitchEntityId); }
+  if (!hardware.hasElectricitySwitch(unit?.hardware)) return;
+  await hardware.setSwitch(hardware.electricitySwitchEp(unit!.hardware!), turnOn);
   revalidatePath(`/admin/units/${unitId}`);
 }
 
 export async function toggleHeating(unitId: number, turnOn: boolean) {
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
-  if (!unit?.hardware?.heatingSwitchEntityId) return;
-  if (turnOn) { await ha.turnOn(unit.hardware.heatingSwitchEntityId); }
-  else { await ha.turnOff(unit.hardware.heatingSwitchEntityId); }
+  if (!hardware.hasHeatingSwitch(unit?.hardware)) return;
+  await hardware.setSwitch(hardware.heatingSwitchEp(unit!.hardware!), turnOn);
   revalidatePath(`/admin/units/${unitId}`);
 }
 
@@ -1463,7 +1488,7 @@ export async function guestUnlockDoor(token: string) {
 }
 
 export async function guestTogglePower(token: string, turnOn: boolean): Promise<{ ok: boolean; powerOn: boolean }> {
-  let hw: { electricitySwitchEntityId: string | null } | null = null;
+  let hw: hardware.UnitHardwareRow | null = null;
 
   const session = await prisma.session.findUnique({
     where: { guestPortalToken: token },
@@ -1479,19 +1504,14 @@ export async function guestTogglePower(token: string, turnOn: boolean): Promise<
     if (unit) hw = unit.hardware;
   }
 
-  if (!hw?.electricitySwitchEntityId) return { ok: false, powerOn: false };
+  if (!hardware.hasElectricitySwitch(hw)) return { ok: false, powerOn: false };
 
-  if (turnOn) {
-    await ha.turnOn(hw.electricitySwitchEntityId);
-  } else {
-    await ha.turnOff(hw.electricitySwitchEntityId);
-  }
-
+  await hardware.setSwitch(hardware.electricitySwitchEp(hw!), turnOn);
   return { ok: true, powerOn: turnOn };
 }
 
 export async function guestGetPowerState(token: string): Promise<boolean | null> {
-  let hw: { electricitySwitchEntityId: string | null } | null = null;
+  let hw: hardware.UnitHardwareRow | null = null;
 
   const session = await prisma.session.findUnique({
     where: { guestPortalToken: token },
@@ -1507,11 +1527,9 @@ export async function guestGetPowerState(token: string): Promise<boolean | null>
     if (unit) hw = unit.hardware;
   }
 
-  if (!hw?.electricitySwitchEntityId) return null;
-
+  if (!hardware.hasElectricitySwitch(hw)) return null;
   try {
-    const state = await ha.getEntityState(hw.electricitySwitchEntityId);
-    return state.state === "on";
+    return await hardware.getSwitchState(hardware.electricitySwitchEp(hw!));
   } catch {
     return null;
   }
@@ -1599,8 +1617,8 @@ export async function createMonthlyInvoice(unitId: number) {
     orderBy: { checkInTime: "desc" },
   });
 
-  if (hw?.hasElectricity && hw.electricityMeterEntityId) {
-    endKwh = await ha.getEntityNumericState(hw.electricityMeterEntityId);
+  if (hardware.hasElectricityMeter(hw)) {
+    endKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `invoice:el unit=${unitId}`);
     if (lastElecInvoice?.endKwh != null) {
       // Continue from where the last invoice ended
       startKwh = lastElecInvoice.endKwh;
@@ -1612,8 +1630,8 @@ export async function createMonthlyInvoice(unitId: number) {
       startKwh = activeSession?.startKwh ?? endKwh;
     }
   }
-  if (hw?.hasHeating && hw.heatingMeterEntityId) {
-    endHeatingKwh = await ha.getEntityNumericState(hw.heatingMeterEntityId);
+  if (hardware.hasHeatingMeter(hw)) {
+    endHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `invoice:heat unit=${unitId}`);
     if (lastHeatingInvoice?.endHeatingKwh != null) {
       startHeatingKwh = lastHeatingInvoice.endHeatingKwh;
     } else if (hasAnyPrevInvoice) {
@@ -1622,8 +1640,8 @@ export async function createMonthlyInvoice(unitId: number) {
       startHeatingKwh = activeSession?.startHeatingKwh ?? endHeatingKwh;
     }
   }
-  if (hw?.hasWater && hw.waterMeterEntityId) {
-    endWaterLiters = await ha.getEntityNumericState(hw.waterMeterEntityId);
+  if (hardware.hasWaterMeter(hw)) {
+    endWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `invoice:water unit=${unitId}`);
     if (lastWaterInvoice?.endWaterLiters != null) {
       startWaterLiters = lastWaterInvoice.endWaterLiters;
     } else if (hasAnyPrevInvoice) {
@@ -1812,9 +1830,9 @@ export async function checkOverdueInvoices(): Promise<{ markedOverdue: number; p
     markedOverdue++;
 
     // Auto power-off if enabled
-    if (autoPowerOff && invoice.unit.hardware?.electricitySwitchEntityId) {
+    if (autoPowerOff && hardware.hasElectricitySwitch(invoice.unit.hardware)) {
       try {
-        await ha.turnOff(invoice.unit.hardware.electricitySwitchEntityId);
+        await hardware.setSwitch(hardware.electricitySwitchEp(invoice.unit.hardware!), false);
         powerOff++;
       } catch (e) {
         console.error(`Auto power-off failed for unit ${invoice.unit.name}:`, e);
@@ -1846,8 +1864,8 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
 
   for (const session of sessions) {
     const hw = session.unit.hardware;
-    if (!session.prepaidAmount || !hw?.electricitySwitchEntityId) continue;
-    const switchEntity = hw.electricitySwitchEntityId;
+    if (!session.prepaidAmount || !hardware.hasElectricitySwitch(hw)) continue;
+    const switchEp = hardware.electricitySwitchEp(hw!);
     const prepaidAmount = session.prepaidAmount;
 
     // Tick to refresh accumulator against the current spot price — prepaid
@@ -1884,7 +1902,7 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
     if (currentCost < prepaidAmount) continue;
 
     try {
-      await ha.turnOff(switchEntity);
+      await hardware.setSwitch(switchEp, false);
       powerOff++;
     } catch (e) {
       console.error(`Prepaid auto power-off failed for session ${session.id}:`, e);
@@ -2206,11 +2224,11 @@ export async function logAllConsumption() {
     let electricityKwh: number | null = null;
     let waterLiters: number | null = null;
 
-    if (hw.hasElectricity && hw.electricityMeterEntityId) {
-      electricityKwh = await safeReadMeter(hw.electricityMeterEntityId, `logAll:el unit=${unit.id}`);
+    if (hardware.hasElectricityMeter(hw)) {
+      electricityKwh = await safeReadMeter(hardware.electricityMeterEp(hw), `logAll:el unit=${unit.id}`);
     }
-    if (hw.hasWater && hw.waterMeterEntityId) {
-      waterLiters = await safeReadMeter(hw.waterMeterEntityId, `logAll:water unit=${unit.id}`);
+    if (hardware.hasWaterMeter(hw)) {
+      waterLiters = await safeReadMeter(hardware.waterMeterEp(hw), `logAll:water unit=${unit.id}`);
     }
 
     if (electricityKwh !== null || waterLiters !== null) {
@@ -2336,37 +2354,30 @@ export async function getTotalUsage() {
       }
     }
 
-    // Fallback: read live power (W) from HA if no log-based rate available
-    if (kwhPerHour === null && unit.hardware?.hasElectricity && unit.hardware.electricityMeterEntityId) {
+    // Fallback: read live power (W) from the configured power sensor
+    if (kwhPerHour === null && hardware.hasElectricityPower(unit.hardware)) {
       try {
-        // Try to get instantaneous power (W) from the switch entity
-        const switchId = unit.hardware.electricitySwitchEntityId;
-        if (switchId) {
-          // Shelly devices often expose power as an attribute or companion sensor
-          const powerEntityId = switchId.replace("switch.", "sensor.") + "_power";
-          try {
-            const watts = await ha.getEntityNumericState(powerEntityId);
-            if (watts !== null && watts >= 0) {
-              kwhPerHour = watts / 1000; // W to kW
-            }
-          } catch {
-            // Power sensor might not exist with that naming — fall back to meter diff
-          }
+        const res = await hardware.readPowerWatts(hardware.electricityPowerEp(unit.hardware!));
+        if (res && res.watts >= 0) {
+          kwhPerHour = res.watts / 1000; // W to kW
         }
+      } catch {
+        // endpoint unreachable
+      }
+    }
 
-        // If still no rate, try computing from meter entity + recent session
-        if (kwhPerHour === null) {
-          const currentKwh = await ha.getEntityNumericState(unit.hardware.electricityMeterEntityId);
-          // Use the single log entry we have + current reading to estimate rate
-          if (currentKwh !== null && logs.length >= 1 && logs[0].electricityKwh !== null) {
-            const hoursSinceLog = (Date.now() - new Date(logs[0].recordedAt).getTime()) / 3600000;
-            if (hoursSinceLog > 0 && hoursSinceLog < 4) {
-              kwhPerHour = Math.max(0, currentKwh - logs[0].electricityKwh) / hoursSinceLog;
-            }
+    // If still no rate, try computing from meter endpoint + recent log
+    if (kwhPerHour === null && hardware.hasElectricityMeter(unit.hardware)) {
+      try {
+        const currentKwh = await hardware.readEnergyKwh(hardware.electricityMeterEp(unit.hardware!));
+        if (currentKwh !== null && logs.length >= 1 && logs[0].electricityKwh !== null) {
+          const hoursSinceLog = (Date.now() - new Date(logs[0].recordedAt).getTime()) / 3600000;
+          if (hoursSinceLog > 0 && hoursSinceLog < 4) {
+            kwhPerHour = Math.max(0, currentKwh - logs[0].electricityKwh) / hoursSinceLog;
           }
         }
       } catch {
-        // HA unreachable
+        // endpoint unreachable
       }
     }
 
@@ -3173,7 +3184,10 @@ export async function getLaundryMachines() {
 export async function createLaundryMachine(data: {
   name: string;
   kind: string;
-  switchEntityId: string;
+  source?: "HA" | "MQTT";
+  switchEntityId?: string | null;
+  mqttPrefix?: string | null;
+  mqttComponent?: string | null;
   durationMinutes: number;
   pricePerUse: number;
   code?: string | null;
@@ -3181,7 +3195,14 @@ export async function createLaundryMachine(data: {
 }) {
   await prisma.laundryMachine.create({
     data: {
-      ...data,
+      name: data.name,
+      kind: data.kind,
+      source: data.source || "HA",
+      switchEntityId: data.switchEntityId || null,
+      mqttPrefix: data.mqttPrefix || null,
+      mqttComponent: data.mqttComponent || null,
+      durationMinutes: data.durationMinutes,
+      pricePerUse: data.pricePerUse,
       code: data.code || null,
       location: data.location || null,
     },
@@ -3192,7 +3213,10 @@ export async function createLaundryMachine(data: {
 export async function updateLaundryMachine(id: number, data: {
   name: string;
   kind: string;
-  switchEntityId: string;
+  source?: "HA" | "MQTT";
+  switchEntityId?: string | null;
+  mqttPrefix?: string | null;
+  mqttComponent?: string | null;
   durationMinutes: number;
   pricePerUse: number;
   enabled: boolean;
@@ -3202,7 +3226,15 @@ export async function updateLaundryMachine(id: number, data: {
   await prisma.laundryMachine.update({
     where: { id },
     data: {
-      ...data,
+      name: data.name,
+      kind: data.kind,
+      source: data.source || "HA",
+      switchEntityId: data.switchEntityId || null,
+      mqttPrefix: data.mqttPrefix || null,
+      mqttComponent: data.mqttComponent || null,
+      durationMinutes: data.durationMinutes,
+      pricePerUse: data.pricePerUse,
+      enabled: data.enabled,
       code: data.code || null,
       location: data.location || null,
     },
@@ -3382,7 +3414,7 @@ export async function createLaundryPayment(
       },
     });
 
-    try { await ha.turnOn(machine.switchEntityId); } catch (e) { console.error("HA laundry:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { console.error("laundry on:", e); }
     return { ok: true, message: `${machine.name} startet med kredit — kører i ${machine.durationMinutes} minutter` };
   }
 
@@ -3415,7 +3447,7 @@ export async function createLaundryPayment(
       where: { id: laundrySess.id },
       data: { status: "ACTIVE", paymentStatus: "PAID" },
     });
-    try { await ha.turnOn(machine.switchEntityId); } catch (e) { console.error("HA laundry:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { console.error("laundry on:", e); }
     return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
   }
 
@@ -3470,9 +3502,9 @@ export async function activateLaundrySession(laundrySessionId: number) {
     data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
   });
 
-  // Turn on the Shelly relay
+  // Turn on the Shelly relay (HA or MQTT depending on machine config)
   try {
-    await ha.turnOn(sess.machine.switchEntityId);
+    await hardware.setSwitch(hardware.switchRowEp(sess.machine), true);
   } catch (e) {
     console.error("Failed to turn on laundry machine:", e);
   }
@@ -3534,9 +3566,9 @@ export async function checkLaundryMachines() {
   });
 
   for (const session of expired) {
-    // Turn off relay
+    // Turn off relay (HA or MQTT)
     try {
-      await ha.turnOff(session.machine.switchEntityId);
+      await hardware.setSwitch(hardware.switchRowEp(session.machine), false);
     } catch (e) {
       console.error(`Failed to turn off laundry machine ${session.machine.name}:`, e);
     }
@@ -3643,7 +3675,7 @@ export async function adminStartLaundry(machineId: number, durationMinutes: numb
   });
 
   try {
-    await ha.turnOn(machine.switchEntityId);
+    await hardware.setSwitch(hardware.switchRowEp(machine), true);
   } catch (e) {
     return { ok: false, message: `Kunne ikke tænde: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -3679,7 +3711,7 @@ export async function adminStopLaundry(laundrySessionId: number) {
   });
 
   try {
-    await ha.turnOff(sess.machine.switchEntityId);
+    await hardware.setSwitch(hardware.switchRowEp(sess.machine), false);
   } catch (e) {
     return { ok: false, message: `Stoppet i DB men kunne ikke slukke relæ: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -3877,7 +3909,7 @@ export async function createPublicLaundryPayment(
         paymentStatus: "PAID",
       },
     });
-    try { await ha.turnOn(machine.switchEntityId); } catch (e) { console.error("HA laundry:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { console.error("laundry on:", e); }
     return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
   }
 
@@ -3941,21 +3973,40 @@ export async function getShowers() {
 
 export async function createShower(data: {
   name: string;
-  switchEntityId: string;
+  source?: "HA" | "MQTT";
+  switchEntityId?: string | null;
+  mqttPrefix?: string | null;
+  mqttComponent?: string | null;
   pricePerMinute: number;
   minMinutes: number;
   maxMinutes: number;
   code: string | null;
   location: string | null;
 }) {
-  await prisma.shower.create({ data });
+  await prisma.shower.create({
+    data: {
+      name: data.name,
+      source: data.source || "HA",
+      switchEntityId: data.switchEntityId || null,
+      mqttPrefix: data.mqttPrefix || null,
+      mqttComponent: data.mqttComponent || null,
+      pricePerMinute: data.pricePerMinute,
+      minMinutes: data.minMinutes,
+      maxMinutes: data.maxMinutes,
+      code: data.code,
+      location: data.location,
+    },
+  });
   revalidatePath("/admin/settings");
   revalidatePath("/admin/services");
 }
 
 export async function updateShower(id: number, data: {
   name: string;
-  switchEntityId: string;
+  source?: "HA" | "MQTT";
+  switchEntityId?: string | null;
+  mqttPrefix?: string | null;
+  mqttComponent?: string | null;
   pricePerMinute: number;
   minMinutes: number;
   maxMinutes: number;
@@ -3963,7 +4014,22 @@ export async function updateShower(id: number, data: {
   code: string | null;
   location: string | null;
 }) {
-  await prisma.shower.update({ where: { id }, data });
+  await prisma.shower.update({
+    where: { id },
+    data: {
+      name: data.name,
+      source: data.source || "HA",
+      switchEntityId: data.switchEntityId || null,
+      mqttPrefix: data.mqttPrefix || null,
+      mqttComponent: data.mqttComponent || null,
+      pricePerMinute: data.pricePerMinute,
+      minMinutes: data.minMinutes,
+      maxMinutes: data.maxMinutes,
+      enabled: data.enabled,
+      code: data.code,
+      location: data.location,
+    },
+  });
   revalidatePath("/admin/settings");
   revalidatePath("/admin/services");
 }
@@ -4249,7 +4315,7 @@ export async function activateShowerSession(pendingId: number) {
   });
 
   try {
-    await ha.turnOn(sess.shower.switchEntityId);
+    await hardware.setSwitch(hardware.switchRowEp(sess.shower), true);
   } catch (e) {
     console.error("Shower turnOn failed:", e);
   }
@@ -4369,7 +4435,7 @@ export async function pauseShower(showerSessionId: number): Promise<{ ok: boolea
     },
   });
 
-  try { await ha.turnOff(sess.shower.switchEntityId); } catch (e) { console.error("Shower pause off:", e); }
+  try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { console.error("Shower pause off:", e); }
 
   return { ok: true, message: "Pause" };
 }
@@ -4397,7 +4463,7 @@ export async function resumeShower(showerSessionId: number): Promise<{ ok: boole
     },
   });
 
-  try { await ha.turnOn(sess.shower.switchEntityId); } catch (e) { console.error("Shower resume on:", e); }
+  try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), true); } catch (e) { console.error("Shower resume on:", e); }
 
   return { ok: true, message: "Fortsat" };
 }
@@ -4475,7 +4541,7 @@ export async function adminStopShower(showerSessionId: number) {
     data: { status: "COMPLETED", endsAt: new Date(), pausedAt: null, pauseRemainingMs: null },
   });
 
-  try { await ha.turnOff(sess.shower.switchEntityId); } catch (e) {
+  try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) {
     return { ok: false, message: `Stoppet i DB men kunne ikke slukke relæ: ${e instanceof Error ? e.message : String(e)}` };
   }
   return { ok: true, message: "Bad stoppet" };
@@ -4509,7 +4575,7 @@ export async function checkShowerSessions() {
         pauseResumedAt: new Date(),
       },
     });
-    try { await ha.turnOn(sess.shower.switchEntityId); } catch (e) { console.error("Auto-resume on:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), true); } catch (e) { console.error("Auto-resume on:", e); }
   }
 
   // 2) Expire active sessions whose endsAt has passed
@@ -4518,7 +4584,7 @@ export async function checkShowerSessions() {
     include: { shower: true },
   });
   for (const sess of expired) {
-    try { await ha.turnOff(sess.shower.switchEntityId); } catch (e) { console.error("Shower close:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { console.error("Shower close:", e); }
     await prisma.showerSess.update({
       where: { id: sess.id },
       data: { status: "COMPLETED" },
