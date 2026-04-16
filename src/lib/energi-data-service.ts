@@ -88,10 +88,11 @@ async function getCachedPrices(area: string, startHour: string, endHour: string)
 async function fetchFromApi(startStr: string, endStr: string, area: string): Promise<SpotPrice[]> {
   const url = `https://api.energidataservice.dk/dataset/Elspotprices?offset=0&start=${startStr}&end=${endStr}&filter={"PriceArea":"${area}"}&sort=HourDK asc`;
 
-  // Retry once on failure — first request after cold start often fails due to
+  // Retry up to 3 times — first request after cold start often fails due to
   // DNS/TLS warm-up while the server is loading many things in parallel.
+  const MAX_ATTEMPTS = 3;
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(15_000), cache: "no-store" });
       if (!res.ok) throw new Error(`EDS API fejl: ${res.status}`);
@@ -99,9 +100,9 @@ async function fetchFromApi(startStr: string, endStr: string, area: string): Pro
       return data.records || [];
     } catch (e) {
       lastError = e;
-      if (attempt === 0) {
-        // Brief pause before retry — gives DNS cache time to populate
-        await new Promise((r) => setTimeout(r, 1000));
+      if (attempt < MAX_ATTEMPTS - 1) {
+        // Exponential backoff: 1s, 2s
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
       }
     }
   }
@@ -244,12 +245,26 @@ export async function getAvailableDateRange(area: "DK1" | "DK2" = "DK1"): Promis
 // area, falls back to fetching from the API (which also populates the cache),
 // so the dashboard stays consistent with the Elpriser chart even if the cron
 // job hasn't run yet.
-export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<number | null> {
-  try {
-    const now = new Date();
+// In-flight dedup: if multiple callers request the spot price in the same
+// tick (e.g. Promise.all on the dashboard), only one actually hits the DB/API.
+const _spotInflight = new Map<string, Promise<number | null>>();
 
+export function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<number | null> {
+  const key = area;
+  const existing = _spotInflight.get(key);
+  if (existing) return existing;
+
+  const p = _getCurrentSpotPriceInner(area).finally(() => {
+    _spotInflight.delete(key);
+  });
+  _spotInflight.set(key, p);
+  return p;
+}
+
+async function _getCurrentSpotPriceInner(area: "DK1" | "DK2"): Promise<number | null> {
+  try {
     // Build the current Danish hour string for lookup
-    const cph = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Copenhagen" }));
+    const cph = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Copenhagen" }));
     const currentDanishHour = `${cph.getFullYear()}-${String(cph.getMonth() + 1).padStart(2, "0")}-${String(cph.getDate()).padStart(2, "0")}T${String(cph.getHours()).padStart(2, "0")}`;
 
     // 1. Try exact match for the current Danish hour
@@ -268,16 +283,19 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
         where: { area },
         orderBy: { hourDK: "desc" },
       });
-      if (latest) return latest.priceDKK / 1000;
+      if (latest) {
+        // Trigger background refresh so next load gets fresh data
+        refreshSpotPriceCache(area).catch(() => {});
+        return latest.priceDKK / 1000;
+      }
     } catch {
       // DB error — fall through to API
     }
 
-    // 3. Cache is empty — fetch from API (fetchSpotPrices caches what it gets)
+    // 3. Cache is completely empty — must fetch from API synchronously
     try {
       const records = await fetchSpotPrices(area);
       if (records.length > 0) {
-        // Prefer the record matching the current Danish hour, else latest
         const match = records.find((r) => r.HourDK.startsWith(currentDanishHour));
         if (match) return match.SpotPriceDKK / 1000;
         const latestRecord = records.reduce((a, b) => (a.HourDK > b.HourDK ? a : b));

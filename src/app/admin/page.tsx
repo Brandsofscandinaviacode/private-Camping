@@ -139,8 +139,9 @@ export default async function AdminDashboard() {
                   <p className="text-sm text-muted-foreground">Effektiv elpris</p>
                   <p className="text-2xl font-bold tabular-nums tracking-tight">{elPricing.pricePerKwh.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">kr/kWh</span></p>
                   <p className="text-xs text-muted-foreground">
-                    {elPricing.spotPrice !== null ? `Spot: ${elPricing.spotPrice.toFixed(2)} kr/kWh` : "Spotpris utilgængelig"}
-                    {" — "}
+                    {elPricing.spotPrice !== null
+                      ? `Spot: ${elPricing.spotPrice.toFixed(2)} kr/kWh — `
+                      : "Spotpris hentes... bruger fallback — "}
                     {elPricing.mode === "minimum" ? "Minimumspris" : "Spot + tillæg"}
                   </p>
                 </div>
