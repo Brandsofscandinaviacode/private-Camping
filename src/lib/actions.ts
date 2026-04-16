@@ -982,11 +982,11 @@ export async function checkOutWithStatement(sessionId: number) {
 // ──────────────────────────────────────────────
 // TIME-WEIGHTED CONSUMPTION TICK
 //
-// Called by cron every 10 min (and ad-hoc before billing actions). Reads
-// the current meter values from Home Assistant, computes the delta since
-// the previous tick, and multiplies that delta by the *current* hourly spot
-// price to produce a correctly time-weighted cost. The result is added to
-// the session's `accumulatedElCost` / `accumulatedWaterCost`.
+// Called by cron every ~10 min (heavy tasks) and ad-hoc before billing actions.
+// Reads current meter values from Home Assistant / MQTT, computes the delta
+// since the previous tick, and multiplies that delta by the *current* hourly
+// spot price to produce a correctly time-weighted cost. The result is added
+// to the session's `accumulatedElCost` / `accumulatedWaterCost`.
 //
 // This is the core of spot-price billing: if the guest uses 1 kWh between
 // 17-18 (spot 2 kr) and 1 kWh between 18-19 (spot 1 kr), the accumulator
