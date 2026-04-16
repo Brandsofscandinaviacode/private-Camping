@@ -38,12 +38,14 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
   const [extendMinutes, setExtendMinutes] = useState<number>(Math.max(5, initial.minMinutes));
   const [showExtend, setShowExtend] = useState(false);
 
+  const token = initial.accessToken;
+
   // Server state poll every 3s to pick up pause cooldown + auto-resume
   const pollRef = useRef<number | null>(null);
   useEffect(() => {
     const tick = async () => {
       try {
-        const fresh = await getShowerSessionState(initial.id);
+        const fresh = await getShowerSessionState(initial.id, token);
         if (fresh) setState(fresh);
       } catch {}
     };
@@ -51,7 +53,7 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
-  }, [initial.id]);
+  }, [initial.id, token]);
 
   // Auto-stop: call server to turn off relay immediately when time expires.
   // The ref ensures we fire exactly once even if multiple ticks or polls hit 0.
@@ -92,9 +94,9 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     setActionLoading("pause");
     setMessage(null);
     try {
-      const res = await pauseShower(state.id);
+      const res = await pauseShower(state.id, token);
       if (!res.ok) setMessage({ ok: false, text: res.message });
-      const fresh = await getShowerSessionState(state.id);
+      const fresh = await getShowerSessionState(state.id, token);
       if (fresh) setState(fresh);
     } finally {
       setActionLoading(null);
@@ -105,9 +107,9 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     setActionLoading("resume");
     setMessage(null);
     try {
-      const res = await resumeShower(state.id);
+      const res = await resumeShower(state.id, token);
       if (!res.ok) setMessage({ ok: false, text: res.message });
-      const fresh = await getShowerSessionState(state.id);
+      const fresh = await getShowerSessionState(state.id, token);
       if (fresh) setState(fresh);
     } finally {
       setActionLoading(null);
@@ -118,7 +120,7 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     setActionLoading("extend");
     setMessage(null);
     try {
-      const res = await extendShowerPayment(state.id, extendMinutes);
+      const res = await extendShowerPayment(state.id, extendMinutes, token);
       if (!res.ok) {
         setMessage({ ok: false, text: res.message });
         setActionLoading(null);
@@ -129,7 +131,7 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
         return;
       }
       // Free mode
-      const fresh = await getShowerSessionState(state.id);
+      const fresh = await getShowerSessionState(state.id, token);
       if (fresh) setState(fresh);
       setShowExtend(false);
     } finally {

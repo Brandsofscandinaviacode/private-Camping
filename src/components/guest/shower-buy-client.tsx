@@ -47,8 +47,8 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
         window.location.href = res.paymentLink;
         return;
       }
-      if (res.showerSessionId) {
-        window.location.href = `/shower/active/${res.showerSessionId}`;
+      if (res.showerSessionId && res.accessToken) {
+        window.location.href = `/shower/active/${res.showerSessionId}?token=${res.accessToken}`;
         return;
       }
     } catch (e) {

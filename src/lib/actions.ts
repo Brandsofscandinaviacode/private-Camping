@@ -4206,7 +4206,7 @@ export async function createShowerPayment(
   showerId: number,
   minutes: number,
   guestPortalToken?: string,
-): Promise<{ ok: boolean; message: string; paymentLink?: string; showerSessionId?: number }> {
+): Promise<{ ok: boolean; message: string; paymentLink?: string; showerSessionId?: number; accessToken?: string }> {
   await expireStaleShowerPendings();
 
   const shower = await prisma.shower.findUnique({
@@ -4261,7 +4261,7 @@ export async function createShowerPayment(
   // No QuickPay configured → start immediately (dev / free mode)
   if (settings.quickpay_enabled !== "true") {
     await activateShowerSession(pending.id);
-    return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id };
+    return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id, accessToken: pending.accessToken };
   }
 
   try {
@@ -4272,7 +4272,7 @@ export async function createShowerPayment(
       orderId,
       amount: price,
       currency: settings.currency || "DKK",
-      continueUrl: `${baseUrl}/shower/active/${pending.id}?paid=1`,
+      continueUrl: `${baseUrl}/shower/active/${pending.id}?token=${pending.accessToken}&paid=1`,
       cancelUrl: `${baseUrl}/shower/${showerId}?cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
@@ -4282,7 +4282,7 @@ export async function createShowerPayment(
       data: { paymentId: String(paymentId) },
     });
 
-    return { ok: true, message: "Går til betaling...", paymentLink, showerSessionId: pending.id };
+    return { ok: true, message: "Går til betaling...", paymentLink, showerSessionId: pending.id, accessToken: pending.accessToken };
   } catch (e) {
     await prisma.showerSess.delete({ where: { id: pending.id } });
     return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
@@ -4379,12 +4379,14 @@ export async function applyShowerExtension(showerSessionId: number) {
  * Guest-side state query for the active timer page.
  * Returns seconds left + whether the session is paused + pause metadata.
  */
-export async function getShowerSessionState(showerSessionId: number) {
+export async function getShowerSessionState(showerSessionId: number, accessToken?: string) {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return null;
+  // Validate access token (skip for internal/cron callers that don't pass one)
+  if (accessToken !== undefined && sess.accessToken !== accessToken) return null;
 
   const now = Date.now();
   let secondsLeft = 0;
@@ -4408,6 +4410,7 @@ export async function getShowerSessionState(showerSessionId: number) {
 
   return {
     id: sess.id,
+    accessToken: sess.accessToken,
     showerId: sess.showerId,
     showerName: sess.shower.name,
     location: sess.shower.location,
@@ -4425,12 +4428,13 @@ export async function getShowerSessionState(showerSessionId: number) {
 }
 
 /** Pause an active shower — closes the valve and freezes the remaining time. */
-export async function pauseShower(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
+export async function pauseShower(showerSessionId: number, accessToken?: string): Promise<{ ok: boolean; message: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "ACTIVE") return { ok: false, message: "Kan ikke pause nu" };
 
   if (sess.pauseResumedAt) {
@@ -4459,12 +4463,13 @@ export async function pauseShower(showerSessionId: number): Promise<{ ok: boolea
 }
 
 /** Manually resume a paused shower. Also used by the auto-resume sweep. */
-export async function resumeShower(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
+export async function resumeShower(showerSessionId: number, accessToken?: string): Promise<{ ok: boolean; message: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "PAUSED") return { ok: false, message: "Ikke på pause" };
 
   const remainingMs = sess.pauseRemainingMs ?? 0;
@@ -4497,12 +4502,14 @@ export async function resumeShower(showerSessionId: number): Promise<{ ok: boole
 export async function extendShowerPayment(
   showerSessionId: number,
   extraMinutes: number,
+  accessToken?: string,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "ACTIVE" && sess.status !== "PAUSED") {
     return { ok: false, message: "Kan kun forlænge en aktiv session" };
   }
@@ -4534,8 +4541,8 @@ export async function extendShowerPayment(
       orderId,
       amount: price,
       currency: settings.currency || "DKK",
-      continueUrl: `${baseUrl}/shower/active/${showerSessionId}?extended=1`,
-      cancelUrl: `${baseUrl}/shower/active/${showerSessionId}?extend_cancelled=1`,
+      continueUrl: `${baseUrl}/shower/active/${showerSessionId}?token=${sess.accessToken}&extended=1`,
+      cancelUrl: `${baseUrl}/shower/active/${showerSessionId}?token=${sess.accessToken}&extend_cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
 

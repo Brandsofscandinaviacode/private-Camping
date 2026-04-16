@@ -360,6 +360,7 @@ model Shower {
 // ──────────────────────────────────────────────
 model ShowerSess {
   id              Int      @id @default(autoincrement())
+  accessToken     String   @unique @default(cuid())     // Secret URL token — prevents session hijacking
   showerId        Int
   shower          Shower   @relation(fields: [showerId], references: [id], onDelete: Cascade)
 
