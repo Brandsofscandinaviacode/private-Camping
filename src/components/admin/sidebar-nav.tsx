@@ -9,6 +9,7 @@ import {
   Zap,
   Wallet,
   WashingMachine,
+  HelpCircle,
 } from "lucide-react";
 
 const navItems = [
@@ -18,6 +19,7 @@ const navItems = [
   { href: "/admin/services", label: "Services", icon: WashingMachine, section: "Oversigt" },
   { href: "/admin/economy", label: "Økonomi", icon: Wallet, section: "System" },
   { href: "/admin/settings", label: "Indstillinger", icon: Settings, section: "System" },
+  { href: "/admin/help", label: "Hjælp", icon: HelpCircle, section: "System" },
 ];
 
 interface SidebarNavProps {
