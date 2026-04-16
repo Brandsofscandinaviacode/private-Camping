@@ -88,11 +88,24 @@ async function getCachedPrices(area: string, startHour: string, endHour: string)
 async function fetchFromApi(startStr: string, endStr: string, area: string): Promise<SpotPrice[]> {
   const url = `https://api.energidataservice.dk/dataset/Elspotprices?offset=0&start=${startStr}&end=${endStr}&filter={"PriceArea":"${area}"}&sort=HourDK asc`;
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000), cache: "no-store" });
-  if (!res.ok) throw new Error(`EDS API fejl: ${res.status}`);
-
-  const data: EdsResponse = await res.json();
-  return data.records || [];
+  // Retry once on failure — first request after cold start often fails due to
+  // DNS/TLS warm-up while the server is loading many things in parallel.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000), cache: "no-store" });
+      if (!res.ok) throw new Error(`EDS API fejl: ${res.status}`);
+      const data: EdsResponse = await res.json();
+      return data.records || [];
+    } catch (e) {
+      lastError = e;
+      if (attempt === 0) {
+        // Brief pause before retry — gives DNS cache time to populate
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // ──────────────────────────────────────────────
