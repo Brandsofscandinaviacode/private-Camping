@@ -20,6 +20,7 @@ import {
   pauseShower,
   resumeShower,
   extendShowerPayment,
+  completeExpiredShower,
 } from "@/lib/actions";
 
 type State = NonNullable<Awaited<ReturnType<typeof getShowerSessionState>>>;
@@ -51,6 +52,20 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
   }, [initial.id]);
+
+  // Auto-stop: call server to turn off relay immediately when time expires.
+  // The ref ensures we fire exactly once even if multiple ticks or polls hit 0.
+  const autoStopFired = useRef(false);
+  useEffect(() => {
+    if (state.status === "ACTIVE" && state.secondsLeft <= 0 && !autoStopFired.current) {
+      autoStopFired.current = true;
+      completeExpiredShower(state.id).catch(() => {});
+    }
+    // Reset if session gets extended (secondsLeft goes back up)
+    if (state.secondsLeft > 5) {
+      autoStopFired.current = false;
+    }
+  }, [state.status, state.secondsLeft, state.id]);
 
   // Local 1s tick between server polls (so the display stays smooth)
   useEffect(() => {

@@ -134,6 +134,37 @@ export async function setSwitch(ep: HardwareEndpoint, on: boolean): Promise<void
   else await ha.turnOff(ep.haEntityId);
 }
 
+/**
+ * Turn a switch ON with a hardware-level auto-off timer.
+ * For MQTT (Shelly Gen2/3+), sends an RPC call with `toggle_after` which
+ * causes the device itself to turn off after the given seconds — even if
+ * the server, browser, and cron all fail.
+ * For HA, falls back to a normal turnOn (no device-level timer available).
+ */
+export async function setSwitchTimed(ep: HardwareEndpoint, autoOffSeconds: number): Promise<void> {
+  if (ep.source === "MQTT") {
+    if (!ep.mqttPrefix || !ep.mqttComponent) {
+      throw new Error("MQTT prefix/component ikke konfigureret");
+    }
+    // Shelly Gen2+ RPC: Switch.Set with toggle_after for hardware auto-off.
+    // Component id is like "switch:0" — we need the numeric part.
+    const idMatch = ep.mqttComponent.match(/:(\d+)$/);
+    const switchId = idMatch ? parseInt(idMatch[1], 10) : 0;
+    const rpcTopic = `${ep.mqttPrefix}/rpc`;
+    const rpcPayload = JSON.stringify({
+      id: Date.now() % 100000,
+      src: "campsense",
+      method: "Switch.Set",
+      params: { id: switchId, on: true, toggle_after: autoOffSeconds },
+    });
+    await mqttClient.publish(rpcTopic, rpcPayload);
+    return;
+  }
+  // HA — no device-level timer available, just turn on normally
+  if (!ep.haEntityId) throw new Error("HA entity ikke konfigureret");
+  await ha.turnOn(ep.haEntityId);
+}
+
 /** Read switch on/off state. Returns null if unknown. */
 export async function getSwitchState(ep: HardwareEndpoint): Promise<boolean | null> {
   if (ep.source === "MQTT") {

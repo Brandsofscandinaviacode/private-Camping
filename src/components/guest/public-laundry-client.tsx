@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { WashingMachine, Loader2, Clock, CheckCircle2, XCircle, Tent } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { getPublicLaundryGroup, createPublicLaundryPayment } from "@/lib/actions";
+import { getPublicLaundryGroup, createPublicLaundryPayment, completeExpiredLaundry } from "@/lib/actions";
 
 interface Machine {
   id: number;
@@ -38,19 +38,26 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
     return () => clearInterval(interval);
   }, [token]);
 
-  // Countdown timer — update minutesLeft every 30s
+  // Countdown timer — update minutesLeft every 10s and auto-stop expired machines
+  const stoppedIds = useState(() => new Set<number>())[0];
   useEffect(() => {
     const interval = setInterval(() => {
       setMachines((prev) =>
         prev.map((m) => {
           if (!m.endsAt) return m;
           const remaining = Math.max(0, Math.ceil((new Date(m.endsAt).getTime() - Date.now()) / 60000));
+          const expired = new Date(m.endsAt).getTime() <= Date.now();
+          // Auto-stop: call server to turn off relay when time is actually up
+          if (expired && !m.available && !stoppedIds.has(m.id)) {
+            stoppedIds.add(m.id);
+            completeExpiredLaundry(m.id).catch(() => {});
+          }
           return { ...m, minutesLeft: remaining, available: remaining === 0 };
         })
       );
-    }, 30000);
+    }, 10_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [stoppedIds]);
 
   async function handleStart(machineId: number) {
     setStartingId(machineId);

@@ -3502,9 +3502,11 @@ export async function activateLaundrySession(laundrySessionId: number) {
     data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
   });
 
-  // Turn on the Shelly relay (HA or MQTT depending on machine config)
+  // Turn on the Shelly relay with hardware auto-off safety net.
+  // Add 120s buffer so the cron/client stop fires first under normal conditions.
   try {
-    await hardware.setSwitch(hardware.switchRowEp(sess.machine), true);
+    const autoOffSec = sess.machine.durationMinutes * 60 + 120;
+    await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), autoOffSec);
   } catch (e) {
     console.error("Failed to turn on laundry machine:", e);
   }
@@ -3675,7 +3677,8 @@ export async function adminStartLaundry(machineId: number, durationMinutes: numb
   });
 
   try {
-    await hardware.setSwitch(hardware.switchRowEp(machine), true);
+    const autoOffSec = durationMinutes * 60 + 120;
+    await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
   } catch (e) {
     return { ok: false, message: `Kunne ikke tænde: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -4315,7 +4318,10 @@ export async function activateShowerSession(pendingId: number) {
   });
 
   try {
-    await hardware.setSwitch(hardware.switchRowEp(sess.shower), true);
+    // Use timed switch: auto-off on the device itself as safety net.
+    // Add 60s buffer so the client/server stop fires first under normal conditions.
+    const autoOffSec = mins * 60 + 60;
+    await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), autoOffSec);
   } catch (e) {
     console.error("Shower turnOn failed:", e);
   }
@@ -4355,6 +4361,18 @@ export async function applyShowerExtension(showerSessionId: number) {
       paymentStatus: "PAID",
     },
   });
+
+  // Re-arm hardware auto-off with the new total remaining time
+  if (sess.status === "ACTIVE" && newEndsAt) {
+    const remainingSec = Math.ceil((new Date(newEndsAt).getTime() - Date.now()) / 1000);
+    if (remainingSec > 0) {
+      try {
+        await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), remainingSec + 60);
+      } catch (e) {
+        console.error("Shower extension re-arm auto-off:", e);
+      }
+    }
+  }
 }
 
 /**
@@ -4463,7 +4481,11 @@ export async function resumeShower(showerSessionId: number): Promise<{ ok: boole
     },
   });
 
-  try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), true); } catch (e) { console.error("Shower resume on:", e); }
+  try {
+    // Re-arm hardware auto-off for the remaining time + buffer
+    const autoOffSec = Math.ceil(remainingMs / 1000) + 60;
+    await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), autoOffSec);
+  } catch (e) { console.error("Shower resume on:", e); }
 
   return { ok: true, message: "Fortsat" };
 }
@@ -4548,6 +4570,59 @@ export async function adminStopShower(showerSessionId: number) {
 }
 
 /**
+ * Called from the guest's browser when the shower timer hits 0.
+ * Only completes if the session is actually expired (endsAt <= now).
+ * Idempotent — safe to call multiple times or concurrently with the cron.
+ */
+export async function completeExpiredShower(showerSessionId: number) {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess || sess.status === "COMPLETED" || sess.status === "CANCELLED") return;
+  if (sess.status === "ACTIVE" && new Date(sess.endsAt) > new Date()) return; // not expired yet
+
+  // Use updateMany with a status guard so concurrent calls are harmless
+  const res = await prisma.showerSess.updateMany({
+    where: { id: showerSessionId, status: { in: ["ACTIVE", "PAUSED"] } },
+    data: { status: "COMPLETED", endsAt: new Date(), pausedAt: null, pauseRemainingMs: null },
+  });
+  if (res.count === 0) return; // already handled by cron or another call
+
+  try {
+    await hardware.setSwitch(hardware.switchRowEp(sess.shower), false);
+  } catch (e) {
+    console.error("completeExpiredShower relay off:", e);
+  }
+}
+
+/**
+ * Called from the guest's browser when a laundry timer hits 0.
+ * Only completes if the session is actually expired (endsAt <= now).
+ * Idempotent — safe to call multiple times or concurrently with the cron.
+ */
+export async function completeExpiredLaundry(laundrySessionId: number) {
+  const sess = await prisma.laundrySess.findUnique({
+    where: { id: laundrySessionId },
+    include: { machine: true },
+  });
+  if (!sess || sess.status !== "ACTIVE") return;
+  if (new Date(sess.endsAt) > new Date()) return; // not expired yet
+
+  const res = await prisma.laundrySess.updateMany({
+    where: { id: laundrySessionId, status: "ACTIVE" },
+    data: { status: "COMPLETED" },
+  });
+  if (res.count === 0) return;
+
+  try {
+    await hardware.setSwitch(hardware.switchRowEp(sess.machine), false);
+  } catch (e) {
+    console.error("completeExpiredLaundry relay off:", e);
+  }
+}
+
+/**
  * Background sweep — runs every 5s from the scheduler.
  *  - Auto-resume paused sessions after 5 min
  *  - Close expired active sessions (turn off valve)
@@ -4575,7 +4650,10 @@ export async function checkShowerSessions() {
         pauseResumedAt: new Date(),
       },
     });
-    try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), true); } catch (e) { console.error("Auto-resume on:", e); }
+    try {
+      const autoOffSec = Math.ceil(remainingMs / 1000) + 60; // +60s safety margin
+      await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), autoOffSec);
+    } catch (e) { console.error("Auto-resume on:", e); }
   }
 
   // 2) Expire active sessions whose endsAt has passed
