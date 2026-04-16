@@ -21,6 +21,7 @@ import {
   resumeShower,
   extendShowerPayment,
   completeExpiredShower,
+  startShowerRelay,
 } from "@/lib/actions";
 
 type State = NonNullable<Awaited<ReturnType<typeof getShowerSessionState>>>;
@@ -40,6 +41,9 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
 
   const token = initial.accessToken;
 
+  // Track whether relay has been started after warmup
+  const relayStartedRef = useRef(initial.warmupSecondsLeft <= 0);
+
   // Server state poll every 3s to pick up pause cooldown + auto-resume
   const pollRef = useRef<number | null>(null);
   useEffect(() => {
@@ -55,11 +59,19 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     };
   }, [initial.id, token]);
 
+  // Warmup → relay start: when warmup ends, call server to turn on the relay
+  useEffect(() => {
+    if (state.status === "ACTIVE" && state.warmupSecondsLeft <= 0 && !relayStartedRef.current) {
+      relayStartedRef.current = true;
+      startShowerRelay(state.id, token).catch(() => {});
+    }
+  }, [state.status, state.warmupSecondsLeft, state.id, token]);
+
   // Auto-stop: call server to turn off relay immediately when time expires.
   // The ref ensures we fire exactly once even if multiple ticks or polls hit 0.
   const autoStopFired = useRef(false);
   useEffect(() => {
-    if (state.status === "ACTIVE" && state.secondsLeft <= 0 && !autoStopFired.current) {
+    if (state.status === "ACTIVE" && state.warmupSecondsLeft <= 0 && state.secondsLeft <= 0 && !autoStopFired.current) {
       autoStopFired.current = true;
       completeExpiredShower(state.id).catch(() => {});
     }
@@ -67,7 +79,7 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     if (state.secondsLeft > 5) {
       autoStopFired.current = false;
     }
-  }, [state.status, state.secondsLeft, state.id]);
+  }, [state.status, state.secondsLeft, state.warmupSecondsLeft, state.id]);
 
   // Local 1s tick between server polls (so the display stays smooth)
   useEffect(() => {
@@ -75,7 +87,11 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
       setState((prev) => {
         if (!prev) return prev;
         const next = { ...prev };
-        if (prev.status === "ACTIVE" && prev.secondsLeft > 0) {
+        if (prev.status === "ACTIVE" && prev.warmupSecondsLeft > 0) {
+          next.warmupSecondsLeft = prev.warmupSecondsLeft - 1;
+          // Both warmup and secondsLeft count down from endsAt, so decrement both
+          if (prev.secondsLeft > 0) next.secondsLeft = prev.secondsLeft - 1;
+        } else if (prev.status === "ACTIVE" && prev.secondsLeft > 0) {
           next.secondsLeft = prev.secondsLeft - 1;
         }
         if (prev.status === "PAUSED" && prev.pauseSecondsLeft > 0) {
@@ -139,7 +155,8 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
     }
   }
 
-  const isActive = state.status === "ACTIVE";
+  const isWarmup = state.status === "ACTIVE" && state.warmupSecondsLeft > 0;
+  const isActive = state.status === "ACTIVE" && !isWarmup;
   const isPaused = state.status === "PAUSED";
   const isFinished = state.status === "COMPLETED" || state.status === "CANCELLED";
   const isPending = state.status === "PENDING";
@@ -182,6 +199,68 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
             </CardContent>
           </Card>
         </div>
+      </div>
+    );
+  }
+
+  if (isWarmup) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col">
+        <div className="bg-gradient-to-br from-emerald-500/15 via-emerald-400/5 to-background px-4 pt-6 pb-10 text-center relative overflow-hidden">
+          <div className="relative z-10">
+            <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-emerald-500/20">
+              <Droplets className="h-6 w-6 text-white" />
+            </div>
+            <h1 className="text-xl font-bold">{state.showerName}</h1>
+            {state.location && (
+              <p className="text-muted-foreground text-sm mt-1">{state.location}</p>
+            )}
+            <div className="mt-2 inline-flex items-center gap-2 text-xs px-2.5 py-1 rounded-full bg-background/60 backdrop-blur">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              Gør dig klar...
+            </div>
+          </div>
+        </div>
+
+        <div className="max-w-md mx-auto w-full px-4 py-4 space-y-4 -mt-4 flex-1">
+          <Card>
+            <CardContent className="p-6 space-y-5">
+              <div className="text-center">
+                <div className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Vandet starter om
+                </div>
+                <div className="text-7xl font-bold tabular-nums tracking-tight text-emerald-600">
+                  {state.warmupSecondsLeft}
+                </div>
+                <p className="text-sm text-muted-foreground mt-3">
+                  Gå ind i badet &mdash; vandet starter automatisk
+                </p>
+                <div className="text-xs text-muted-foreground mt-2">
+                  Betalt: {state.minutesPaid} min &middot; {state.pricePaid.toFixed(2)} DKK
+                </div>
+              </div>
+
+              <Button
+                className="w-full h-12"
+                variant="outline"
+                disabled={actionLoading !== null}
+                onClick={handlePause}
+              >
+                {actionLoading === "pause" ? (
+                  <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                ) : (
+                  <Pause className="h-5 w-5 mr-2" />
+                )}
+                Pause &mdash; jeg har brug for mere tid
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
+        <p className="text-[10px] text-center text-muted-foreground/40 pb-4 flex items-center justify-center gap-1">
+          <Tent className="h-3 w-3" />
+          CampSense
+        </p>
       </div>
     );
   }

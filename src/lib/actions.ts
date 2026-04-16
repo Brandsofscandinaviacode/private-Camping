@@ -2011,14 +2011,25 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
 // ──────────────────────────────────────────────
 // BOOKINGS — Session management
 // ──────────────────────────────────────────────
-export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active") {
-  const where = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
+export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active", search?: string) {
+  const filterWhere = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
     : filter === "active" ? { status: "ACTIVE" as const }
     : {};
 
+  const searchWhere = search && search.trim()
+    ? {
+        OR: [
+          { guestName: { contains: search.trim() } },
+          { bookingRef: { contains: search.trim() } },
+          { guestEmail: { contains: search.trim() } },
+          { guestPhone: { contains: search.trim() } },
+        ],
+      }
+    : {};
+
   return prisma.session.findMany({
-    where,
+    where: { ...filterWhere, ...searchWhere },
     include: { unit: true },
     orderBy: { checkInTime: "desc" },
     take: 100,
@@ -2058,6 +2069,17 @@ export async function markSessionUnpaid(sessionId: number) {
   });
   revalidatePath("/admin/bookings");
   revalidatePath(`/admin/bookings/${sessionId}`);
+}
+
+/** Adjust the prepaid amount for a booking (e.g. guest pays extra cash at reception). */
+export async function adjustPrepaidAmount(sessionId: number, newAmount: number) {
+  if (newAmount < 0) throw new Error("Beløb kan ikke være negativt");
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { prepaidAmount: newAmount },
+  });
+  revalidatePath(`/admin/bookings/${sessionId}`);
+  revalidatePath("/admin/bookings");
 }
 
 export async function updateSessionDetails(
@@ -3959,6 +3981,7 @@ export async function createPublicLaundryPayment(
 
 const PAUSE_MAX_MS = 5 * 60 * 1000;      // 5 minutes max pause
 const PAUSE_COOLDOWN_MS = 10 * 1000;     // 10 s between pauses
+const SHOWER_WARMUP_MS = 10 * 1000;      // 10 s warmup before relay turns on
 
 // ── Admin CRUD ────────────────────────────────────────────────
 export async function getShowers() {
@@ -4302,7 +4325,8 @@ export async function activateShowerSession(pendingId: number) {
   if (sess.status !== "PENDING") return;
 
   const mins = sess.pendingMinutes ?? 0;
-  const endsAt = new Date(Date.now() + mins * 60 * 1000);
+  // Add warmup time so purchased minutes start AFTER the 10s warmup
+  const endsAt = new Date(Date.now() + SHOWER_WARMUP_MS + mins * 60 * 1000);
 
   await prisma.showerSess.update({
     where: { id: pendingId },
@@ -4317,14 +4341,31 @@ export async function activateShowerSession(pendingId: number) {
     },
   });
 
+  // Relay is NOT turned on here — client calls startShowerRelay() after the 10s warmup countdown
+}
+
+/** Turn on the shower relay after warmup countdown. Called by the client. */
+export async function startShowerRelay(showerSessionId: number, accessToken?: string): Promise<{ ok: boolean; message: string }> {
+  const sess = await prisma.showerSess.findUnique({
+    where: { id: showerSessionId },
+    include: { shower: true },
+  });
+  if (!sess) return { ok: false, message: "Session ikke fundet" };
+  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (sess.status !== "ACTIVE") return { ok: false, message: "Session er ikke aktiv" };
+
+  const remainingSec = Math.max(0, Math.ceil((new Date(sess.endsAt).getTime() - Date.now()) / 1000));
+  if (remainingSec <= 0) return { ok: false, message: "Tiden er udløbet" };
+
   try {
-    // Use timed switch: auto-off on the device itself as safety net.
-    // Add 60s buffer so the client/server stop fires first under normal conditions.
-    const autoOffSec = mins * 60 + 60;
-    await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), autoOffSec);
+    // Turn on relay with hardware auto-off safety net (remaining time + 60s buffer)
+    await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), remainingSec + 60);
   } catch (e) {
-    console.error("Shower turnOn failed:", e);
+    console.error("Shower relay start failed:", e);
+    return { ok: false, message: "Kunne ikke tænde bruser" };
   }
+
+  return { ok: true, message: "Bruser startet" };
 }
 
 /**
@@ -4408,6 +4449,15 @@ export async function getShowerSessionState(showerSessionId: number, accessToken
     }
   }
 
+  // Warmup: first 10s after activation, relay is off so guest can get ready
+  let warmupSecondsLeft = 0;
+  if (sess.status === "ACTIVE" && sess.startedAt) {
+    const warmupEnd = new Date(sess.startedAt).getTime() + SHOWER_WARMUP_MS;
+    if (now < warmupEnd) {
+      warmupSecondsLeft = Math.max(0, Math.ceil((warmupEnd - now) / 1000));
+    }
+  }
+
   return {
     id: sess.id,
     accessToken: sess.accessToken,
@@ -4421,6 +4471,7 @@ export async function getShowerSessionState(showerSessionId: number, accessToken
     secondsLeft,
     pauseSecondsLeft,
     pauseCooldownSeconds,
+    warmupSecondsLeft,
     minutesPaid: sess.minutesPaid,
     pricePaid: sess.pricePaid,
     paymentStatus: sess.paymentStatus,

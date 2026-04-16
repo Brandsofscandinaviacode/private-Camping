@@ -13,6 +13,7 @@ import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
 import { BookingCheckoutButton } from "@/components/admin/booking-checkout-button";
+import { PrepaidBalance } from "@/components/admin/prepaid-balance";
 
 export const dynamic = "force-dynamic";
 
@@ -358,6 +359,15 @@ export default async function BookingDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Skyldigt beløb + Betaling */}
         <div className="space-y-5">
+          {session.billingMode === "PREPAID" && (
+            <PrepaidBalance
+              sessionId={session.id}
+              prepaidAmount={session.prepaidAmount ?? 0}
+              accumulatedCost={(session.accumulatedElCost ?? 0) + (session.accumulatedWaterCost ?? 0)}
+              isActive={isActive}
+            />
+          )}
+
           {session.billingMode !== "PREPAID" && (() => {
             // For long-term units, show all invoices on the unit.
             // For short-term bookings, scope to invoices that overlap this session's period

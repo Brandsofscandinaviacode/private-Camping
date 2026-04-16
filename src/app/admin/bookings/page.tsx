@@ -15,12 +15,13 @@ const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligg
 export default async function BookingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string }>;
+  searchParams: Promise<{ filter?: string; q?: string }>;
 }) {
-  const { filter } = await searchParams;
+  const { filter, q } = await searchParams;
   const activeFilter = (filter as "all" | "unpaid" | "paid" | "active") || "all";
+  const searchQuery = q?.trim() || "";
   const [sessions, unpaidCount] = await Promise.all([
-    getAllSessions(activeFilter),
+    getAllSessions(activeFilter, searchQuery || undefined),
     getUnpaidCount(),
   ]);
 
@@ -38,7 +39,7 @@ export default async function BookingsPage({
         </p>
       </div>
 
-      <BookingFilters activeFilter={activeFilter} unpaidCount={unpaidCount} />
+      <BookingFilters activeFilter={activeFilter} unpaidCount={unpaidCount} searchQuery={searchQuery} />
 
       {sessions.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
