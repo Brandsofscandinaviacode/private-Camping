@@ -100,7 +100,7 @@ const sections: Section[] = [
     icon: Zap,
     title: "Elpriser (Spotpris)",
     intro:
-      "Siden viser aktuelle og kommende timepriser fra den danske elbørs (Energi Data Service). Priserne opdateres automatisk.",
+      "Siden viser aktuelle og kommende timepriser fra den danske elbørs via elprisenligenu.dk. Priserne opdateres automatisk.",
     items: [
       "Grafen viser timepriserne for de næste 24 timer.",
       "Den nuværende time er markeret, så du kan se hvad gæsterne betaler lige nu.",

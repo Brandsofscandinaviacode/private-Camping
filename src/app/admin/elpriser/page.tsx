@@ -12,7 +12,7 @@ export default function ElpriserPage() {
           <h1 className="text-2xl font-bold tracking-tight">Elpriser</h1>
         </div>
         <p className="text-muted-foreground mt-1">
-          Time-for-time spotpriser fra Energi Data Service og dit samlede elforbrug
+          Time-for-time spotpriser fra elprisenligenu.dk og dit samlede elforbrug
         </p>
       </div>
 

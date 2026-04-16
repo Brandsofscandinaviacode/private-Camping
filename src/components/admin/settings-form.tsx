@@ -144,7 +144,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
 
           {values.pricing_mode !== "fixed" && (
             <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-              Spotpriser hentes automatisk fra <a href="https://www.energidataservice.dk" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">Energi Data Service</a> (opdateres hvert 5. minut).
+              Spotpriser hentes automatisk fra <a href="https://www.elprisenligenu.dk" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">elprisenligenu.dk</a> (opdateres 1-2 gange dagligt).
             </div>
           )}
         </div>
