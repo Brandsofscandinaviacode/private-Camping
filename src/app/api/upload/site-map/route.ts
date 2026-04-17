@@ -2,20 +2,19 @@ import { NextResponse } from "next/server";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { logger } from "@/lib/logger";
+import { requireAuth } from "@/lib/auth";
 
-// Store uploads in a persistent data directory, not inside .next/standalone/public
 function getUploadDir(): string {
-  // Use DATA_DIR env or fallback to project root's public/uploads
   if (process.env.DATA_DIR) {
     return join(process.env.DATA_DIR, "uploads");
   }
-  // In standalone mode, process.cwd() is .next/standalone
-  // We need to write to the actual public/uploads that gets served
-  return join(process.cwd(), "public", "uploads");
+  return join(/* turbopackIgnore: true */ process.cwd(), "public", "uploads");
 }
 
 export async function POST(request: Request) {
   try {
+    await requireAuth();
+
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
 

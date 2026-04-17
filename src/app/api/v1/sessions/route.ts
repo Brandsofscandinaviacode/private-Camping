@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateAPI } from "@/lib/api-auth";
+import { runWithApiAuth } from "@/lib/auth-context";
 import { checkIn, checkOut, getActiveSession } from "@/lib/actions";
 import { prisma } from "@/lib/prisma";
 
@@ -95,28 +96,44 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/v1/sessions — Check in a guest
-// Body: { unit_id, guest_name, guest_email?, guest_phone?, booking_ref?, external_price?, external_description? }
 export async function POST(req: NextRequest) {
   const auth = await authenticateAPI(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: 401 });
 
   try {
     const body = await req.json();
-    const { unit_id, guest_name, guest_email, guest_phone, booking_ref, external_price, external_description } = body;
+    const {
+      unit_id,
+      guest_name,
+      guest_email,
+      guest_phone,
+      booking_ref,
+      external_price,
+      external_description,
+      expected_checkout,
+      billing_mode,
+      prepaid_amount,
+    } = body;
 
     if (!unit_id || !guest_name) {
       return NextResponse.json({ error: "unit_id and guest_name are required" }, { status: 400 });
     }
 
-    const result = await checkIn(
-      parseInt(unit_id, 10),
-      guest_name,
-      guest_email || undefined,
-      guest_phone || undefined,
-      booking_ref || undefined,
+    const parsedBillingMode = billing_mode === "PREPAID" ? "PREPAID" : undefined;
+
+    const result = await runWithApiAuth(() =>
+      checkIn(
+        parseInt(unit_id, 10),
+        guest_name,
+        guest_email || undefined,
+        guest_phone || undefined,
+        booking_ref || undefined,
+        expected_checkout || undefined,
+        parsedBillingMode,
+        prepaid_amount != null ? parseFloat(prepaid_amount) : undefined,
+      ),
     );
 
-    // If external_price is provided, update the session
     if (external_price != null) {
       await prisma.session.update({
         where: { id: result.session.id },
@@ -144,7 +161,6 @@ export async function POST(req: NextRequest) {
 }
 
 // PATCH /api/v1/sessions — Update a session (checkout, set external price, mark paid)
-// Body: { session_id, action: "checkout" | "set_price" | "mark_paid", external_price?, external_description?, payment_id? }
 export async function PATCH(req: NextRequest) {
   const auth = await authenticateAPI(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: 401 });
@@ -160,8 +176,7 @@ export async function PATCH(req: NextRequest) {
     const id = parseInt(session_id, 10);
 
     if (action === "checkout") {
-      const result = await checkOut(id);
-      // Include external price in total if set
+      const result = await runWithApiAuth(() => checkOut(id));
       const session = await prisma.session.findUnique({ where: { id } });
       const grandTotal = (result.totalCost || 0) + (session?.externalPrice || 0);
       return NextResponse.json({ ...result, externalPrice: session?.externalPrice, grandTotal });

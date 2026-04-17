@@ -4,7 +4,7 @@ const spec = {
   openapi: "3.0.3",
   info: {
     title: "CampSense API",
-    version: "1.0.0",
+    version: "1.1.0",
     description: "REST API til integration med booking-systemer og eksterne tjenester. Alle endpoints kræver en API-nøgle sat i Indstillinger > System.",
   },
   servers: [{ url: "/api/v1", description: "CampSense API v1" }],
@@ -78,7 +78,7 @@ const spec = {
         ],
         responses: {
           "200": {
-            description: "Liste af sessioner",
+            description: "Liste af sessioner (maks 100)",
             content: {
               "application/json": {
                 schema: {
@@ -154,6 +154,9 @@ const spec = {
                   guest_email: { type: "string", description: "Gæstens email (til notifikationer)" },
                   guest_phone: { type: "string", description: "Gæstens telefonnummer med landekode" },
                   booking_ref: { type: "string", description: "Booking-reference fra eksternt system" },
+                  expected_checkout: { type: "string", format: "date-time", description: "Forventet afrejse (ISO 8601)" },
+                  billing_mode: { type: "string", enum: ["POSTPAID", "PREPAID"], description: "POSTPAID = betal ved checkout (standard), PREPAID = forudbetalt" },
+                  prepaid_amount: { type: "number", description: "Forudbetalt beløb i DKK (kun ved billing_mode=PREPAID)" },
                   external_price: { type: "number", description: "Opholdspris fra booking-system (lægges oven i forbrugsomkostninger)" },
                   external_description: { type: "string", description: "Beskrivelse af ekstern pris (f.eks. '3 nætter hytte')" },
                 },
@@ -164,6 +167,7 @@ const spec = {
                 guest_email: "hans@email.dk",
                 guest_phone: "+4512345678",
                 booking_ref: "BK-2026-001",
+                expected_checkout: "2026-04-20T11:00:00Z",
                 external_price: 1500.00,
                 external_description: "3 nætter hytte",
               },
@@ -187,6 +191,10 @@ const spec = {
               },
             },
           },
+          "400": {
+            description: "Ugyldig forespørgsel",
+            content: { "application/json": { schema: { type: "object", properties: { error: { type: "string" } } } } },
+          },
         },
       },
       patch: {
@@ -208,9 +216,9 @@ const spec = {
                 },
               },
               examples: {
-                checkout: { value: { session_id: 1, action: "checkout" } },
-                set_price: { value: { session_id: 1, action: "set_price", external_price: 1500, external_description: "3 nætter" } },
-                mark_paid: { value: { session_id: 1, action: "mark_paid", payment_id: "PAY-123" } },
+                checkout: { summary: "Check-out", value: { session_id: 1, action: "checkout" } },
+                set_price: { summary: "Sæt ekstern pris", value: { session_id: 1, action: "set_price", external_price: 1500, external_description: "3 nætter" } },
+                mark_paid: { summary: "Markér betalt", value: { session_id: 1, action: "mark_paid", payment_id: "PAY-123" } },
               },
             },
           },
@@ -220,14 +228,70 @@ const spec = {
             description: "Session opdateret",
             content: {
               "application/json": {
+                examples: {
+                  checkout: {
+                    summary: "Check-out resultat",
+                    value: {
+                      totalElectricityCost: 125.50,
+                      totalWaterCost: 42.00,
+                      totalCost: 167.50,
+                      externalPrice: 1500.00,
+                      grandTotal: 1667.50,
+                    },
+                  },
+                  set_price: { summary: "Pris sat", value: { ok: true } },
+                  mark_paid: { summary: "Markeret betalt", value: { ok: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/invoices": {
+      get: {
+        summary: "Hent fakturaer",
+        description: "Hent fakturaer for fastliggere og afsluttede ophold. Kan filtreres på enhed og status.",
+        tags: ["Fakturaer"],
+        parameters: [
+          { name: "unit_id", in: "query", schema: { type: "integer" }, description: "Filtrér efter enhed" },
+          { name: "status", in: "query", schema: { type: "string", enum: ["DRAFT", "PENDING", "PAID", "OVERDUE"] }, description: "Filtrér efter status" },
+          { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 }, description: "Maks antal resultater" },
+        ],
+        responses: {
+          "200": {
+            description: "Liste af fakturaer",
+            content: {
+              "application/json": {
                 schema: {
                   type: "object",
                   properties: {
-                    totalElectricityCost: { type: "number", nullable: true },
-                    totalWaterCost: { type: "number", nullable: true },
-                    totalCost: { type: "number", nullable: true },
-                    externalPrice: { type: "number", nullable: true },
-                    grandTotal: { type: "number", description: "Forbrug + ekstern pris" },
+                    invoices: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "integer" },
+                          unitId: { type: "integer" },
+                          unitName: { type: "string" },
+                          periodStart: { type: "string", format: "date-time" },
+                          periodEnd: { type: "string", format: "date-time" },
+                          startKwh: { type: "number", nullable: true },
+                          endKwh: { type: "number", nullable: true },
+                          startHeatingKwh: { type: "number", nullable: true },
+                          endHeatingKwh: { type: "number", nullable: true },
+                          startWaterLiters: { type: "number", nullable: true },
+                          endWaterLiters: { type: "number", nullable: true },
+                          electricityCost: { type: "number" },
+                          waterCost: { type: "number" },
+                          totalAmount: { type: "number" },
+                          status: { type: "string", enum: ["DRAFT", "PENDING", "PAID", "OVERDUE"] },
+                          paidAt: { type: "string", format: "date-time", nullable: true },
+                          paymentId: { type: "string", nullable: true },
+                          createdAt: { type: "string", format: "date-time" },
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -284,6 +348,14 @@ const spec = {
                       elSurcharge: 0.50,
                       edsPriceArea: "DK1",
                       effectiveElPrice: { pricePerKwh: 2.37, spotPrice: 1.87, mode: "spot" },
+                    },
+                  },
+                  logs: {
+                    summary: "Historisk forbrug (unit_id)",
+                    value: {
+                      logs: [
+                        { recordedAt: "2026-04-17T10:30:00.000Z", electricityKwh: 25.5, waterLiters: 180 },
+                      ],
                     },
                   },
                 },

@@ -6,6 +6,7 @@ import { getIronSession } from "iron-session";
 import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 import { logger } from "./logger";
+import { isApiAuthenticated } from "./auth-context";
 
 interface SessionData {
   userId?: number;
@@ -67,6 +68,9 @@ export async function logout() {
 }
 
 export async function requireAuth() {
+  if (isApiAuthenticated()) {
+    return { isLoggedIn: true as const, userId: 0, username: "api" };
+  }
   const session = await getSession();
   if (!session.isLoggedIn) {
     redirect("/login");
