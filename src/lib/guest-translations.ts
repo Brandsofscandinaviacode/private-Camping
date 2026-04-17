@@ -51,6 +51,10 @@ const translations = {
     powerIsOff: "Strømmen er slukket",
     turningOn: "Tænder...",
     turningOff: "Slukker...",
+    temperatureSet: "Temperatur indstillet!",
+    xOfYAvailable: "ledig",
+    xOfYAvailablePlural: "ledige",
+    endsIn: "Færdig om",
   },
   en: {
     welcome: "Welcome",
@@ -96,6 +100,10 @@ const translations = {
     powerIsOff: "Power is off",
     turningOn: "Turning on...",
     turningOff: "Turning off...",
+    temperatureSet: "Temperature set!",
+    xOfYAvailable: "available",
+    xOfYAvailablePlural: "available",
+    endsIn: "Ends in",
   },
   de: {
     welcome: "Willkommen",
@@ -141,6 +149,10 @@ const translations = {
     powerIsOff: "Strom ist ausgeschaltet",
     turningOn: "Wird eingeschaltet...",
     turningOff: "Wird ausgeschaltet...",
+    temperatureSet: "Temperatur eingestellt!",
+    xOfYAvailable: "verfügbar",
+    xOfYAvailablePlural: "verfügbar",
+    endsIn: "Fertig in",
   },
 } as const;
 

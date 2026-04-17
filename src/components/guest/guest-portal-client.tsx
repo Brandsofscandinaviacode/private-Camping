@@ -210,17 +210,31 @@ export function GuestPortalClient({
     return () => { mounted = false; clearInterval(interval); };
   }, [sessionId, isActive]);
 
+  const [tempMsg, setTempMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   function handleSetTemp() {
     startTransition(async () => {
-      await guestSetTemperature(token, parseFloat(tempValue));
+      try {
+        await guestSetTemperature(token, parseFloat(tempValue));
+        setTempMsg({ ok: true, text: tx.temperatureSet });
+        setTimeout(() => setTempMsg(null), 4000);
+      } catch {
+        setTempMsg({ ok: false, text: tx.paymentFailed });
+        setTimeout(() => setTempMsg(null), 5000);
+      }
     });
   }
 
   function handleUnlock() {
     startTransition(async () => {
-      await guestUnlockDoor(token);
-      setUnlockMsg("Døren er låst op!");
-      setTimeout(() => setUnlockMsg(""), 5000);
+      try {
+        await guestUnlockDoor(token);
+        setUnlockMsg("ok");
+        setTimeout(() => setUnlockMsg(""), 5000);
+      } catch {
+        setUnlockMsg("error");
+        setTimeout(() => setUnlockMsg(""), 5000);
+      }
     });
   }
 
@@ -647,6 +661,37 @@ export function GuestPortalClient({
           <TopUpSection sessionId={sessionId} token={token} locale={locale} />
         )}
 
+        {/* ═══ Active services banner ═══ */}
+        {isActive && (() => {
+          const activeMachines = laundryMachines.filter((m) => !m.available && m.minutesLeft > 0);
+          if (activeMachines.length === 0) return null;
+          const endsInLabel = locale === "en" ? "Ends in" : locale === "de" ? "Fertig in" : "Færdig om";
+          return (
+            <Card className="border-blue-200 bg-blue-50/50">
+              <CardContent className="py-3 space-y-2">
+                {activeMachines.map((m) => (
+                  <div key={m.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                        {m.kind === "WASHER"
+                          ? <WashingMachine className="h-4 w-4 text-blue-500" />
+                          : <Wind className="h-4 w-4 text-purple-500" />}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">{m.name}</p>
+                        {m.location && <p className="text-[11px] text-muted-foreground">{m.location}</p>}
+                      </div>
+                    </div>
+                    <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-1 rounded-full animate-pulse">
+                      {endsInLabel} {m.minutesLeft} min
+                    </span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          );
+        })()}
+
         {/* ═══ Services: Laundry + Climate + Lock — collapsible ═══ */}
         {isActive && hasServices && (
           <Section
@@ -684,6 +729,11 @@ export function GuestPortalClient({
                     className="w-full" variant="outline" size="sm">
                     {isPending ? tx.setting : tx.setTemperature}
                   </Button>
+                  {tempMsg && (
+                    <p className={`text-sm text-center rounded-lg px-3 py-1.5 ${tempMsg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                      {tempMsg.text}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -698,7 +748,8 @@ export function GuestPortalClient({
                   <Button onClick={handleUnlock} disabled={isPending} className="w-full" size="sm">
                     {isPending ? tx.opening : tx.unlock}
                   </Button>
-                  {unlockMsg && <p className="text-sm text-primary text-center">{tx.doorUnlocked}</p>}
+                  {unlockMsg === "ok" && <p className="text-sm text-center rounded-lg px-3 py-1.5 bg-green-50 text-green-700">{tx.doorUnlocked}</p>}
+                  {unlockMsg === "error" && <p className="text-sm text-center rounded-lg px-3 py-1.5 bg-red-50 text-red-600">{tx.paymentFailed}</p>}
                 </div>
               )}
 
@@ -896,6 +947,7 @@ function GuestServicesSection({
     dryer: locale === "en" ? "Dryer" : locale === "de" ? "Trockner" : "Tørretumbler",
     noLocation: locale === "en" ? "No location" : locale === "de" ? "Ohne Ort" : "Uden lokation",
     available: locale === "en" ? "Available" : locale === "de" ? "Verfügbar" : "Ledig",
+    availablePlural: locale === "en" ? "available" : locale === "de" ? "verfügbar" : "ledige",
     inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
     minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
     start: locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start",
@@ -910,10 +962,17 @@ function GuestServicesSection({
   const washers = machines.filter((m) => m.kind === "WASHER");
   const dryers = machines.filter((m) => m.kind === "DRYER");
 
-  const typeCards: { type: ServiceType; count: number; icon: React.ReactNode; label: string; accent: string }[] = [
+  function getAvailableCount(type: ServiceType): number {
+    if (type === "shower") return showers.filter((s) => s.available).length;
+    if (type === "washer") return washers.filter((m) => m.available).length;
+    return dryers.filter((m) => m.available).length;
+  }
+
+  const typeCards: { type: ServiceType; count: number; availableCount: number; icon: React.ReactNode; label: string; accent: string }[] = [
     showers.length > 0 && {
       type: "shower" as ServiceType,
       count: showers.length,
+      availableCount: getAvailableCount("shower"),
       icon: <Droplets className="h-5 w-5" />,
       label: labels.shower,
       accent: "text-sky-500",
@@ -921,6 +980,7 @@ function GuestServicesSection({
     washers.length > 0 && {
       type: "washer" as ServiceType,
       count: washers.length,
+      availableCount: getAvailableCount("washer"),
       icon: <WashingMachine className="h-5 w-5" />,
       label: labels.washer,
       accent: "text-blue-500",
@@ -928,11 +988,12 @@ function GuestServicesSection({
     dryers.length > 0 && {
       type: "dryer" as ServiceType,
       count: dryers.length,
+      availableCount: getAvailableCount("dryer"),
       icon: <Wind className="h-5 w-5" />,
       label: labels.dryer,
       accent: "text-purple-500",
     },
-  ].filter(Boolean) as { type: ServiceType; count: number; icon: React.ReactNode; label: string; accent: string }[];
+  ].filter(Boolean) as { type: ServiceType; count: number; availableCount: number; icon: React.ReactNode; label: string; accent: string }[];
 
   function getLocationsFor(type: ServiceType): { key: string; label: string; count: number }[] {
     const items: { location: string | null }[] =
@@ -1017,6 +1078,13 @@ function GuestServicesSection({
                   {tc.count} {labels.items}
                 </span>
               </span>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                tc.availableCount > 0
+                  ? "bg-green-50 text-green-600"
+                  : "bg-orange-50 text-orange-600"
+              }`}>
+                {tc.availableCount}/{tc.count} {tc.availableCount === 1 ? labels.available : labels.availablePlural}
+              </span>
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </button>
           ))}
@@ -1097,22 +1165,22 @@ function GuestServicesSection({
         </span>
         <span className="w-12" />
       </div>
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         {selectedType === "shower"
           ? (items as GuestPortalClientProps["showers"]).map((s) => (
-              <div key={s.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                <div>
+              <div key={s.id} className="flex items-center justify-between py-2.5 px-2 rounded-lg border-b last:border-0">
+                <div className="space-y-1">
                   <p className="text-sm font-medium">{s.name}</p>
-                  <p className="text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {s.available ? (
-                      <span className="text-green-600">{labels.available}</span>
+                      <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
                     ) : (
-                      <span className="text-orange-600">
-                        {labels.inUse} — {s.minutesLeft} {labels.minutesLeft}
+                      <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
+                        {labels.inUse} · {s.minutesLeft} {labels.minutesLeft}
                       </span>
                     )}
-                    {" · "}{s.pricePerMinute.toFixed(2)} DKK {labels.perMinute}
-                  </p>
+                    <span className="text-[11px] text-muted-foreground">{s.pricePerMinute.toFixed(2)} DKK {labels.perMinute}</span>
+                  </div>
                 </div>
                 <Button
                   size="sm"
@@ -1128,19 +1196,19 @@ function GuestServicesSection({
               </div>
             ))
           : (items as GuestPortalClientProps["laundryMachines"]).map((m) => (
-              <div key={m.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                <div>
+              <div key={m.id} className="flex items-center justify-between py-2.5 px-2 rounded-lg border-b last:border-0">
+                <div className="space-y-1">
                   <p className="text-sm font-medium">{m.name}</p>
-                  <p className="text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {m.available ? (
-                      <span className="text-green-600">{labels.available}</span>
+                      <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
                     ) : (
-                      <span className="text-orange-600">
-                        {labels.inUse} — {m.minutesLeft} {labels.minutesLeft}
+                      <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
+                        {labels.inUse} · {m.minutesLeft} {labels.minutesLeft}
                       </span>
                     )}
-                    {" · "}{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}
-                  </p>
+                    <span className="text-[11px] text-muted-foreground">{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}</span>
+                  </div>
                 </div>
                 <Button
                   size="sm"
