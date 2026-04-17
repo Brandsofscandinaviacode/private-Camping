@@ -35,7 +35,7 @@ export function SidebarNav({ unpaidCount }: SidebarNavProps) {
   }
 
   return (
-    <nav className="flex-1 px-3 pt-5">
+    <nav className="flex-1 px-3 pt-5" aria-label="Admin navigation">
       {(["Oversigt", "System"] as const).map((section) => (
         <div key={section}>
           <p className="px-3 mb-2 mt-4 first:mt-0 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/30">
@@ -57,12 +57,12 @@ export function SidebarNav({ unpaidCount }: SidebarNavProps) {
                         : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                     }`}
                   >
-                    <Icon className="h-[18px] w-[18px]" />
+                    <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
                     {item.label}
                     {item.badge && unpaidCount > 0 && (
                       <span className={`ml-auto inline-flex items-center justify-center h-5 min-w-5 px-1.5 text-[10px] font-bold rounded-full ${
                         active ? "bg-white/20 text-white" : "bg-red-500 text-white"
-                      }`}>
+                      }`} aria-label={`${unpaidCount} ubetalte`}>
                         {unpaidCount}
                       </span>
                     )}

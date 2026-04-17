@@ -7,6 +7,8 @@
 //
 // The sweep itself delegates to `checkShowerSessions` in `@/lib/actions`.
 
+import { logger } from "./logger";
+
 type Timer = ReturnType<typeof setInterval>;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -26,7 +28,7 @@ export function startShowerScheduler() {
       const { checkShowerSessions } = await import("./actions");
       await checkShowerSessions();
     } catch (e) {
-      console.error("[shower-scheduler] sweep failed:", e);
+      logger.error("shower-scheduler", "Sweep failed", e);
     } finally {
       running = false;
     }

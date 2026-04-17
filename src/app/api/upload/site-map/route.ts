@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { logger } from "@/lib/logger";
 
 // Store uploads in a persistent data directory, not inside .next/standalone/public
 function getUploadDir(): string {
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ url: `/uploads/${filename}` });
   } catch (error) {
-    console.error("Upload error:", error);
+    logger.error("upload", "Site map upload error", error);
     return NextResponse.json({ error: `Upload failed: ${error instanceof Error ? error.message : "Unknown error"}` }, { status: 500 });
   }
 }

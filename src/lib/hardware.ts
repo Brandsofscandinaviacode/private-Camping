@@ -18,6 +18,7 @@
 
 import * as ha from "./homeassistant";
 import { mqttClient } from "./mqtt-client";
+import { logger } from "./logger";
 
 export type HardwareSource = "HA" | "MQTT";
 
@@ -55,7 +56,7 @@ async function readShellyStatus(
     const data = JSON.parse(msg.payload) as ShellyComponentStatus;
     return { data, ageMs: Date.now() - msg.receivedAt.getTime() };
   } catch (e) {
-    console.error(`MQTT: kunne ikke parse payload fra ${topic}:`, e);
+    logger.error("hardware", `MQTT: kunne ikke parse payload fra ${topic}`, e);
     return null;
   }
 }

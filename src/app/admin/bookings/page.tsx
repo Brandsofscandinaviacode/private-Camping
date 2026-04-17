@@ -47,14 +47,15 @@ export default async function BookingsPage({
           <p>Ingen bookinger fundet</p>
         </div>
       ) : (
-        <div className="rounded-xl border border-border/60 bg-card shadow-sm divide-y divide-border/60 overflow-hidden">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm divide-y divide-border/60 overflow-hidden" role="list" aria-label="Bookinger">
           {sessions.map((s) => {
             const isActive = s.status === "ACTIVE";
             const isUnpaid = s.status === "COMPLETED" && s.paymentStatus === "UNPAID";
             const isPaid = s.paymentStatus === "PAID";
+            const statusLabel = isActive ? "Aktiv" : isUnpaid ? "Ubetalt" : isPaid ? "Betalt" : "";
 
             return (
-              <Link key={s.id} href={`/admin/bookings/${s.id}`}>
+              <Link key={s.id} href={`/admin/bookings/${s.id}`} role="listitem" aria-label={`${s.guestName}${statusLabel ? ` — ${statusLabel}` : ""}`}>
                 <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer ${
                   isUnpaid ? "border-l-[3px] border-l-red-500" :
                   isActive ? "border-l-[3px] border-l-primary" : ""

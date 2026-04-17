@@ -4,6 +4,8 @@ import { requireAuth } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { MobileSidebar } from "@/components/admin/mobile-sidebar";
 import { SidebarNav } from "@/components/admin/sidebar-nav";
+import { AdminThemeProvider } from "@/components/admin/theme-provider";
+import { ThemeToggle } from "@/components/admin/theme-toggle";
 import { getUnpaidCount } from "@/lib/actions";
 
 export default async function AdminLayout({
@@ -17,6 +19,7 @@ export default async function AdminLayout({
   ]);
 
   return (
+    <AdminThemeProvider>
     <div className="flex flex-col md:flex-row h-full min-h-screen">
       {/* Mobile top bar + drawer */}
       <MobileSidebar username={session.username || "admin"} unpaidCount={unpaidCount} />
@@ -44,7 +47,10 @@ export default async function AdminLayout({
                 {session.username}
               </span>
             </div>
-            <LogoutButton />
+            <div className="flex items-center gap-1">
+              <ThemeToggle />
+              <LogoutButton />
+            </div>
           </div>
         </div>
       </aside>
@@ -54,5 +60,6 @@ export default async function AdminLayout({
         {children}
       </main>
     </div>
+    </AdminThemeProvider>
   );
 }

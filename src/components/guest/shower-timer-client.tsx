@@ -300,7 +300,7 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
               <div className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
                 {isPaused ? "Tid tilbage når du fortsætter" : "Tid tilbage"}
               </div>
-              <div className="text-6xl font-bold tabular-nums tracking-tight">
+              <div className="text-6xl font-bold tabular-nums tracking-tight" role="timer" aria-live="polite" aria-label={`${Math.floor(state.secondsLeft / 60)} minutter og ${state.secondsLeft % 60} sekunder tilbage`}>
                 {fmt(state.secondsLeft)}
               </div>
               <div className="text-xs text-muted-foreground mt-2">

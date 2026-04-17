@@ -1,6 +1,7 @@
 import twilio from "twilio";
 import nodemailer from "nodemailer";
 import { prisma } from "./prisma";
+import { logger } from "./logger";
 
 async function getSettings() {
   const settings = await prisma.globalSetting.findMany();
@@ -33,7 +34,7 @@ export async function sendSMS(to: string, body: string): Promise<{ ok: boolean; 
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("Twilio SMS fejl:", msg);
+    logger.error("twilio", "SMS fejl", msg);
     return { ok: false, error: msg };
   }
 }
@@ -74,7 +75,7 @@ export async function sendEmail(
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("Email fejl:", msg);
+    logger.error("email", "Sending fejl", msg);
     return { ok: false, error: msg };
   }
 }

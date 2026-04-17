@@ -7,6 +7,8 @@ import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
 import { mqttClient, testMqttBroker } from "./mqtt-client";
+import { requireAuth } from "./auth";
+import { logger } from "./logger";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
 // failure with context instead of swallowing it silently and returns null on
@@ -19,7 +21,16 @@ async function safeReadMeter(
     return await hardware.readEnergyKwh(ep);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`meter read failed [${context}] ${hardware.endpointLabel(ep)}: ${msg}`);
+    logger.error("meter", `meter read failed [${context}] ${hardware.endpointLabel(ep)}: ${msg}`);
+    // Track failures for billing alerts visible in admin dashboard
+    try {
+      const key = `_meter_fail_${context.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      await prisma.globalSetting.upsert({
+        where: { key },
+        create: { key, value: new Date().toISOString() },
+        update: { value: new Date().toISOString() },
+      });
+    } catch { /* don't fail the caller over alert tracking */ }
     return null;
   }
 }
@@ -63,6 +74,7 @@ export async function getGlobalSettings() {
 // HA Connection Testing
 // ──────────────────────────────────────────────
 export async function testHAConnection(): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
   const settings = await prisma.globalSetting.findMany();
   const map = Object.fromEntries(settings.map((s) => [s.key, s.value]));
   const url = map.ha_url;
@@ -102,6 +114,7 @@ export async function testHAConnection(): Promise<{ ok: boolean; message: string
 }
 
 export async function testEntityId(entityId: string): Promise<{ ok: boolean; value: string; message: string }> {
+  await requireAuth();
   if (!entityId.trim()) return { ok: false, value: "", message: "Entity ID er tomt" };
 
   try {
@@ -131,6 +144,7 @@ export async function testMqttConnection(cfg?: {
   username: string;
   password: string;
 }): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
   // If no cfg passed, use the currently-saved settings
   let host: string;
   let port: number;
@@ -156,6 +170,7 @@ export async function testMqttConnection(cfg?: {
 
 /** Force the live MQTT client to pick up fresh GlobalSetting config. */
 export async function reloadMqttClient(): Promise<{ ok: boolean; connected: boolean }> {
+  await requireAuth();
   try {
     const c = await mqttClient.reconnect();
     return { ok: true, connected: !!c?.connected };
@@ -179,6 +194,7 @@ export interface BrowsableEntity {
 }
 
 export async function browseHAEntities(): Promise<BrowsableEntity[]> {
+  await requireAuth();
   const allEntities = await ha.getAllEntities();
   const usedMap = await getUsedEntityMap();
 
@@ -260,6 +276,7 @@ async function getUsedEntityMap(): Promise<Map<string, string>> {
 // SMS / Email Test
 // ──────────────────────────────────────────────
 export async function testSMS(toNumber: string): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
   if (!toNumber.trim()) return { ok: false, message: "Indtast et telefonnummer" };
   try {
     const { sendSMS } = await import("./notifications");
@@ -272,6 +289,7 @@ export async function testSMS(toNumber: string): Promise<{ ok: boolean; message:
 }
 
 export async function testEmail(toAddr: string): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
   if (!toAddr.trim()) return { ok: false, message: "Indtast en email-adresse" };
   try {
     const { sendEmail } = await import("./notifications");
@@ -294,6 +312,7 @@ export async function createUnit(
   name: string,
   type: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH" = "CABIN"
 ) {
+  await requireAuth();
   const unit = await prisma.unit.create({
     data: {
       name,
@@ -307,11 +326,13 @@ export async function createUnit(
 }
 
 export async function deleteUnit(unitId: number) {
+  await requireAuth();
   await prisma.unit.delete({ where: { id: unitId } });
   revalidatePath("/admin");
 }
 
 export async function getUnits() {
+  await requireAuth();
   return prisma.unit.findMany({
     include: { hardware: true },
     orderBy: { name: "asc" },
@@ -319,6 +340,7 @@ export async function getUnits() {
 }
 
 export async function getUnitWithDetails(unitId: number) {
+  await requireAuth();
   return prisma.unit.findUnique({
     where: { id: unitId },
     include: {
@@ -367,6 +389,7 @@ export async function updateUnitHardware(
     lockEntityId: string | null;
   }
 ) {
+  await requireAuth();
   await prisma.unitHardware.upsert({
     where: { unitId },
     update: data,
@@ -378,6 +401,7 @@ export async function updateUnitHardware(
 }
 
 export async function toggleWinterMode(unitId: number, enabled: boolean) {
+  await requireAuth();
   await prisma.unitHardware.update({
     where: { unitId },
     data: { winterModeEnabled: enabled },
@@ -392,7 +416,7 @@ export async function toggleWinterMode(unitId: number, enabled: boolean) {
       }
       // Don't turn off here — that's handled by check-out logic
     } catch (e) {
-      console.error("Winter mode toggle error:", e);
+      logger.error("hardware", "Winter mode toggle error", e);
     }
   }
 
@@ -411,6 +435,7 @@ export async function updateLongTermTenant(
     longTermGuestPhone: string;
   }
 ) {
+  await requireAuth();
   let unit = await prisma.unit.findUnique({ where: { id: unitId } });
   if (!unit) throw new Error("Enhed ikke fundet");
 
@@ -432,6 +457,7 @@ export async function updateLongTermTenant(
 }
 
 export async function removeLongTermTenant(unitId: number) {
+  await requireAuth();
   await prisma.unit.update({
     where: { id: unitId },
     data: {
@@ -466,6 +492,7 @@ export async function updateMultipleSettings(
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
 export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string, expectedCheckOut?: string, billingMode?: "PREPAID" | "POSTPAID", prepaidAmount?: number) {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -493,19 +520,19 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   // Turn on electricity
   if (hardware.hasElectricitySwitch(hw)) {
-    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { console.error("checkIn el on:", e); }
+    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { logger.error("hardware", "checkIn el on", e); }
   }
   // Turn on heating relay
   if (hardware.hasHeatingSwitch(hw)) {
-    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { console.error("checkIn heat on:", e); }
+    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { logger.error("hardware", "checkIn heat on", e); }
   }
   // Set climate (HA only)
   if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { console.error("HA climate:", e); }
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { logger.error("hardware", "HA climate set occupied temp", e); }
   }
   // Unlock door (HA only)
   if (hw?.hasSmartLock && hw.lockEntityId) {
-    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { console.error("HA unlock:", e); }
+    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { logger.error("hardware", "HA unlock", e); }
   }
 
   const guestPortalToken = uuidv4();
@@ -547,7 +574,7 @@ async function sendCheckInNotificationAsync(
     const portalUrl = `${baseUrl}/guest/${portalToken}`;
     await sendCheckInNotification(guestName, guestPhone, guestEmail, portalUrl, unitName || "");
   } catch (e) {
-    console.error("Notification fejl:", e);
+    logger.error("notify", "Notification fejl", e);
   }
 }
 
@@ -555,6 +582,7 @@ async function sendCheckInNotificationAsync(
 // CHECK-OUT FLOW
 // ──────────────────────────────────────────────
 export async function checkOut(sessionId: number) {
+  await requireAuth();
   // Final tick first — ensures the accumulator captures every second of
   // consumption up to this instant at the correct hourly spot prices.
   // The tick uses optimistic concurrency, so if a cron tick is racing
@@ -563,7 +591,7 @@ export async function checkOut(sessionId: number) {
   try {
     await tickSessionConsumption(sessionId);
   } catch (e) {
-    console.error("checkOut: final tick fejlede:", e);
+    logger.error("checkout", "checkOut: final tick fejlede", e);
   }
 
   const session = await prisma.session.findUnique({
@@ -592,6 +620,19 @@ export async function checkOut(sessionId: number) {
   }
   if (endWaterLiters === null && hardware.hasWaterMeter(hw)) {
     endWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `checkOut:water session=${sessionId}`);
+  }
+
+  // Block checkout if a configured meter failed to read and we have no accumulator
+  const meterFailures: string[] = [];
+  if (hardware.hasElectricityMeter(hw) && endKwh === null && session.accumulatedElCost === 0) {
+    meterFailures.push("el-måler");
+  }
+  if (hardware.hasWaterMeter(hw) && endWaterLiters === null && session.accumulatedWaterCost === 0) {
+    meterFailures.push("vandmåler");
+  }
+  if (meterFailures.length > 0) {
+    logger.error("checkout", `Meter read failed at checkout for session ${sessionId}`, meterFailures);
+    throw new Error(`Kan ikke checke ud — ${meterFailures.join(" og ")} kunne ikke aflæses. Prøv igen eller kontakt support.`);
   }
 
   // Costs come straight from the accumulator — that's the time-weighted
@@ -638,19 +679,19 @@ export async function checkOut(sessionId: number) {
 
   if (autoPowerOff) {
     if (hardware.hasElectricitySwitch(hw)) {
-      try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), false); } catch (e) { console.error("checkOut el off:", e); }
+      try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), false); } catch (e) { logger.error("checkout", "checkOut el off", e); }
     }
     // Turn off heating unless winter mode is enabled (protect cabin from frost)
     if (hardware.hasHeatingSwitch(hw) && !hw!.winterModeEnabled) {
-      try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), false); } catch (e) { console.error("checkOut heat off:", e); }
+      try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), false); } catch (e) { logger.error("checkout", "checkOut heat off", e); }
     }
     if (hw?.hasSmartLock && hw.lockEntityId) {
-      try { await ha.lockDoor(hw.lockEntityId); } catch (e) { console.error("HA lock:", e); }
+      try { await ha.lockDoor(hw.lockEntityId); } catch (e) { logger.error("checkout", "HA lock", e); }
     }
   }
   // Always set climate to vacant temp (HA only)
   if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { console.error("HA climate:", e); }
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { logger.error("checkout", "HA climate set vacant temp", e); }
   }
 
   // For prepaid: mark as PAID since amount was collected upfront, no refund
@@ -743,6 +784,7 @@ export interface SessionStatement {
 }
 
 export async function getSessionStatement(sessionId: number): Promise<SessionStatement | null> {
+  await requireAuth();
   const initial = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
@@ -761,7 +803,7 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
       });
       if (reloaded) session = reloaded;
     } catch (e) {
-      console.error("getSessionStatement: tick fejl", e);
+      logger.error("tick", "getSessionStatement: tick fejl", e);
     }
   }
 
@@ -951,6 +993,7 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
 // remainder is below 1 DKK we silently skip invoice creation.
 // ──────────────────────────────────────────────
 export async function checkOutWithStatement(sessionId: number) {
+  await requireAuth();
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     select: { unitId: true, billingMode: true, status: true },
@@ -969,7 +1012,7 @@ export async function checkOutWithStatement(sessionId: number) {
     } catch (e) {
       // Expected when there's no un-invoiced consumption or it's < 1 DKK.
       if (!(e instanceof Error) || !e.message.includes("mindst 1 DKK")) {
-        console.error("checkOutWithStatement invoice fejl:", e);
+        logger.error("invoice", "checkOutWithStatement invoice fejl", e);
       }
     }
   }
@@ -1162,7 +1205,7 @@ export async function tickAllSessionConsumption(): Promise<{
         totalElCost += result.addedElCost;
       }
     } catch (e) {
-      console.error(`tickSessionConsumption fejl (session ${s.id}):`, e);
+      logger.error("tick", `tickSessionConsumption fejl (session ${s.id})`, e);
     }
   }
   return { ticked, totalKwh, totalElCost };
@@ -1202,7 +1245,7 @@ export async function getLiveConsumption(sessionId: number) {
       });
       if (reloaded) session = reloaded;
     } catch (e) {
-      console.error("getLiveConsumption tick fejl:", e);
+      logger.error("tick", "getLiveConsumption tick fejl", e);
     }
   }
 
@@ -1301,6 +1344,7 @@ export async function getLivePowerDraw(unitId: number): Promise<{
   hasElectricityPower: boolean;
   hasHeatingPower: boolean;
 } | null> {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -1339,6 +1383,7 @@ export async function getLivePowerDraw(unitId: number): Promise<{
 // HA State helpers
 // ──────────────────────────────────────────────
 export async function getUnitHAStates(unitId: number) {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -1398,6 +1443,7 @@ export async function getUnitHAStates(unitId: number) {
 // Manual HA controls
 // ──────────────────────────────────────────────
 export async function togglePower(unitId: number, turnOn: boolean) {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
   if (!hardware.hasElectricitySwitch(unit?.hardware)) return;
   await hardware.setSwitch(hardware.electricitySwitchEp(unit!.hardware!), turnOn);
@@ -1405,6 +1451,7 @@ export async function togglePower(unitId: number, turnOn: boolean) {
 }
 
 export async function toggleHeating(unitId: number, turnOn: boolean) {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
   if (!hardware.hasHeatingSwitch(unit?.hardware)) return;
   await hardware.setSwitch(hardware.heatingSwitchEp(unit!.hardware!), turnOn);
@@ -1412,6 +1459,7 @@ export async function toggleHeating(unitId: number, turnOn: boolean) {
 }
 
 export async function toggleLock(unitId: number, lock: boolean) {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
   if (!unit?.hardware?.lockEntityId) return;
   if (lock) { await ha.lockDoor(unit.hardware.lockEntityId); }
@@ -1420,6 +1468,7 @@ export async function toggleLock(unitId: number, lock: boolean) {
 }
 
 export async function setTemperature(unitId: number, temp: number) {
+  await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
   if (!unit?.hardware?.climateEntityId) return;
   await ha.setClimateTemperature(unit.hardware.climateEntityId, temp);
@@ -1536,6 +1585,7 @@ export async function guestGetPowerState(token: string): Promise<boolean | null>
 }
 
 export async function getActiveSession(unitId: number) {
+  await requireAuth();
   return prisma.session.findFirst({
     where: { unitId, status: "ACTIVE" },
     orderBy: { checkInTime: "desc" },
@@ -1593,24 +1643,15 @@ export async function createMonthlyInvoice(unitId: number) {
   let startWaterLiters: number | null = null;
   let endWaterLiters: number | null = null;
 
-  // Find the latest invoice for this unit with a captured end reading — per meter.
-  // Ordering by `id` (not periodEnd) avoids ambiguity when multiple invoices share
-  // a period (e.g. two invoices created the same month).
-  const lastElecInvoice = await prisma.invoice.findFirst({
-    where: { unitId, endKwh: { not: null } },
+  const allPrevInvoices = await prisma.invoice.findMany({
+    where: { unitId },
     orderBy: { id: "desc" },
+    select: { id: true, endKwh: true, endHeatingKwh: true, endWaterLiters: true },
   });
-  const lastHeatingInvoice = await prisma.invoice.findFirst({
-    where: { unitId, endHeatingKwh: { not: null } },
-    orderBy: { id: "desc" },
-  });
-  const lastWaterInvoice = await prisma.invoice.findFirst({
-    where: { unitId, endWaterLiters: { not: null } },
-    orderBy: { id: "desc" },
-  });
-  // Has ANY previous invoice been created for this unit? If yes we must NOT
-  // fall back to session.startKwh — that would re-bill already-invoiced kWh.
-  const hasAnyPrevInvoice = (await prisma.invoice.count({ where: { unitId } })) > 0;
+  const hasAnyPrevInvoice = allPrevInvoices.length > 0;
+  const lastElecInvoice = allPrevInvoices.find((i) => i.endKwh != null) ?? null;
+  const lastHeatingInvoice = allPrevInvoices.find((i) => i.endHeatingKwh != null) ?? null;
+  const lastWaterInvoice = allPrevInvoices.find((i) => i.endWaterLiters != null) ?? null;
 
   const activeSession = await prisma.session.findFirst({
     where: { unitId, status: "ACTIVE" },
@@ -1658,7 +1699,7 @@ export async function createMonthlyInvoice(unitId: number) {
     try {
       await tickSessionConsumption(activeSession.id);
     } catch (e) {
-      console.error("createMonthlyInvoice: tick fejlede:", e);
+      logger.error("invoice", "createMonthlyInvoice: tick fejlede", e);
     }
   }
   // Reload the session with fresh accumulator values
@@ -1786,7 +1827,7 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
         sent++;
       }
     } catch (e) {
-      console.error(`Auto-faktura fejl for enhed ${unit.id}:`, e);
+      logger.error("invoice", `Auto-faktura fejl for enhed ${unit.id}`, e);
     }
   }
 
@@ -1835,7 +1876,7 @@ export async function checkOverdueInvoices(): Promise<{ markedOverdue: number; p
         await hardware.setSwitch(hardware.electricitySwitchEp(invoice.unit.hardware!), false);
         powerOff++;
       } catch (e) {
-        console.error(`Auto power-off failed for unit ${invoice.unit.name}:`, e);
+        logger.error("invoice", `Auto power-off failed for unit ${invoice.unit.name}`, e);
       }
     }
   }
@@ -1875,7 +1916,7 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
     try {
       await tickSessionConsumption(session.id);
     } catch (e) {
-      console.error(`checkPrepaidBalances: tick fejlede for session ${session.id}:`, e);
+      logger.error("prepaid", `checkPrepaidBalances: tick fejlede for session ${session.id}`, e);
       // Fall through — we'll still read the accumulator, but the staleness
       // guard below will skip the decision if data is too old.
     }
@@ -1905,7 +1946,7 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
       await hardware.setSwitch(switchEp, false);
       powerOff++;
     } catch (e) {
-      console.error(`Prepaid auto power-off failed for session ${session.id}:`, e);
+      logger.error("prepaid", `Prepaid auto power-off failed for session ${session.id}`, e);
     }
   }
 
@@ -1913,6 +1954,7 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
 }
 
 export async function testSendInvoice(): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
   // Find the most recent invoice to test with
   const invoice = await prisma.invoice.findFirst({
     orderBy: { createdAt: "desc" },
@@ -2012,6 +2054,7 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
 // BOOKINGS — Session management
 // ──────────────────────────────────────────────
 export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active", search?: string) {
+  await requireAuth();
   const filterWhere = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
     : filter === "active" ? { status: "ACTIVE" as const }
@@ -2037,6 +2080,7 @@ export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "activ
 }
 
 export async function getSessionById(sessionId: number) {
+  await requireAuth();
   return prisma.session.findUnique({
     where: { id: sessionId },
     include: {
@@ -2054,6 +2098,7 @@ export async function getSessionById(sessionId: number) {
 }
 
 export async function markSessionPaid(sessionId: number, paymentId?: string) {
+  await requireAuth();
   await prisma.session.update({
     where: { id: sessionId },
     data: { paymentStatus: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
@@ -2063,6 +2108,7 @@ export async function markSessionPaid(sessionId: number, paymentId?: string) {
 }
 
 export async function markSessionUnpaid(sessionId: number) {
+  await requireAuth();
   await prisma.session.update({
     where: { id: sessionId },
     data: { paymentStatus: "UNPAID", paidAt: null, paymentId: null },
@@ -2073,6 +2119,7 @@ export async function markSessionUnpaid(sessionId: number) {
 
 /** Adjust the prepaid amount for a booking (e.g. guest pays extra cash at reception). */
 export async function adjustPrepaidAmount(sessionId: number, newAmount: number) {
+  await requireAuth();
   if (newAmount < 0) throw new Error("Beløb kan ikke være negativt");
   await prisma.session.update({
     where: { id: sessionId },
@@ -2101,6 +2148,7 @@ export async function updateSessionDetails(
     pricePerLiterWaterOverride?: number | null;
   }
 ) {
+  await requireAuth();
   const updateData: Record<string, unknown> = {};
   if (data.guestName !== undefined) updateData.guestName = data.guestName;
   if (data.guestEmail !== undefined) updateData.guestEmail = data.guestEmail || null;
@@ -2171,6 +2219,7 @@ export async function updateSessionDetails(
 }
 
 export async function resendGuestNotification(sessionId: number) {
+  await requireAuth();
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: true },
@@ -2197,6 +2246,7 @@ export async function resendGuestNotification(sessionId: number) {
 }
 
 export async function getUnpaidCount() {
+  await requireAuth();
   return prisma.session.count({
     where: { status: "COMPLETED", paymentStatus: "UNPAID" },
   });
@@ -2206,6 +2256,7 @@ export async function getUnpaidCount() {
 // SYSTEM STATUS
 // ──────────────────────────────────────────────
 export async function getSystemStatus() {
+  await requireAuth();
   const settings = await getGlobalSettings();
   const logCount = await prisma.consumptionLog.count();
   const latestLog = await prisma.consumptionLog.findFirst({ orderBy: { recordedAt: "desc" } });
@@ -2228,6 +2279,9 @@ export async function getSystemStatus() {
     invoiceEmailEnabled: settings.invoice_email_enabled === "true",
     autoPowerOff: settings.auto_power_off_on_checkout === "true",
     apiKey: settings.api_key || "",
+    meterFailures: Object.keys(settings)
+      .filter((k) => k.startsWith("_meter_fail_") && settings[k] > new Date(Date.now() - 3600_000).toISOString())
+      .map((k) => ({ context: k.replace("_meter_fail_", "").replace(/_/g, " "), lastFail: settings[k] })),
   };
 }
 
@@ -2262,6 +2316,7 @@ export async function logAllConsumption() {
 }
 
 export async function getConsumptionLogs(unitId: number, days: number = 7) {
+  await requireAuth();
   const since = new Date();
   since.setDate(since.getDate() - days);
   return prisma.consumptionLog.findMany({
@@ -2274,6 +2329,7 @@ export async function getConsumptionLogs(unitId: number, days: number = 7) {
 // TOTAL CONSUMPTION HISTORY — aggregated across all units
 // ──────────────────────────────────────────────
 export async function getTotalConsumptionHistory(period: "week" | "month" = "week") {
+  await requireAuth();
   const since = new Date();
   if (period === "week") {
     since.setDate(since.getDate() - 90); // last ~13 weeks
@@ -2343,6 +2399,7 @@ export async function getTotalConsumptionHistory(period: "week" | "month" = "wee
 // TOTAL USAGE — current consumption rate per hour
 // ──────────────────────────────────────────────
 export async function getTotalUsage() {
+  await requireAuth();
   const units = await prisma.unit.findMany({
     select: { id: true, name: true, type: true, hardware: true },
   });
@@ -2421,6 +2478,7 @@ export async function getTotalUsage() {
 // CSV EXPORT — accounting
 // ──────────────────────────────────────────────
 export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
+  await requireAuth();
   const where = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
     : {};
@@ -2550,6 +2608,7 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
 }
 
 export async function exportInvoicesCSV() {
+  await requireAuth();
   const invoices = await prisma.invoice.findMany({
     include: { unit: true },
     orderBy: { periodEnd: "desc" },
@@ -2711,7 +2770,7 @@ export async function checkConsumptionAlarms(): Promise<{
         }
       }
     } catch (e) {
-      console.error("Leak detection error:", e);
+      logger.error("meter", "Leak detection error", e);
     }
   }
 
@@ -2722,12 +2781,14 @@ export async function checkConsumptionAlarms(): Promise<{
 // SPOT PRICES — daily hourly prices for chart
 // ──────────────────────────────────────────────
 export async function getLatestSpotPriceDate() {
+  await requireAuth();
   const pricing = await getPricing();
   const { getAvailableDateRange } = await import("./energi-data-service");
   return getAvailableDateRange(pricing.edsPriceArea);
 }
 
 export async function testEdsApi() {
+  await requireAuth();
   const pricing = await getPricing();
   const { getAvailableDateRange, fetchSpotPricesForDate } = await import("./energi-data-service");
   try {
@@ -2754,6 +2815,7 @@ export async function testEdsApi() {
 }
 
 export async function getSpotPricesForDate(date: string) {
+  await requireAuth();
   const pricing = await getPricing();
   const { fetchSpotPricesForDate } = await import("./energi-data-service");
   const prices = await fetchSpotPricesForDate(date, pricing.edsPriceArea);
@@ -2768,6 +2830,7 @@ export async function getSpotPricesForDate(date: string) {
 
 // Get hourly consumption rate for a given date (from consumption logs)
 export async function getHourlyConsumptionForDate(date: string) {
+  await requireAuth();
   const startOfDay = new Date(`${date}T00:00:00`);
   const endOfDay = new Date(`${date}T23:59:59`);
 
@@ -2815,6 +2878,7 @@ export async function getHourlyConsumptionForDate(date: string) {
 
 // Get average hourly consumption over last N days (for estimated overlay)
 export async function getAverageHourlyConsumption(days: number = 7) {
+  await requireAuth();
   const endDate = new Date();
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
@@ -2951,6 +3015,7 @@ export async function createInvoicePayment(invoiceId: number) {
 }
 
 export async function testQuickPay() {
+  await requireAuth();
   const { testQuickPayConnection } = await import("./quickpay");
   return testQuickPayConnection();
 }
@@ -2979,6 +3044,7 @@ export async function getEconomySummary(): Promise<{
   unpaidInvoices: { id: number; unitName: string; total: number; periodEnd: string }[];
   laundryTotals: { total: number; count: number; paid: number };
 }> {
+  await requireAuth();
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
 
   const [sessions, invoices, laundrySessions] = await Promise.all([
@@ -3098,6 +3164,7 @@ export async function getEconomySummary(): Promise<{
 // ADD SHELLY DEVICE via HA Config Flow
 // ──────────────────────────────────────────────
 export async function addShellyDevice(host: string, port: number = 80): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
   if (!host.trim()) return { ok: false, message: "Angiv en IP-adresse eller hostname" };
 
   try {
@@ -3192,6 +3259,7 @@ async function getHAConfigInternal(): Promise<{ url: string; token: string }> {
 // LAUNDRY MACHINES — shared facility management
 // ──────────────────────────────────────────────
 export async function getLaundryMachines() {
+  await requireAuth();
   return prisma.laundryMachine.findMany({
     orderBy: { name: "asc" },
     include: {
@@ -3215,6 +3283,7 @@ export async function createLaundryMachine(data: {
   code?: string | null;
   location?: string | null;
 }) {
+  await requireAuth();
   await prisma.laundryMachine.create({
     data: {
       name: data.name,
@@ -3245,6 +3314,7 @@ export async function updateLaundryMachine(id: number, data: {
   code?: string | null;
   location?: string | null;
 }) {
+  await requireAuth();
   await prisma.laundryMachine.update({
     where: { id },
     data: {
@@ -3265,6 +3335,7 @@ export async function updateLaundryMachine(id: number, data: {
 }
 
 export async function deleteLaundryMachine(id: number) {
+  await requireAuth();
   await prisma.laundryMachine.delete({ where: { id } });
   revalidatePath("/admin/settings");
 }
@@ -3436,7 +3507,7 @@ export async function createLaundryPayment(
       },
     });
 
-    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { console.error("laundry on:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { logger.error("laundry", "laundry on", e); }
     return { ok: true, message: `${machine.name} startet med kredit — kører i ${machine.durationMinutes} minutter` };
   }
 
@@ -3469,7 +3540,7 @@ export async function createLaundryPayment(
       where: { id: laundrySess.id },
       data: { status: "ACTIVE", paymentStatus: "PAID" },
     });
-    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { console.error("laundry on:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { logger.error("laundry", "laundry on", e); }
     return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
   }
 
@@ -3530,7 +3601,7 @@ export async function activateLaundrySession(laundrySessionId: number) {
     const autoOffSec = sess.machine.durationMinutes * 60 + 120;
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), autoOffSec);
   } catch (e) {
-    console.error("Failed to turn on laundry machine:", e);
+    logger.error("laundry", "Failed to turn on laundry machine", e);
   }
 }
 
@@ -3594,7 +3665,7 @@ export async function checkLaundryMachines() {
     try {
       await hardware.setSwitch(hardware.switchRowEp(session.machine), false);
     } catch (e) {
-      console.error(`Failed to turn off laundry machine ${session.machine.name}:`, e);
+      logger.error("laundry", `Failed to turn off laundry machine ${session.machine.name}`, e);
     }
 
     // Mark completed
@@ -3621,6 +3692,7 @@ export async function checkLaundryMachines() {
 // SERVICES — Admin overview & control
 // ──────────────────────────────────────────────
 export async function getServiceStatus() {
+  await requireAuth();
   // Auto-expire stale PENDING sessions (older than 5 minutes)
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
   await prisma.laundrySess.updateMany({
@@ -3670,6 +3742,7 @@ export async function getServiceStatus() {
 }
 
 export async function adminStartLaundry(machineId: number, durationMinutes: number) {
+  await requireAuth();
   const machine = await prisma.laundryMachine.findUnique({ where: { id: machineId } });
   if (!machine) return { ok: false, message: "Maskine ikke fundet" };
 
@@ -3709,6 +3782,7 @@ export async function adminStartLaundry(machineId: number, durationMinutes: numb
 }
 
 export async function adminExtendLaundry(laundrySessionId: number, extraMinutes: number) {
+  await requireAuth();
   const sess = await prisma.laundrySess.findUnique({ where: { id: laundrySessionId } });
   if (!sess || sess.status !== "ACTIVE") return { ok: false, message: "Ingen aktiv session" };
 
@@ -3724,6 +3798,7 @@ export async function adminExtendLaundry(laundrySessionId: number, extraMinutes:
 }
 
 export async function adminStopLaundry(laundrySessionId: number) {
+  await requireAuth();
   const sess = await prisma.laundrySess.findUnique({
     where: { id: laundrySessionId },
     include: { machine: true },
@@ -3748,6 +3823,7 @@ export async function adminStopLaundry(laundrySessionId: number) {
 // LAUNDRY CREDIT — Admin adds credit to booking
 // ──────────────────────────────────────────────
 export async function addLaundryCredit(sessionId: number, amount: number) {
+  await requireAuth();
   if (amount <= 0) return { ok: false, message: "Beløb skal være positivt" };
   const session = await prisma.session.findUnique({ where: { id: sessionId } });
   if (!session) return { ok: false, message: "Booking ikke fundet" };
@@ -3762,6 +3838,7 @@ export async function addLaundryCredit(sessionId: number, amount: number) {
 
 export async function removeLaundryCredit(sessionId: number, amount: number) {
   "use server";
+  await requireAuth();
   if (amount <= 0) return { ok: false, message: "Beløb skal være positivt" };
   const session = await prisma.session.findUnique({ where: { id: sessionId } });
   if (!session) return { ok: false, message: "Booking ikke fundet" };
@@ -3779,6 +3856,7 @@ export async function removeLaundryCredit(sessionId: number, amount: number) {
 }
 
 export async function getSessionLaundryCredit(sessionId: number): Promise<number> {
+  await requireAuth();
   const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { laundryCredit: true } });
   return session?.laundryCredit ?? 0;
 }
@@ -3788,6 +3866,7 @@ export async function getSessionLaundryCredit(sessionId: number): Promise<number
 // ══════════════════════════════════════════════
 
 export async function getLaundryGroups() {
+  await requireAuth();
   return prisma.laundryGroup.findMany({
     include: { machines: { select: { id: true, name: true } } },
     orderBy: { createdAt: "asc" },
@@ -3796,6 +3875,7 @@ export async function getLaundryGroups() {
 
 export async function createLaundryGroup(name: string, machineIds: number[]) {
   "use server";
+  await requireAuth();
   const token = uuidv4().replace(/-/g, "").slice(0, 12);
   const group = await prisma.laundryGroup.create({
     data: { name, token },
@@ -3811,6 +3891,7 @@ export async function createLaundryGroup(name: string, machineIds: number[]) {
 
 export async function updateLaundryGroup(groupId: number, name: string, machineIds: number[]) {
   "use server";
+  await requireAuth();
   await prisma.laundryGroup.update({
     where: { id: groupId },
     data: { name },
@@ -3831,6 +3912,7 @@ export async function updateLaundryGroup(groupId: number, name: string, machineI
 
 export async function deleteLaundryGroup(groupId: number) {
   "use server";
+  await requireAuth();
   // Unlink machines first
   await prisma.laundryMachine.updateMany({
     where: { groupId },
@@ -3934,7 +4016,7 @@ export async function createPublicLaundryPayment(
         paymentStatus: "PAID",
       },
     });
-    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { console.error("laundry on:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { logger.error("laundry", "laundry on", e); }
     return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
   }
 
@@ -3985,6 +4067,7 @@ const SHOWER_WARMUP_MS = 10 * 1000;      // 10 s warmup before relay turns on
 
 // ── Admin CRUD ────────────────────────────────────────────────
 export async function getShowers() {
+  await requireAuth();
   return prisma.shower.findMany({
     orderBy: { name: "asc" },
     include: {
@@ -4009,6 +4092,7 @@ export async function createShower(data: {
   code: string | null;
   location: string | null;
 }) {
+  await requireAuth();
   await prisma.shower.create({
     data: {
       name: data.name,
@@ -4040,6 +4124,7 @@ export async function updateShower(id: number, data: {
   code: string | null;
   location: string | null;
 }) {
+  await requireAuth();
   await prisma.shower.update({
     where: { id },
     data: {
@@ -4061,6 +4146,7 @@ export async function updateShower(id: number, data: {
 }
 
 export async function deleteShower(id: number) {
+  await requireAuth();
   await prisma.shower.delete({ where: { id } });
   revalidatePath("/admin/settings");
   revalidatePath("/admin/services");
@@ -4068,6 +4154,7 @@ export async function deleteShower(id: number) {
 
 // Admin view of all showers with status
 export async function getShowerStatus() {
+  await requireAuth();
   await expireStaleShowerPendings();
   const showers = await prisma.shower.findMany({
     orderBy: { name: "asc" },
@@ -4361,7 +4448,7 @@ export async function startShowerRelay(showerSessionId: number, accessToken?: st
     // Turn on relay with hardware auto-off safety net (remaining time + 60s buffer)
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), remainingSec + 60);
   } catch (e) {
-    console.error("Shower relay start failed:", e);
+    logger.error("shower", "Shower relay start failed", e);
     return { ok: false, message: "Kunne ikke tænde bruser" };
   }
 
@@ -4410,7 +4497,7 @@ export async function applyShowerExtension(showerSessionId: number) {
       try {
         await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), remainingSec + 60);
       } catch (e) {
-        console.error("Shower extension re-arm auto-off:", e);
+        logger.error("shower", "Shower extension re-arm auto-off", e);
       }
     }
   }
@@ -4508,7 +4595,7 @@ export async function pauseShower(showerSessionId: number, accessToken?: string)
     },
   });
 
-  try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { console.error("Shower pause off:", e); }
+  try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { logger.error("shower", "Shower pause off", e); }
 
   return { ok: true, message: "Pause" };
 }
@@ -4541,7 +4628,7 @@ export async function resumeShower(showerSessionId: number, accessToken?: string
     // Re-arm hardware auto-off for the remaining time + buffer
     const autoOffSec = Math.ceil(remainingMs / 1000) + 60;
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), autoOffSec);
-  } catch (e) { console.error("Shower resume on:", e); }
+  } catch (e) { logger.error("shower", "Shower resume on", e); }
 
   return { ok: true, message: "Fortsat" };
 }
@@ -4610,6 +4697,7 @@ export async function extendShowerPayment(
 
 /** Admin manual stop. */
 export async function adminStopShower(showerSessionId: number) {
+  await requireAuth();
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
@@ -4650,7 +4738,7 @@ export async function completeExpiredShower(showerSessionId: number) {
   try {
     await hardware.setSwitch(hardware.switchRowEp(sess.shower), false);
   } catch (e) {
-    console.error("completeExpiredShower relay off:", e);
+    logger.error("shower", "completeExpiredShower relay off", e);
   }
 }
 
@@ -4676,7 +4764,7 @@ export async function completeExpiredLaundry(laundrySessionId: number) {
   try {
     await hardware.setSwitch(hardware.switchRowEp(sess.machine), false);
   } catch (e) {
-    console.error("completeExpiredLaundry relay off:", e);
+    logger.error("laundry", "completeExpiredLaundry relay off", e);
   }
 }
 
@@ -4711,7 +4799,7 @@ export async function checkShowerSessions() {
     try {
       const autoOffSec = Math.ceil(remainingMs / 1000) + 60; // +60s safety margin
       await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), autoOffSec);
-    } catch (e) { console.error("Auto-resume on:", e); }
+    } catch (e) { logger.error("shower", "Auto-resume on", e); }
   }
 
   // 2) Expire active sessions whose endsAt has passed
@@ -4720,7 +4808,7 @@ export async function checkShowerSessions() {
     include: { shower: true },
   });
   for (const sess of expired) {
-    try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { console.error("Shower close:", e); }
+    try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { logger.error("shower", "Shower close", e); }
     await prisma.showerSess.update({
       where: { id: sess.id },
       data: { status: "COMPLETED" },

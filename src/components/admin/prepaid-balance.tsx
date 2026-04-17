@@ -36,9 +36,9 @@ export function PrepaidBalance({ sessionId, prepaidAmount, accumulatedCost, isAc
   }
 
   return (
-    <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+    <section className="rounded-xl border border-border/60 bg-card shadow-sm" aria-label="Forudbetalt saldo">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <Wallet className="h-4 w-4 text-blue-500" />
+        <Wallet className="h-4 w-4 text-blue-500" aria-hidden="true" />
         <h2 className="font-semibold">Forudbetalt saldo</h2>
       </div>
       <div className="p-5 space-y-4">
@@ -109,6 +109,6 @@ export function PrepaidBalance({ sessionId, prepaidAmount, accumulatedCost, isAc
           </>
         )}
       </div>
-    </div>
+    </section>
   );
 }

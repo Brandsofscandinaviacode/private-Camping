@@ -13,6 +13,7 @@ import {
 import { refreshSpotPriceCache, cleanOldSpotPrices } from "@/lib/energi-data-service";
 import { authenticateAPI } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 
 // GET /api/cron — Called every 2 minutes.
 //
@@ -39,6 +40,8 @@ export async function GET(req: NextRequest) {
     const showerResult = await checkShowerSessions();
 
     // ── Should we run heavy tasks? ───────────────────────────
+    // Atomic check-and-set: only one cron invocation runs heavy tasks at a time.
+    // Uses updateMany with a WHERE guard on the timestamp to prevent overlap.
     let lastFullRun = 0;
     try {
       const row = await prisma.globalSetting.findUnique({
@@ -48,7 +51,32 @@ export async function GET(req: NextRequest) {
     } catch { /* treat as never run */ }
 
     const sinceLastFull = Date.now() - lastFullRun;
-    const runHeavy = sinceLastFull >= HEAVY_INTERVAL_MS;
+    let runHeavy = sinceLastFull >= HEAVY_INTERVAL_MS;
+
+    if (runHeavy) {
+      const lockValue = new Date().toISOString();
+      const prevValue = lastFullRun ? new Date(lastFullRun).toISOString() : null;
+      try {
+        if (prevValue) {
+          const locked = await prisma.globalSetting.updateMany({
+            where: { key: "_cron_last_full_run", value: prevValue },
+            data: { value: lockValue },
+          });
+          if (locked.count === 0) {
+            runHeavy = false;
+            logger.info("cron", "Heavy task lock already taken by another instance, skipping");
+          }
+        } else {
+          await prisma.globalSetting.upsert({
+            where: { key: "_cron_last_full_run" },
+            create: { key: "_cron_last_full_run", value: lockValue },
+            update: { value: lockValue },
+          });
+        }
+      } catch {
+        runHeavy = false;
+      }
+    }
 
     let spotCacheResult = { fetched: 0, cleaned: 0 };
     let tickResult: Awaited<ReturnType<typeof tickAllSessionConsumption>> | null = null;

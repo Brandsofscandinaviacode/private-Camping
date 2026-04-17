@@ -46,8 +46,8 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
           </div>
           <span className="text-base font-bold text-sidebar-accent-foreground">CampSense</span>
         </Link>
-        <button onClick={() => setOpen(true)} className="p-2 rounded-lg hover:bg-sidebar-accent transition-colors">
-          <Menu className="h-5 w-5" />
+        <button onClick={() => setOpen(true)} aria-label="Åbn menu" className="p-2 rounded-lg hover:bg-sidebar-accent transition-colors">
+          <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
 
@@ -55,15 +55,15 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
       {open && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
-          <aside className="absolute left-0 top-0 bottom-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col animate-in slide-in-from-left duration-200">
+          <aside className="absolute left-0 top-0 bottom-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col animate-in slide-in-from-left duration-200" role="dialog" aria-label="Navigation menu">
             <div className="px-5 py-4 border-b border-sidebar-border flex items-center justify-between">
               <span className="text-base font-semibold text-sidebar-accent-foreground">CampSense</span>
-              <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg hover:bg-sidebar-accent">
-                <X className="h-5 w-5" />
+              <button onClick={() => setOpen(false)} aria-label="Luk menu" className="p-1.5 rounded-lg hover:bg-sidebar-accent">
+                <X className="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
 
-            <nav className="flex-1 px-3 pt-4 overflow-y-auto">
+            <nav className="flex-1 px-3 pt-4 overflow-y-auto" aria-label="Admin navigation">
               {["Oversigt", "System"].map((section) => (
                 <div key={section}>
                   <p className="px-3 mb-2 mt-4 first:mt-0 text-[11px] font-medium uppercase tracking-wider text-sidebar-foreground/40">

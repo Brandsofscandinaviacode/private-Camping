@@ -22,6 +22,7 @@
 import mqtt from "mqtt";
 import type { MqttClient, IClientOptions, IClientPublishOptions } from "mqtt";
 import { prisma } from "./prisma";
+import { logger } from "./logger";
 
 interface CachedMessage {
   payload: string;
@@ -57,6 +58,7 @@ class MqttClientWrapper {
   private cache = new Map<string, CachedMessage>();
   private subscribed = new Set<string>();
   private connectPromise: Promise<MqttClient | null> | null = null;
+  private reconnecting: Promise<MqttClient | null> | null = null;
   private lastConfigKey = "";
 
   /**
@@ -119,7 +121,7 @@ class MqttClientWrapper {
           this.cache.set(topic, { payload: payload.toString(), receivedAt: new Date() });
         });
         c.on("error", (err) => {
-          console.error("MQTT error:", err.message);
+          logger.error("mqtt", "Connection error", err.message);
         });
         c.on("close", () => {
           // mqtt.js will auto-reconnect via reconnectPeriod; subscriptions are
@@ -135,7 +137,7 @@ class MqttClientWrapper {
         this.client = c;
         return c;
       } catch (e) {
-        console.error("MQTT connect failed:", e instanceof Error ? e.message : e);
+        logger.error("mqtt", "Connect failed", e instanceof Error ? e.message : e);
         await this.teardown();
         return null;
       } finally {
@@ -154,7 +156,7 @@ class MqttClientWrapper {
     return new Promise<boolean>((resolve) => {
       c.subscribe(topic, { qos: 0 }, (err) => {
         if (err) {
-          console.error(`MQTT subscribe failed [${topic}]:`, err.message);
+          logger.error("mqtt", `Subscribe failed [${topic}]`, err.message);
           resolve(false);
         } else {
           this.subscribed.add(topic);
@@ -210,11 +212,20 @@ class MqttClientWrapper {
 
   /** Force a reconnect (e.g. after config change in admin UI). */
   async reconnect(): Promise<MqttClient | null> {
-    await this.teardown();
-    return this.ensureConnected();
+    if (this.reconnecting) return this.reconnecting;
+    this.reconnecting = (async () => {
+      try {
+        await this.teardown();
+        return await this.ensureConnected();
+      } finally {
+        this.reconnecting = null;
+      }
+    })();
+    return this.reconnecting;
   }
 
   private async teardown(): Promise<void> {
+    this.connectPromise = null;
     if (this.client) {
       try {
         this.client.end(true);

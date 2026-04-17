@@ -210,12 +210,14 @@ model Session {
 
   laundrySessions LaundrySess[]
   showerSessions  ShowerSess[]
+  prepaidTopUps   PrepaidTopUp[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])              // tickAllSessionConsumption, admin dashboards
   @@index([unitId, status])      // getActiveSessionForUnit, getLiveConsumption
+  @@index([status, billingMode]) // checkPrepaidBalances
   @@map("sessions")
 }
 
@@ -366,7 +368,7 @@ model ShowerSess {
 
   // Optional link to guest session (null for day guests)
   sessionId       Int?
-  session         Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  session         Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   startedAt       DateTime @default(now())
   endsAt          DateTime                          // When the shower will auto-close (adjusted on pause/extend)
@@ -429,4 +431,19 @@ model LaundrySess {
   createdAt DateTime @default(now())
 
   @@map("laundry_sessions")
+}
+
+// ──────────────────────────────────────────────
+// Prepaid Top-Up (idempotent payment processing)
+// ──────────────────────────────────────────────
+model PrepaidTopUp {
+  id           Int      @id @default(autoincrement())
+  sessionId    Int
+  session      Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  paymentId    String   @unique                      // QuickPay transaction ID — ensures idempotency
+  amount       Float                                 // DKK amount topped up
+  appliedAt    DateTime @default(now())
+
+  @@index([sessionId])
+  @@map("prepaid_topups")
 }

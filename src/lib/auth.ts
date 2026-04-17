@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getIronSession } from "iron-session";
 import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
+import { logger } from "./logger";
 
 interface SessionData {
   userId?: number;
@@ -12,14 +13,17 @@ interface SessionData {
   isLoggedIn: boolean;
 }
 
+if (!process.env.SESSION_SECRET) {
+  throw new Error(
+    "SESSION_SECRET env var is required. Generate one with: openssl rand -base64 32",
+  );
+}
+
 const sessionOptions = {
-  password:
-    process.env.SESSION_SECRET ||
-    "campsense-default-secret-change-me-in-production-32chars!",
+  password: process.env.SESSION_SECRET,
   cookieName: "campsense-session",
   cookieOptions: {
-    // secure: false — RPi kører over HTTP på LAN, cookies virker ikke med secure over HTTP
-    secure: false,
+    secure: process.env.FORCE_HTTPS === "true",
     httpOnly: true,
     sameSite: "lax" as const,
     maxAge: 60 * 60 * 24 * 7, // 7 dage
@@ -51,7 +55,7 @@ export async function login(username: string, password: string) {
 
     return { success: true };
   } catch (e) {
-    console.error("Login fejl:", e);
+    logger.error("auth", "Login fejl", e);
     return { error: "Der opstod en serverfejl. Tjek logs." };
   }
 }

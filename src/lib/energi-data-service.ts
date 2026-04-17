@@ -13,6 +13,7 @@
 //      we don't have cached yet
 
 import { prisma } from "./prisma";
+import { logger } from "./logger";
 
 // ──────────────────────────────────────────────
 // API response type from elprisenligenu.dk
@@ -159,7 +160,7 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
 
     return null;
   } catch (e) {
-    console.error("getCurrentSpotPrice fejl:", e);
+    logger.error("eds", "getCurrentSpotPrice fejl", e);
     return null;
   }
 }
@@ -209,7 +210,7 @@ export async function fetchSpotPricesForDate(
       pricePerKwh: p.SpotPriceDKK / 1000,
     }));
   } catch (e) {
-    console.error("Elpris API fejl for dato", date, e);
+    logger.error("eds", `Elpris API fejl for dato ${date}`, e);
     return [];
   }
 }
@@ -272,7 +273,7 @@ export async function refreshSpotPriceCache(area: "DK1" | "DK2" = "DK1"): Promis
           totalFetched += records.length;
         }
       } catch (e) {
-        console.error("Elpris cache refresh fejl (i dag):", e);
+        logger.error("eds", "Elpris cache refresh fejl (i dag)", e);
       }
     }
 
@@ -298,15 +299,15 @@ export async function refreshSpotPriceCache(area: "DK1" | "DK2" = "DK1"): Promis
 
     return { fetched: totalFetched };
   } catch (e) {
-    console.error("Elpris cache refresh fejl:", e);
+    logger.error("eds", "Elpris cache refresh fejl", e);
     return { fetched: 0 };
   }
 }
 
-/** Clean up old cache entries (older than 30 days) */
+/** Clean up old cache entries (older than 90 days) */
 export async function cleanOldSpotPrices(): Promise<number> {
   try {
-    const cutoff = new Date(Date.now() - 30 * 24 * 3600_000);
+    const cutoff = new Date(Date.now() - 90 * 24 * 3600_000);
     const result = await prisma.spotPriceCache.deleteMany({
       where: { hourDK: { lt: cutoff.toISOString().slice(0, 13) + ":00" } },
     });

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import DOMPurify from "isomorphic-dompurify";
 import {
   Tent,
   Zap,
@@ -716,10 +717,14 @@ export function GuestPortalClient({
               {(() => {
                 const info = practicalInfo[locale] || practicalInfo.da;
                 if (!info) return null;
+                const sanitized = DOMPurify.sanitize(info, {
+                  ALLOWED_TAGS: ["p", "br", "strong", "em", "b", "i", "a", "ul", "ol", "li", "h3", "h4", "span"],
+                  ALLOWED_ATTR: ["href", "target", "rel", "class"],
+                });
                 return (
                   <div
                     className="text-sm text-muted-foreground leading-relaxed prose prose-sm max-w-none [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h3]:text-foreground [&_h3]:font-semibold [&_h3]:text-base [&_h4]:text-foreground [&_h4]:font-medium [&_p]:my-1"
-                    dangerouslySetInnerHTML={{ __html: info }}
+                    dangerouslySetInnerHTML={{ __html: sanitized }}
                   />
                 );
               })()}
