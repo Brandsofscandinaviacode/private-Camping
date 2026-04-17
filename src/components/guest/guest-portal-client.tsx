@@ -1073,12 +1073,20 @@ function GuestServicesSection({
   const locationLabel = selectedLocation === NO_LOCATION_KEY
     ? labels.noLocation
     : items[0]?.location?.trim() || selectedLocation;
+  const hasMultipleLocations = getLocationsFor(selectedType).length > 1;
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => setSelectedLocation(null)}
+          onClick={() => {
+            if (hasMultipleLocations) {
+              setSelectedLocation(null);
+            } else {
+              setSelectedLocation(null);
+              setSelectedType(null);
+            }
+          }}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
