@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown,
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -1244,6 +1244,173 @@ export function PaymentSettings({ settings }: SettingsFormProps) {
           <p className="pt-2 text-xs">Callback URL: <code className="bg-muted px-1.5 py-0.5 rounded">{"{site_url}"}/api/quickpay/callback</code></p>
         </div>
       </div>
+
+      <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+    </div>
+  );
+}
+
+// ─── ACCOUNTING TAB ───
+export function AccountingSettings({ settings }: SettingsFormProps) {
+  const [values, setValues] = useState({
+    accounting_provider: settings.accounting_provider || "none",
+    economic_app_secret_token: settings.economic_app_secret_token || "",
+    economic_agreement_grant_token: settings.economic_agreement_grant_token || "",
+    economic_payment_terms_number: settings.economic_payment_terms_number || "1",
+    economic_product_number: settings.economic_product_number || "1",
+    economic_vat_zone_number: settings.economic_vat_zone_number || "1",
+    economic_customer_group_number: settings.economic_customer_group_number || "1",
+  });
+  const { isPending, saved, handleSave } = useSave(values);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ invoices?: string; sessions?: string } | null>(null);
+
+  function h(key: string, value: string) {
+    setValues((v) => ({ ...v, [key]: value }));
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await updateMultipleSettings(Object.entries(values).map(([key, value]) => ({ key, value })));
+      const result = await testAccountingConnection();
+      setTestResult(result);
+    } catch {
+      setTestResult({ ok: false, message: "Uventet fejl under test" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      await updateMultipleSettings(Object.entries(values).map(([key, value]) => ({ key, value })));
+      const [invRes, sessRes] = await Promise.all([
+        syncInvoicesToAccounting(),
+        syncSessionsToAccounting(),
+      ]);
+      setSyncResult({
+        invoices: `${invRes.synced} synkroniseret, ${invRes.skipped} sprunget over${invRes.errors.length > 0 ? `, ${invRes.errors.length} fejl` : ""}`,
+        sessions: `${sessRes.synced} synkroniseret, ${sessRes.skipped} sprunget over${sessRes.errors.length > 0 ? `, ${sessRes.errors.length} fejl` : ""}`,
+      });
+    } catch (e) {
+      setSyncResult({ invoices: e instanceof Error ? e.message : "Fejl ved synkronisering" });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const isEconomic = values.accounting_provider === "economic";
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Bogføringssystem</h2>
+          <p className="text-xs text-muted-foreground mt-1">Synkronisér fakturaer og betalingsdata til dit økonomisystem</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <Label className="text-sm text-muted-foreground">Udbyder</Label>
+            <select
+              value={values.accounting_provider}
+              onChange={(e) => h("accounting_provider", e.target.value)}
+              className="mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm"
+            >
+              <option value="none">Ingen (deaktiveret)</option>
+              <option value="economic">e-conomic (Visma)</option>
+            </select>
+          </div>
+
+          {isEconomic && (
+            <div className="space-y-3 pt-2 border-t border-border">
+              <p className="text-xs text-muted-foreground">
+                Opret en app på{" "}
+                <a href="https://secure.e-conomic.com/settings/extensions/apps" target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                  e-conomic Developer
+                </a>{" "}
+                og generer en aftale-token.
+              </p>
+              <div>
+                <Label className="text-sm text-muted-foreground">App Secret Token</Label>
+                <Input type="password" value={values.economic_app_secret_token} onChange={(e) => h("economic_app_secret_token", e.target.value)} placeholder="Din app-hemmelige nøgle" className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Agreement Grant Token</Label>
+                <Input type="password" value={values.economic_agreement_grant_token} onChange={(e) => h("economic_agreement_grant_token", e.target.value)} placeholder="Aftale-token fra e-conomic" className="mt-1" />
+              </div>
+
+              <details className="pt-2">
+                <summary className="text-sm font-medium cursor-pointer text-muted-foreground hover:text-foreground">
+                  Avancerede indstillinger
+                </summary>
+                <div className="space-y-3 pt-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Betalingsbetingelse nr.</Label>
+                      <Input type="number" min="1" value={values.economic_payment_terms_number} onChange={(e) => h("economic_payment_terms_number", e.target.value)} className="mt-1" />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Produkt nr.</Label>
+                      <Input type="number" min="1" value={values.economic_product_number} onChange={(e) => h("economic_product_number", e.target.value)} className="mt-1" />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Momszone nr.</Label>
+                      <Input type="number" min="1" value={values.economic_vat_zone_number} onChange={(e) => h("economic_vat_zone_number", e.target.value)} className="mt-1" />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Kundegruppe nr.</Label>
+                      <Input type="number" min="1" value={values.economic_customer_group_number} onChange={(e) => h("economic_customer_group_number", e.target.value)} className="mt-1" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Disse numre skal matche opsætningen i dit e-conomic. Find dem under Indstillinger i e-conomic.
+                  </p>
+                </div>
+              </details>
+
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || !values.economic_app_secret_token}>
+                  {testing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Cloud className="h-4 w-4 mr-2" />}
+                  {testing ? "Tester..." : "Test forbindelse"}
+                </Button>
+              </div>
+              {testResult && (
+                <div className={`flex items-start gap-2.5 text-sm p-3 rounded-lg ${testResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                  {testResult.ok ? <Cloud className="h-4 w-4 shrink-0 mt-0.5" /> : <Shield className="h-4 w-4 shrink-0 mt-0.5" />}
+                  <span>{testResult.message}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {isEconomic && values.economic_app_secret_token && (
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="font-semibold">Synkronisér</h2>
+            <p className="text-xs text-muted-foreground mt-1">Overfør usynkroniserede fakturaer og afsluttede ophold til e-conomic</p>
+          </div>
+          <div className="p-5 space-y-3">
+            <Button onClick={handleSync} disabled={syncing} size="sm">
+              {syncing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Cloud className="h-4 w-4 mr-2" />}
+              {syncing ? "Synkroniserer..." : "Synkronisér nu"}
+            </Button>
+            {syncResult && (
+              <div className="text-sm space-y-1 p-3 rounded-lg bg-muted">
+                {syncResult.invoices && <p><strong>Fakturaer:</strong> {syncResult.invoices}</p>}
+                {syncResult.sessions && <p><strong>Ophold:</strong> {syncResult.sessions}</p>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
     </div>

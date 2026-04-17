@@ -4823,3 +4823,195 @@ export async function checkShowerSessions() {
     completed: expired.length,
   };
 }
+
+// ─── Accounting Sync ───────────────────────────────────────────────
+
+export async function testAccountingConnection(): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const providerType = (settings.accounting_provider || "none") as import("./accounting").AccountingProviderType;
+  const { getAccountingProvider } = await import("./accounting");
+  const provider = getAccountingProvider(providerType, settings);
+  if (!provider) return { ok: false, message: "Ingen bogføringssystem valgt" };
+  return provider.testConnection();
+}
+
+export async function syncInvoicesToAccounting(): Promise<{
+  synced: number;
+  skipped: number;
+  errors: { invoiceId: number; error: string }[];
+}> {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const providerType = (settings.accounting_provider || "none") as import("./accounting").AccountingProviderType;
+  const { getAccountingProvider } = await import("./accounting");
+  const provider = getAccountingProvider(providerType, settings);
+  if (!provider) return { synced: 0, skipped: 0, errors: [{ invoiceId: 0, error: "Ingen bogføringssystem konfigureret" }] };
+
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      accountingSyncId: null,
+      status: { in: ["PENDING", "PAID", "OVERDUE"] },
+    },
+    include: { unit: true },
+    orderBy: { periodEnd: "asc" },
+  });
+
+  const currency = settings.currency || "DKK";
+  let synced = 0;
+  let skipped = 0;
+  const errors: { invoiceId: number; error: string }[] = [];
+
+  for (const inv of invoices) {
+    const lines: import("./accounting").AccountingInvoiceLine[] = [];
+
+    if (inv.electricityCost > 0) {
+      const kwh = inv.endKwh != null && inv.startKwh != null
+        ? Math.max(0, inv.endKwh - inv.startKwh) : 0;
+      lines.push({
+        description: `Elektricitet — ${inv.unit.name} (${kwh.toFixed(2)} kWh)`,
+        quantity: 1,
+        unitPrice: inv.electricityCost,
+        unit: "stk",
+      });
+    }
+
+    if (inv.waterCost > 0) {
+      const liters = inv.endWaterLiters != null && inv.startWaterLiters != null
+        ? Math.max(0, inv.endWaterLiters - inv.startWaterLiters) : 0;
+      lines.push({
+        description: `Vand — ${inv.unit.name} (${liters.toFixed(0)} liter)`,
+        quantity: 1,
+        unitPrice: inv.waterCost,
+        unit: "stk",
+      });
+    }
+
+    if (lines.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    const guestName = inv.unit.longTermGuestName || inv.unit.name;
+    const guestEmail = inv.unit.longTermGuestEmail || undefined;
+
+    const result = await provider.syncInvoice({
+      internalId: inv.id,
+      customerName: guestName,
+      customerEmail: guestEmail,
+      unitName: inv.unit.name,
+      periodStart: inv.periodStart,
+      periodEnd: inv.periodEnd,
+      lines,
+      totalAmount: inv.totalAmount,
+      currency,
+      paidAt: inv.paidAt || undefined,
+      paymentId: inv.paymentId || undefined,
+    });
+
+    if (result.ok && result.externalId) {
+      await prisma.invoice.update({
+        where: { id: inv.id },
+        data: { accountingSyncId: result.externalId, accountingSyncAt: new Date() },
+      });
+      synced++;
+    } else {
+      errors.push({ invoiceId: inv.id, error: result.error || "Ukendt fejl" });
+    }
+  }
+
+  logger.info("accounting", "Invoice sync completed", { synced, skipped, errors: errors.length });
+  revalidatePath("/admin/economy");
+  return { synced, skipped, errors };
+}
+
+export async function syncSessionsToAccounting(): Promise<{
+  synced: number;
+  skipped: number;
+  errors: { sessionId: number; error: string }[];
+}> {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const providerType = (settings.accounting_provider || "none") as import("./accounting").AccountingProviderType;
+  const { getAccountingProvider } = await import("./accounting");
+  const provider = getAccountingProvider(providerType, settings);
+  if (!provider) return { synced: 0, skipped: 0, errors: [{ sessionId: 0, error: "Ingen bogføringssystem konfigureret" }] };
+
+  const sessions = await prisma.session.findMany({
+    where: {
+      accountingSyncId: null,
+      status: "COMPLETED",
+      totalCost: { not: null },
+    },
+    include: { unit: true },
+    orderBy: { checkOutTime: "asc" },
+  });
+
+  const currency = settings.currency || "DKK";
+  let synced = 0;
+  let skipped = 0;
+  const errors: { sessionId: number; error: string }[] = [];
+
+  for (const sess of sessions) {
+    const lines: import("./accounting").AccountingInvoiceLine[] = [];
+
+    if (sess.totalElectricityCost && sess.totalElectricityCost > 0) {
+      const kwh = sess.endKwh != null && sess.startKwh != null
+        ? Math.max(0, sess.endKwh - sess.startKwh) : 0;
+      lines.push({
+        description: `Elektricitet — ${sess.unit.name} (${kwh.toFixed(2)} kWh)`,
+        quantity: 1,
+        unitPrice: sess.totalElectricityCost,
+      });
+    }
+
+    if (sess.totalWaterCost && sess.totalWaterCost > 0) {
+      lines.push({
+        description: `Vand — ${sess.unit.name}`,
+        quantity: 1,
+        unitPrice: sess.totalWaterCost,
+      });
+    }
+
+    if (sess.externalPrice && sess.externalPrice > 0) {
+      lines.push({
+        description: sess.externalDescription || `Ophold — ${sess.unit.name}`,
+        quantity: 1,
+        unitPrice: sess.externalPrice,
+      });
+    }
+
+    if (lines.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    const result = await provider.syncInvoice({
+      internalId: sess.id,
+      customerName: sess.guestName,
+      customerEmail: sess.guestEmail || undefined,
+      unitName: sess.unit.name,
+      periodStart: sess.checkInTime,
+      periodEnd: sess.checkOutTime || new Date(),
+      lines,
+      totalAmount: (sess.totalCost || 0) + (sess.externalPrice || 0),
+      currency,
+      paidAt: sess.paidAt || undefined,
+      paymentId: sess.paymentId || undefined,
+    });
+
+    if (result.ok && result.externalId) {
+      await prisma.session.update({
+        where: { id: sess.id },
+        data: { accountingSyncId: result.externalId, accountingSyncAt: new Date() },
+      });
+      synced++;
+    } else {
+      errors.push({ sessionId: sess.id, error: result.error || "Ukendt fejl" });
+    }
+  }
+
+  logger.info("accounting", "Session sync completed", { synced, skipped, errors: errors.length });
+  revalidatePath("/admin/economy");
+  return { synced, skipped, errors };
+}

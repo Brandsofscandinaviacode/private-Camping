@@ -208,6 +208,10 @@ model Session {
 
   notes String?   // Admin-bemærkninger
 
+  // Accounting system sync
+  accountingSyncId String?
+  accountingSyncAt DateTime?
+
   laundrySessions LaundrySess[]
   showerSessions  ShowerSess[]
   prepaidTopUps   PrepaidTopUp[]
@@ -259,6 +263,10 @@ model Invoice {
 
   // Payment link
   paymentToken String? @unique // UUID for payment page
+
+  // Accounting system sync
+  accountingSyncId String?   // External invoice number from e-conomic etc.
+  accountingSyncAt DateTime? // When it was last synced
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

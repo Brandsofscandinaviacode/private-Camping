@@ -16,6 +16,7 @@ import {
   BarChart3,
   WashingMachine,
   Calendar,
+  Cloud,
 } from "lucide-react";
 import {
   BarChart,
@@ -32,6 +33,8 @@ import {
   exportSessionsCSV,
   exportInvoicesCSV,
   getTotalConsumptionHistory,
+  syncInvoicesToAccounting,
+  syncSessionsToAccounting,
   type MonthlyEconomySummary,
 } from "@/lib/actions";
 
@@ -57,12 +60,15 @@ interface EconomyDashboardProps {
     unpaidInvoices: { id: number; unitName: string; total: number; periodEnd: string }[];
     laundryTotals: { total: number; count: number; paid: number };
   };
+  accountingEnabled?: boolean;
 }
 
-export function EconomyDashboard({ data }: EconomyDashboardProps) {
+export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardProps) {
   const { months, unpaidSessions, unpaidInvoices, laundryTotals } = data;
   const [isPending, startTransition] = useTransition();
   const [exportType, setExportType] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [expandedMonth, setExpandedMonth] = useState<string | null>(
     months.length > 0 ? months[0].month : null
   );
@@ -409,6 +415,38 @@ export function EconomyDashboard({ data }: EconomyDashboardProps) {
             {exportType === "invoices" ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1.5" />}
             Fakturaer (CSV)
           </Button>
+          {accountingEnabled && <Button
+            variant="outline"
+            size="sm"
+            disabled={syncing}
+            onClick={async () => {
+              setSyncing(true);
+              setSyncMsg(null);
+              try {
+                const [invRes, sessRes] = await Promise.all([
+                  syncInvoicesToAccounting(),
+                  syncSessionsToAccounting(),
+                ]);
+                const total = invRes.synced + sessRes.synced;
+                const errors = invRes.errors.length + sessRes.errors.length;
+                if (total === 0 && errors === 0) {
+                  setSyncMsg("Intet at synkronisere — alt er opdateret");
+                } else {
+                  setSyncMsg(`${total} synkroniseret${errors > 0 ? `, ${errors} fejl` : ""}`);
+                }
+              } catch (e) {
+                setSyncMsg(e instanceof Error ? e.message : "Fejl ved synkronisering");
+              } finally {
+                setSyncing(false);
+              }
+            }}
+          >
+            {syncing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5 mr-1.5" />}
+            Synk til bogføring
+          </Button>}
+          {syncMsg && (
+            <p className="w-full text-xs text-muted-foreground mt-1">{syncMsg}</p>
+          )}
         </div>
       </div>
     </div>

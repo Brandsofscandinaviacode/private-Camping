@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users, Radio } from "lucide-react";
+import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users, Radio, BookOpen } from "lucide-react";
 
 const tabs = [
   { id: "general", label: "Generelt", icon: Settings },
@@ -9,6 +9,7 @@ const tabs = [
   { id: "mqtt", label: "MQTT", icon: Radio },
   { id: "notifications", label: "Notifikationer", icon: Bell },
   { id: "payment", label: "Betaling", icon: CreditCard },
+  { id: "accounting", label: "Bogføring", icon: BookOpen },
   { id: "guest", label: "Gæsteportal", icon: Users },
   { id: "hardware", label: "Pladser", icon: MapPin },
   { id: "system", label: "System", icon: Activity },
