@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { LogIn } from "lucide-react";
+import { AlertTriangle, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,6 +48,7 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [copyLabel, setCopyLabel] = useState("Kopiér");
   const [result, setResult] = useState<{
     guestPortalToken: string;
+    hardwareFailures?: { op: string; context: string; error: string }[];
   } | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -222,6 +223,26 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
                 Strøm tændt, målere aflæst, gæsteportal oprettet.
               </p>
             </div>
+            {result.hardwareFailures && result.hardwareFailures.length > 0 && (
+              <div className="p-3 rounded-lg border border-amber-300 bg-amber-50">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="font-medium text-amber-800">
+                      Nogle hardware-handlinger fejlede — tjek manuelt:
+                    </p>
+                    <ul className="mt-1.5 space-y-1 text-amber-800/90 list-disc list-inside">
+                      {result.hardwareFailures.map((f, i) => (
+                        <li key={i}>
+                          <span className="font-medium">{f.op}</span>
+                          <span className="text-xs text-amber-700/80"> — {f.error}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
             <div>
               <Label>Gæsteportal link</Label>
               <div className="flex gap-2 mt-1">

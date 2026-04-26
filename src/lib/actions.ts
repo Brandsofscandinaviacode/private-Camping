@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import * as ha from "./homeassistant";
@@ -32,6 +33,46 @@ async function safeReadMeter(
       });
     } catch { /* don't fail the caller over alert tracking */ }
     return null;
+  }
+}
+
+// Hardware operation failure record reported back to the admin UI from
+// check-in / check-out so the operator knows immediately if e.g. the
+// electricity relay didn't actually flip on. Each failure also lands in
+// the `_hw_op_fail_*` global settings for the system-status dashboard.
+export interface HardwareOpFailure {
+  op: string;       // human-readable operation, e.g. "Tænd strøm"
+  context: string;  // machine-readable context, e.g. "checkIn:el unit=3"
+  error: string;
+}
+
+/**
+ * Wraps a hardware mutation (relay on/off, climate set, lock/unlock).
+ * On failure: logs, records the failure to global settings (so the system
+ * status dashboard surfaces it), and returns a structured HardwareOpFailure
+ * the caller can include in its result so the admin sees an inline warning
+ * during check-in / check-out instead of a silent no-op.
+ */
+async function safeHwOp(
+  op: string,
+  context: string,
+  fn: () => Promise<unknown>,
+): Promise<HardwareOpFailure | null> {
+  try {
+    await fn();
+    return null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.error("hardware", `hw op failed [${context}] ${op}: ${msg}`);
+    try {
+      const key = `_hw_op_fail_${context.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      await prisma.globalSetting.upsert({
+        where: { key },
+        create: { key, value: `${new Date().toISOString()}|${op}|${msg}` },
+        update: { value: `${new Date().toISOString()}|${op}|${msg}` },
+      });
+    } catch { /* don't fail the caller over alert tracking */ }
+    return { op, context, error: msg };
   }
 }
 
@@ -518,21 +559,31 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
     startWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `checkIn:water unit=${unitId}`);
   }
 
-  // Turn on electricity
+  // Turn on electricity / heat / climate / lock. Failures are collected and
+  // returned to the admin UI so the operator can react (manually flip a
+  // breaker, retry, etc.) instead of the failure being swallowed in a log.
+  const hwFailures: HardwareOpFailure[] = [];
+  const recordHwFailure = (f: HardwareOpFailure | null) => { if (f) hwFailures.push(f); };
+
   if (hardware.hasElectricitySwitch(hw)) {
-    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { logger.error("hardware", "checkIn el on", e); }
+    recordHwFailure(await safeHwOp("Tænd strøm", `checkIn:el unit=${unitId}`, () =>
+      hardware.setSwitch(hardware.electricitySwitchEp(hw!), true),
+    ));
   }
-  // Turn on heating relay
   if (hardware.hasHeatingSwitch(hw)) {
-    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { logger.error("hardware", "checkIn heat on", e); }
+    recordHwFailure(await safeHwOp("Tænd varme", `checkIn:heat unit=${unitId}`, () =>
+      hardware.setSwitch(hardware.heatingSwitchEp(hw!), true),
+    ));
   }
-  // Set climate (HA only)
   if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { logger.error("hardware", "HA climate set occupied temp", e); }
+    recordHwFailure(await safeHwOp("Sæt klima til ophold-temperatur", `checkIn:climate unit=${unitId}`, () =>
+      ha.setClimateTemperature(hw.climateEntityId!, pricing.defaultOccupiedTemp),
+    ));
   }
-  // Unlock door (HA only)
   if (hw?.hasSmartLock && hw.lockEntityId) {
-    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { logger.error("hardware", "HA unlock", e); }
+    recordHwFailure(await safeHwOp("Lås døren op", `checkIn:unlock unit=${unitId}`, () =>
+      ha.unlockDoor(hw.lockEntityId!),
+    ));
   }
 
   const guestPortalToken = uuidv4();
@@ -557,7 +608,7 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unitId}`);
-  return { session, guestPortalToken };
+  return { session, guestPortalToken, hardwareFailures: hwFailures };
 }
 
 async function sendCheckInNotificationAsync(
@@ -673,25 +724,37 @@ export async function checkOut(sessionId: number) {
 
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0);
 
-  // Turn off devices based on auto_power_off setting
+  // Turn off devices based on auto_power_off setting. Failures are surfaced
+  // to the admin UI so the operator knows e.g. that the relay didn't actually
+  // turn off and they need to flip it manually.
   const globalSettings = await getGlobalSettings();
   const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
+  const hwFailures: HardwareOpFailure[] = [];
+  const recordHwFailure = (f: HardwareOpFailure | null) => { if (f) hwFailures.push(f); };
 
   if (autoPowerOff) {
     if (hardware.hasElectricitySwitch(hw)) {
-      try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), false); } catch (e) { logger.error("checkout", "checkOut el off", e); }
+      recordHwFailure(await safeHwOp("Sluk strøm", `checkOut:el session=${sessionId}`, () =>
+        hardware.setSwitch(hardware.electricitySwitchEp(hw!), false),
+      ));
     }
     // Turn off heating unless winter mode is enabled (protect cabin from frost)
     if (hardware.hasHeatingSwitch(hw) && !hw!.winterModeEnabled) {
-      try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), false); } catch (e) { logger.error("checkout", "checkOut heat off", e); }
+      recordHwFailure(await safeHwOp("Sluk varme", `checkOut:heat session=${sessionId}`, () =>
+        hardware.setSwitch(hardware.heatingSwitchEp(hw!), false),
+      ));
     }
     if (hw?.hasSmartLock && hw.lockEntityId) {
-      try { await ha.lockDoor(hw.lockEntityId); } catch (e) { logger.error("checkout", "HA lock", e); }
+      recordHwFailure(await safeHwOp("Lås døren", `checkOut:lock session=${sessionId}`, () =>
+        ha.lockDoor(hw.lockEntityId!),
+      ));
     }
   }
   // Always set climate to vacant temp (HA only)
   if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { logger.error("checkout", "HA climate set vacant temp", e); }
+    recordHwFailure(await safeHwOp("Sæt klima til vakant-temperatur", `checkOut:climate session=${sessionId}`, () =>
+      ha.setClimateTemperature(hw.climateEntityId!, pricing.defaultVacantTemp),
+    ));
   }
 
   // For prepaid: mark as PAID since amount was collected upfront, no refund
@@ -730,7 +793,7 @@ export async function checkOut(sessionId: number) {
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${session.unitId}`);
-  return { totalElectricityCost, totalWaterCost, totalCost, isPrepaid, prepaidAmount: session.prepaidAmount };
+  return { totalElectricityCost, totalWaterCost, totalCost, isPrepaid, prepaidAmount: session.prepaidAmount, hardwareFailures: hwFailures };
 }
 
 // ──────────────────────────────────────────────
@@ -2282,7 +2345,36 @@ export async function getSystemStatus() {
     meterFailures: Object.keys(settings)
       .filter((k) => k.startsWith("_meter_fail_") && settings[k] > new Date(Date.now() - 3600_000).toISOString())
       .map((k) => ({ context: k.replace("_meter_fail_", "").replace(/_/g, " "), lastFail: settings[k] })),
+    // Hardware operation failures (relay on/off, climate set, lock/unlock) from
+    // the last 24h. The stored value is "iso|op|error"; we split it back out so
+    // the UI can show the operator what actually went wrong.
+    hardwareOpFailures: Object.keys(settings)
+      .filter((k) => k.startsWith("_hw_op_fail_"))
+      .map((k) => {
+        const [iso, op, ...errParts] = (settings[k] || "").split("|");
+        return {
+          key: k,
+          context: k.replace("_hw_op_fail_", "").replace(/_/g, " "),
+          op: op || "Hardware-handling",
+          error: errParts.join("|") || "Ukendt fejl",
+          lastFail: iso || "",
+        };
+      })
+      .filter((f) => f.lastFail > new Date(Date.now() - 24 * 3600_000).toISOString())
+      .sort((a, b) => b.lastFail.localeCompare(a.lastFail)),
   };
+}
+
+/**
+ * Mark a hardware-op failure as resolved. The admin clicks "Bekræft" after
+ * they've manually fixed the hardware (e.g. flipped the breaker), and the
+ * warning disappears from the dashboard.
+ */
+export async function acknowledgeHardwareOpFailure(key: string): Promise<void> {
+  await requireAuth();
+  if (!key.startsWith("_hw_op_fail_")) return;
+  await prisma.globalSetting.deleteMany({ where: { key } });
+  revalidatePath("/admin/settings");
 }
 
 // ──────────────────────────────────────────────
@@ -4065,6 +4157,58 @@ const PAUSE_MAX_MS = 5 * 60 * 1000;      // 5 minutes max pause
 const PAUSE_COOLDOWN_MS = 10 * 1000;     // 10 s between pauses
 const SHOWER_WARMUP_MS = 10 * 1000;      // 10 s warmup before relay turns on
 
+// ── Shower access cookie ──────────────────────────────────────
+// Per-session secret stored as an httpOnly cookie scoped to /shower.
+// This replaces passing the access token as a URL query parameter, which
+// leaked it into browser history, server logs, and Referer headers.
+const SHOWER_COOKIE_PREFIX = "cs_shower_";
+const SHOWER_COOKIE_MAX_AGE = 4 * 60 * 60; // 4 hours — covers the longest possible session
+
+function showerCookieName(sessionId: number): string {
+  return `${SHOWER_COOKIE_PREFIX}${sessionId}`;
+}
+
+async function setShowerAccessCookie(sessionId: number, accessToken: string): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.set({
+    name: showerCookieName(sessionId),
+    value: accessToken,
+    httpOnly: true,
+    secure: process.env.FORCE_HTTPS === "true",
+    // Lax is required because the user returns from QuickPay (top-level navigation
+    // from a different origin); strict would drop the cookie on the redirect back.
+    sameSite: "lax",
+    path: "/shower",
+    maxAge: SHOWER_COOKIE_MAX_AGE,
+  });
+}
+
+async function getShowerAccessCookie(sessionId: number): Promise<string | null> {
+  const cookieStore = await cookies();
+  return cookieStore.get(showerCookieName(sessionId))?.value ?? null;
+}
+
+async function clearShowerAccessCookie(sessionId: number): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.delete(showerCookieName(sessionId));
+}
+
+/**
+ * Validates that the caller holds the access cookie for this shower session.
+ * Compares both values constant-time so a network attacker who can observe
+ * timing can't probe for the token byte-by-byte.
+ */
+async function verifyShowerAccess(sessionId: number, expectedToken: string): Promise<boolean> {
+  const provided = await getShowerAccessCookie(sessionId);
+  if (!provided || provided.length !== expectedToken.length) return false;
+  try {
+    const { timingSafeEqual } = await import("crypto");
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expectedToken));
+  } catch {
+    return false;
+  }
+}
+
 // ── Admin CRUD ────────────────────────────────────────────────
 export async function getShowers() {
   await requireAuth();
@@ -4316,7 +4460,7 @@ export async function createShowerPayment(
   showerId: number,
   minutes: number,
   guestPortalToken?: string,
-): Promise<{ ok: boolean; message: string; paymentLink?: string; showerSessionId?: number; accessToken?: string }> {
+): Promise<{ ok: boolean; message: string; paymentLink?: string; showerSessionId?: number }> {
   await expireStaleShowerPendings();
 
   const shower = await prisma.shower.findUnique({
@@ -4365,13 +4509,18 @@ export async function createShowerPayment(
     },
   });
 
+  // Bind this browser to the pending session via an httpOnly cookie. The
+  // cookie persists across the QuickPay redirect (sameSite=lax, our origin)
+  // and is read back when the user lands on /shower/active/{id}.
+  await setShowerAccessCookie(pending.id, pending.accessToken);
+
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
 
   // No QuickPay configured → start immediately (dev / free mode)
   if (settings.quickpay_enabled !== "true") {
     await activateShowerSession(pending.id);
-    return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id, accessToken: pending.accessToken };
+    return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id };
   }
 
   try {
@@ -4382,7 +4531,7 @@ export async function createShowerPayment(
       orderId,
       amount: price,
       currency: settings.currency || "DKK",
-      continueUrl: `${baseUrl}/shower/active/${pending.id}?token=${pending.accessToken}&paid=1`,
+      continueUrl: `${baseUrl}/shower/active/${pending.id}?paid=1`,
       cancelUrl: `${baseUrl}/shower/${showerId}?cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
@@ -4392,9 +4541,10 @@ export async function createShowerPayment(
       data: { paymentId: String(paymentId) },
     });
 
-    return { ok: true, message: "Går til betaling...", paymentLink, showerSessionId: pending.id, accessToken: pending.accessToken };
+    return { ok: true, message: "Går til betaling...", paymentLink, showerSessionId: pending.id };
   } catch (e) {
     await prisma.showerSess.delete({ where: { id: pending.id } });
+    await clearShowerAccessCookie(pending.id);
     return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
@@ -4402,6 +4552,10 @@ export async function createShowerPayment(
 /**
  * Called when the QuickPay callback accepts the payment, OR when QuickPay
  * is disabled and we start immediately. Opens the valve + flips status.
+ *
+ * Uses an atomic updateMany guarded by status="PENDING" so two concurrent
+ * callbacks (or a callback + retry) can never double-activate the same
+ * session. The second caller's update affects 0 rows and bails out.
  */
 export async function activateShowerSession(pendingId: number) {
   const sess = await prisma.showerSess.findUnique({
@@ -4415,8 +4569,8 @@ export async function activateShowerSession(pendingId: number) {
   // Add warmup time so purchased minutes start AFTER the 10s warmup
   const endsAt = new Date(Date.now() + SHOWER_WARMUP_MS + mins * 60 * 1000);
 
-  await prisma.showerSess.update({
-    where: { id: pendingId },
+  const res = await prisma.showerSess.updateMany({
+    where: { id: pendingId, status: "PENDING" },
     data: {
       status: "ACTIVE",
       paymentStatus: "PAID",
@@ -4427,18 +4581,21 @@ export async function activateShowerSession(pendingId: number) {
       pendingMinutes: null,
     },
   });
+  if (res.count === 0) return;
 
   // Relay is NOT turned on here — client calls startShowerRelay() after the 10s warmup countdown
 }
 
 /** Turn on the shower relay after warmup countdown. Called by the client. */
-export async function startShowerRelay(showerSessionId: number, accessToken?: string): Promise<{ ok: boolean; message: string }> {
+export async function startShowerRelay(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!(await verifyShowerAccess(showerSessionId, sess.accessToken))) {
+    return { ok: false, message: "Ugyldig adgang" };
+  }
   if (sess.status !== "ACTIVE") return { ok: false, message: "Session er ikke aktiv" };
 
   const remainingSec = Math.max(0, Math.ceil((new Date(sess.endsAt).getTime() - Date.now()) / 1000));
@@ -4458,6 +4615,10 @@ export async function startShowerRelay(showerSessionId: number, accessToken?: st
 /**
  * Called when an extension payment resolves: adds the purchased
  * minutes on top of the existing timer.
+ *
+ * Atomically clears `pendingMinutes` as part of the update so a duplicate
+ * callback can't apply the same extension twice — the second caller sees
+ * pendingMinutes=null and bails before touching the row.
  */
 export async function applyShowerExtension(showerSessionId: number) {
   const sess = await prisma.showerSess.findUnique({
@@ -4467,6 +4628,7 @@ export async function applyShowerExtension(showerSessionId: number) {
   if (!sess) return;
   const extra = sess.pendingMinutes ?? 0;
   if (extra <= 0) return;
+  if (sess.status !== "ACTIVE" && sess.status !== "PAUSED") return;
 
   // Active → extend endsAt. Paused → inflate the frozen remaining time.
   let newEndsAt = sess.endsAt;
@@ -4478,8 +4640,8 @@ export async function applyShowerExtension(showerSessionId: number) {
     newEndsAt = new Date(base.getTime() + extra * 60 * 1000);
   }
 
-  await prisma.showerSess.update({
-    where: { id: showerSessionId },
+  const res = await prisma.showerSess.updateMany({
+    where: { id: showerSessionId, pendingMinutes: extra },
     data: {
       endsAt: newEndsAt,
       pauseRemainingMs: newPauseRemainingMs,
@@ -4489,6 +4651,7 @@ export async function applyShowerExtension(showerSessionId: number) {
       paymentStatus: "PAID",
     },
   });
+  if (res.count === 0) return;
 
   // Re-arm hardware auto-off with the new total remaining time
   if (sess.status === "ACTIVE" && newEndsAt) {
@@ -4507,14 +4670,16 @@ export async function applyShowerExtension(showerSessionId: number) {
  * Guest-side state query for the active timer page.
  * Returns seconds left + whether the session is paused + pause metadata.
  */
-export async function getShowerSessionState(showerSessionId: number, accessToken?: string) {
+export async function getShowerSessionState(showerSessionId: number) {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return null;
-  // Validate access token (skip for internal/cron callers that don't pass one)
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return null;
+  // Authorize the caller via the per-session httpOnly cookie set when the
+  // session was created. Without the cookie the response is null — same as
+  // a missing session, so an attacker can't enumerate session IDs.
+  if (!(await verifyShowerAccess(showerSessionId, sess.accessToken))) return null;
 
   const now = Date.now();
   let secondsLeft = 0;
@@ -4547,7 +4712,6 @@ export async function getShowerSessionState(showerSessionId: number, accessToken
 
   return {
     id: sess.id,
-    accessToken: sess.accessToken,
     showerId: sess.showerId,
     showerName: sess.shower.name,
     location: sess.shower.location,
@@ -4566,13 +4730,15 @@ export async function getShowerSessionState(showerSessionId: number, accessToken
 }
 
 /** Pause an active shower — closes the valve and freezes the remaining time. */
-export async function pauseShower(showerSessionId: number, accessToken?: string): Promise<{ ok: boolean; message: string }> {
+export async function pauseShower(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!(await verifyShowerAccess(showerSessionId, sess.accessToken))) {
+    return { ok: false, message: "Ugyldig adgang" };
+  }
   if (sess.status !== "ACTIVE") return { ok: false, message: "Kan ikke pause nu" };
 
   if (sess.pauseResumedAt) {
@@ -4600,14 +4766,16 @@ export async function pauseShower(showerSessionId: number, accessToken?: string)
   return { ok: true, message: "Pause" };
 }
 
-/** Manually resume a paused shower. Also used by the auto-resume sweep. */
-export async function resumeShower(showerSessionId: number, accessToken?: string): Promise<{ ok: boolean; message: string }> {
+/** Manually resume a paused shower from the guest's browser. */
+export async function resumeShower(showerSessionId: number): Promise<{ ok: boolean; message: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!(await verifyShowerAccess(showerSessionId, sess.accessToken))) {
+    return { ok: false, message: "Ugyldig adgang" };
+  }
   if (sess.status !== "PAUSED") return { ok: false, message: "Ikke på pause" };
 
   const remainingMs = sess.pauseRemainingMs ?? 0;
@@ -4640,14 +4808,15 @@ export async function resumeShower(showerSessionId: number, accessToken?: string
 export async function extendShowerPayment(
   showerSessionId: number,
   extraMinutes: number,
-  accessToken?: string,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!(await verifyShowerAccess(showerSessionId, sess.accessToken))) {
+    return { ok: false, message: "Ugyldig adgang" };
+  }
   if (sess.status !== "ACTIVE" && sess.status !== "PAUSED") {
     return { ok: false, message: "Kan kun forlænge en aktiv session" };
   }
@@ -4679,8 +4848,8 @@ export async function extendShowerPayment(
       orderId,
       amount: price,
       currency: settings.currency || "DKK",
-      continueUrl: `${baseUrl}/shower/active/${showerSessionId}?token=${sess.accessToken}&extended=1`,
-      cancelUrl: `${baseUrl}/shower/active/${showerSessionId}?token=${sess.accessToken}&extend_cancelled=1`,
+      continueUrl: `${baseUrl}/shower/active/${showerSessionId}?extended=1`,
+      cancelUrl: `${baseUrl}/shower/active/${showerSessionId}?extend_cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
 
@@ -4740,6 +4909,9 @@ export async function completeExpiredShower(showerSessionId: number) {
   } catch (e) {
     logger.error("shower", "completeExpiredShower relay off", e);
   }
+
+  // Drop the now-useless access cookie so it isn't available for replay.
+  await clearShowerAccessCookie(showerSessionId);
 }
 
 /**

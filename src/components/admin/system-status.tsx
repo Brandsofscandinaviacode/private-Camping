@@ -13,11 +13,20 @@ import {
   Zap,
   RefreshCw,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getSystemStatus, updateMultipleSettings } from "@/lib/actions";
+import { acknowledgeHardwareOpFailure, getSystemStatus, updateMultipleSettings } from "@/lib/actions";
+
+interface HardwareOpFailure {
+  key: string;
+  context: string;
+  op: string;
+  error: string;
+  lastFail: string;
+}
 
 interface StatusData {
   cronLastRun: string | null;
@@ -34,6 +43,7 @@ interface StatusData {
   invoiceEmailEnabled: boolean;
   autoPowerOff: boolean;
   apiKey: string;
+  hardwareOpFailures?: HardwareOpFailure[];
 }
 
 export function SystemStatus() {
@@ -122,9 +132,59 @@ export function SystemStatus() {
   if (!status) return null;
 
   const healthy = cronIsHealthy();
+  const hardwareOpFailures = status.hardwareOpFailures ?? [];
+
+  async function handleAcknowledgeFailure(key: string) {
+    await acknowledgeHardwareOpFailure(key);
+    await loadStatus();
+  }
 
   return (
     <div className="space-y-5">
+      {/* Hardware op failures (check-in / check-out) */}
+      {hardwareOpFailures.length > 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 shadow-sm">
+          <div className="px-5 py-4 border-b border-amber-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <h2 className="font-semibold text-amber-900">
+                Hardware-handlinger fejlede ({hardwareOpFailures.length})
+              </h2>
+            </div>
+            <span className="text-xs text-amber-700">Sidste 24 timer</span>
+          </div>
+          <div className="p-5 space-y-2 text-sm">
+            <p className="text-amber-800/90 mb-2">
+              En relæ, klimasensor eller lås reagerede ikke under check-in/check-out.
+              Tjek manuelt og bekræft når problemet er løst.
+            </p>
+            {hardwareOpFailures.map((f) => (
+              <div
+                key={f.key}
+                className="flex items-start justify-between gap-3 p-3 rounded-lg bg-white border border-amber-200"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-amber-900">{f.op}</p>
+                  <p className="text-xs text-amber-700/90 break-words">
+                    {f.context} — {f.error}
+                  </p>
+                  <p className="text-[11px] text-amber-600/80 mt-0.5">
+                    {formatTime(f.lastFail)}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleAcknowledgeFailure(f.key)}
+                >
+                  Bekræft
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Cron Status */}
       <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">

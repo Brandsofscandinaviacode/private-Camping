@@ -6,18 +6,18 @@ export const dynamic = "force-dynamic";
 
 export default async function ShowerActivePage({
   params,
-  searchParams,
 }: {
   params: Promise<{ sessionId: string }>;
-  searchParams: Promise<{ token?: string }>;
 }) {
   const { sessionId } = await params;
-  const { token } = await searchParams;
   const id = parseInt(sessionId, 10);
   if (isNaN(id)) notFound();
-  if (!token) notFound();
 
-  const state = await getShowerSessionState(id, token);
+  // Authorization is enforced inside getShowerSessionState via the
+  // per-session httpOnly cookie set when the session was created.
+  // Without the cookie this returns null (indistinguishable from a
+  // missing session, so the URL alone leaks no information).
+  const state = await getShowerSessionState(id);
   if (!state) notFound();
 
   return <ShowerTimerClient initial={state} />;

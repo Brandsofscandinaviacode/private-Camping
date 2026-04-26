@@ -47,8 +47,10 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
         window.location.href = res.paymentLink;
         return;
       }
-      if (res.showerSessionId && res.accessToken) {
-        window.location.href = `/shower/active/${res.showerSessionId}?token=${res.accessToken}`;
+      if (res.showerSessionId) {
+        // Access token is held in an httpOnly cookie set by the server action
+        // that created the session — don't put it in the URL.
+        window.location.href = `/shower/active/${res.showerSessionId}`;
         return;
       }
     } catch (e) {

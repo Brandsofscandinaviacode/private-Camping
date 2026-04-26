@@ -87,13 +87,21 @@ export async function createPaymentLink(params: {
 export async function verifyCallbackChecksum(rawBody: string, checksum: string): Promise<boolean> {
   const config = await getQuickPayConfig();
   if (!config.privateKey) return false;
+  if (typeof checksum !== "string" || checksum.length === 0) return false;
 
   const computed = crypto
     .createHmac("sha256", config.privateKey)
     .update(rawBody)
-    .digest("hex");
+    .digest();
 
-  return computed === checksum;
+  // QuickPay sends a hex-encoded checksum. Reject anything that isn't hex of
+  // the correct length before constant-time comparison so timingSafeEqual
+  // doesn't throw on a length mismatch.
+  if (!/^[0-9a-f]+$/i.test(checksum)) return false;
+  const provided = Buffer.from(checksum, "hex");
+  if (provided.length !== computed.length) return false;
+
+  return crypto.timingSafeEqual(computed, provided);
 }
 
 // ──────────────────────────────────────────────
