@@ -1,16 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, Mail, Phone, Hash, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
   getUnitWithDetails,
   getUnitHAStates,
   getActiveSession,
+  getPendingSession,
   getGlobalSettings,
 } from "@/lib/actions";
 import { CheckInDialog } from "@/components/admin/check-in-dialog";
 import { CheckOutDialog } from "@/components/admin/check-out-dialog";
+import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { CabinControls } from "@/components/admin/cabin-controls";
 import { CopyButton } from "@/components/admin/copy-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
@@ -32,9 +34,10 @@ export default async function UnitDetailPage({
   const unit = await getUnitWithDetails(unitId);
   if (!unit) notFound();
 
-  const [haStates, activeSession, globalSettings] = await Promise.all([
+  const [haStates, activeSession, pendingSession, globalSettings] = await Promise.all([
     getUnitHAStates(unitId).catch(() => null),
     getActiveSession(unitId),
+    getPendingSession(unitId),
     getGlobalSettings(),
   ]);
   const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
@@ -72,7 +75,69 @@ export default async function UnitDetailPage({
         {/* Left: Actions & Guest Info */}
         <div className="space-y-5">
           {/* Check-in / Check-out — works for all unit types */}
-          {!isOccupied && !activeSession ? (
+          {!isOccupied && !activeSession && pendingSession ? (
+            <div className="rounded-xl border border-amber-200/60 bg-amber-50/30 shadow-sm">
+              <div className="px-5 py-4 border-b border-amber-200/60 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-medium inline-flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                    Reserveret
+                  </span>
+                  <h2 className="font-semibold">Importeret booking</h2>
+                </div>
+                <Link href={`/admin/bookings/${pendingSession.id}`}>
+                  <Button variant="outline" size="sm">
+                    <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                    Se booking
+                  </Button>
+                </Link>
+              </div>
+              <div className="p-5 space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Navn</span>
+                  <span className="font-medium">{pendingSession.guestName}</span>
+                </div>
+                {pendingSession.guestEmail && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground inline-flex items-center gap-2"><Mail className="h-3.5 w-3.5" />Email</span>
+                    <span>{pendingSession.guestEmail}</span>
+                  </div>
+                )}
+                {pendingSession.guestPhone && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground inline-flex items-center gap-2"><Phone className="h-3.5 w-3.5" />Telefon</span>
+                    <span>{pendingSession.guestPhone}</span>
+                  </div>
+                )}
+                {pendingSession.bookingRef && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground inline-flex items-center gap-2"><Hash className="h-3.5 w-3.5" />Booking nr.</span>
+                    <span>{pendingSession.bookingRef}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground inline-flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Check-in</span>
+                  <span>{new Date(pendingSession.checkInTime).toLocaleDateString("da-DK")}</span>
+                </div>
+                {pendingSession.expectedCheckOut && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground inline-flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Forventet checkout</span>
+                    <span>{new Date(pendingSession.expectedCheckOut).toLocaleDateString("da-DK")}</span>
+                  </div>
+                )}
+                <Separator />
+                <BookingActivateButton
+                  sessionId={pendingSession.id}
+                  guestName={pendingSession.guestName}
+                  unitName={unitDisplayName}
+                  initialEmail={pendingSession.guestEmail}
+                  initialPhone={pendingSession.guestPhone}
+                  initialBookingRef={pendingSession.bookingRef}
+                  initialExpectedCheckOut={pendingSession.expectedCheckOut ? pendingSession.expectedCheckOut.toISOString().slice(0, 10) : null}
+                />
+              </div>
+            </div>
+          ) : !isOccupied && !activeSession ? (
             <CheckInDialog unitId={unit.id} unitName={unitDisplayName} />
           ) : activeSession ? (
             <div className="rounded-xl border border-border/60 bg-card shadow-sm">

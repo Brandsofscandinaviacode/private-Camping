@@ -1774,6 +1774,13 @@ export async function activateBookingSession(
   sessionId: number,
   billingMode: "PREPAID" | "POSTPAID",
   prepaidAmount?: number,
+  updates?: {
+    guestName?: string;
+    guestEmail?: string | null;
+    guestPhone?: string | null;
+    bookingRef?: string | null;
+    expectedCheckOut?: string | null;
+  },
 ) {
   await requireAuth();
   const session = await prisma.session.findUnique({
@@ -1815,12 +1822,25 @@ export async function activateBookingSession(
     try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { logger.error("hardware", "activate unlock", e); }
   }
 
+  const finalGuestName = updates?.guestName?.trim() || session.guestName;
+  const finalGuestEmail = updates?.guestEmail !== undefined ? (updates.guestEmail || null) : session.guestEmail;
+  const finalGuestPhone = updates?.guestPhone !== undefined ? (updates.guestPhone || null) : session.guestPhone;
+  const finalBookingRef = updates?.bookingRef !== undefined ? (updates.bookingRef || null) : session.bookingRef;
+  const finalExpectedCheckOut = updates?.expectedCheckOut !== undefined
+    ? (updates.expectedCheckOut ? new Date(updates.expectedCheckOut) : null)
+    : session.expectedCheckOut;
+
   await prisma.session.update({
     where: { id: sessionId },
     data: {
       status: "ACTIVE",
       billingMode,
       prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null,
+      guestName: finalGuestName,
+      guestEmail: finalGuestEmail,
+      guestPhone: finalGuestPhone,
+      bookingRef: finalBookingRef,
+      expectedCheckOut: finalExpectedCheckOut,
       checkInTime: new Date(),
       startKwh,
       startHeatingKwh,
@@ -1830,16 +1850,16 @@ export async function activateBookingSession(
 
   const updateData: Record<string, unknown> = { status: "OCCUPIED" };
   if (unit.isLongTerm) {
-    updateData.longTermGuestName = session.guestName;
-    updateData.longTermGuestEmail = session.guestEmail;
-    updateData.longTermGuestPhone = session.guestPhone;
+    updateData.longTermGuestName = finalGuestName;
+    updateData.longTermGuestEmail = finalGuestEmail;
+    updateData.longTermGuestPhone = finalGuestPhone;
     updateData.longTermPortalToken = session.guestPortalToken;
   }
   await prisma.unit.update({ where: { id: unit.id }, data: updateData });
 
   const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
   const unitDisplayName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
-  sendCheckInNotificationAsync(session.guestName, session.guestPhone ?? undefined, session.guestEmail ?? undefined, session.guestPortalToken, unitDisplayName);
+  sendCheckInNotificationAsync(finalGuestName, finalGuestPhone ?? undefined, finalGuestEmail ?? undefined, session.guestPortalToken, unitDisplayName);
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unit.id}`);

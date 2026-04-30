@@ -456,6 +456,10 @@ export default async function BookingDetailPage({
                     sessionId={session.id}
                     guestName={session.guestName}
                     unitName={session.unit.name}
+                    initialEmail={session.guestEmail}
+                    initialPhone={session.guestPhone}
+                    initialBookingRef={session.bookingRef}
+                    initialExpectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : null}
                   />
                 </>
               ) : isActive && !session.unit.isLongTerm ? (

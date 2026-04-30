@@ -18,16 +18,37 @@ interface Props {
   sessionId: number;
   guestName: string;
   unitName: string;
+  initialEmail?: string | null;
+  initialPhone?: string | null;
+  initialBookingRef?: string | null;
+  initialExpectedCheckOut?: string | null;
 }
 
-export function BookingActivateButton({ sessionId, guestName, unitName }: Props) {
+export function BookingActivateButton({
+  sessionId,
+  guestName,
+  unitName,
+  initialEmail,
+  initialPhone,
+  initialBookingRef,
+  initialExpectedCheckOut,
+}: Props) {
   const [open, setOpen] = useState(false);
+  const [name, setName] = useState(guestName);
+  const [email, setEmail] = useState(initialEmail ?? "");
+  const [phone, setPhone] = useState(initialPhone ?? "");
+  const [bookingRef, setBookingRef] = useState(initialBookingRef ?? "");
+  const [expectedCheckOut, setExpectedCheckOut] = useState(initialExpectedCheckOut ?? "");
   const [billingMode, setBillingMode] = useState<"PREPAID" | "POSTPAID">("POSTPAID");
   const [prepaidAmount, setPrepaidAmount] = useState("");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   function handleActivate() {
+    if (!name.trim()) {
+      setError("Gæstens navn er påkrævet");
+      return;
+    }
     setError(null);
     startTransition(async () => {
       try {
@@ -35,6 +56,13 @@ export function BookingActivateButton({ sessionId, guestName, unitName }: Props)
           sessionId,
           billingMode,
           billingMode === "PREPAID" ? parseFloat(prepaidAmount) || 0 : undefined,
+          {
+            guestName: name.trim(),
+            guestEmail: email.trim() || null,
+            guestPhone: phone.trim() || null,
+            bookingRef: bookingRef.trim() || null,
+            expectedCheckOut: expectedCheckOut || null,
+          },
         );
         setOpen(false);
       } catch (err) {
@@ -51,64 +79,121 @@ export function BookingActivateButton({ sessionId, guestName, unitName }: Props)
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Check-in: {guestName}</DialogTitle>
+          <DialogTitle>Check-in til {unitName}</DialogTitle>
         </DialogHeader>
 
-        <p className="text-sm text-muted-foreground">
-          Aktivér booking på <span className="font-medium text-foreground">{unitName}</span>.
-          Strøm tændes, målere aflæses.
+        <p className="text-xs text-muted-foreground">
+          Data er hentet fra booking-systemet. Tjek og ret hvis nødvendigt, og vælg afregningsform.
         </p>
 
-        <div className="space-y-2">
-          <Label>Afregning</Label>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setBillingMode("POSTPAID")}
-              className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                billingMode === "POSTPAID"
-                  ? "border-primary bg-primary/5 text-primary font-medium"
-                  : "border-border text-muted-foreground hover:border-foreground/20"
-              }`}
-            >
-              Bagudbetalt
-              <span className="block text-xs mt-0.5 font-normal opacity-70">Betaler ved checkout</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setBillingMode("PREPAID")}
-              className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                billingMode === "PREPAID"
-                  ? "border-primary bg-primary/5 text-primary font-medium"
-                  : "border-border text-muted-foreground hover:border-foreground/20"
-              }`}
-            >
-              Forudbetalt
-              <span className="block text-xs mt-0.5 font-normal opacity-70">Allerede betalt i kassen</span>
-            </button>
+        <div className="space-y-4">
+          <div>
+            <Label htmlFor="activate-name">Gæstens navn *</Label>
+            <Input
+              id="activate-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Fornavn Efternavn"
+            />
           </div>
-          {billingMode === "PREPAID" && (
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="prepaid-amount">Forudbetalt beløb (DKK)</Label>
+              <Label htmlFor="activate-email">Email</Label>
               <Input
-                id="prepaid-amount"
-                type="number"
-                step="0.01"
-                min="0"
-                value={prepaidAmount}
-                onChange={(e) => setPrepaidAmount(e.target.value)}
-                placeholder="F.eks. 500"
-                className="mt-1"
+                id="activate-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="gæst@email.dk"
               />
             </div>
-          )}
+            <div>
+              <Label htmlFor="activate-phone">Telefon</Label>
+              <Input
+                id="activate-phone"
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+4512345678"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="activate-ref">Booking nr.</Label>
+              <Input
+                id="activate-ref"
+                value={bookingRef}
+                onChange={(e) => setBookingRef(e.target.value)}
+                placeholder="F.eks. BK-001"
+              />
+            </div>
+            <div>
+              <Label htmlFor="activate-checkout">Forventet checkout</Label>
+              <Input
+                id="activate-checkout"
+                type="date"
+                value={expectedCheckOut}
+                onChange={(e) => setExpectedCheckOut(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Afregning</Label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setBillingMode("POSTPAID")}
+                className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
+                  billingMode === "POSTPAID"
+                    ? "border-primary bg-primary/5 text-primary font-medium"
+                    : "border-border text-muted-foreground hover:border-foreground/20"
+                }`}
+              >
+                Bagudbetalt
+                <span className="block text-xs mt-0.5 font-normal opacity-70">Betaler ved checkout</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingMode("PREPAID")}
+                className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
+                  billingMode === "PREPAID"
+                    ? "border-primary bg-primary/5 text-primary font-medium"
+                    : "border-border text-muted-foreground hover:border-foreground/20"
+                }`}
+              >
+                Forudbetalt
+                <span className="block text-xs mt-0.5 font-normal opacity-70">Allerede betalt i kassen</span>
+              </button>
+            </div>
+            {billingMode === "PREPAID" && (
+              <div>
+                <Label htmlFor="prepaid-amount">Forudbetalt beløb (DKK)</Label>
+                <Input
+                  id="prepaid-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={prepaidAmount}
+                  onChange={(e) => setPrepaidAmount(e.target.value)}
+                  placeholder="F.eks. 500"
+                  className="mt-1"
+                />
+              </div>
+            )}
+          </div>
         </div>
+
+        <p className="text-xs text-muted-foreground">
+          Systemet tænder strøm, aflæser målere og sender gæsteportal-link.
+        </p>
 
         {error && (
           <p className="text-sm text-red-600">{error}</p>
         )}
 
-        <Button onClick={handleActivate} disabled={isPending} className="w-full">
+        <Button onClick={handleActivate} disabled={isPending || !name.trim()} className="w-full">
           {isPending ? "Checker ind..." : "Bekræft check-in"}
         </Button>
       </DialogContent>
