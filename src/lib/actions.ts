@@ -5021,8 +5021,24 @@ export async function syncSessionsToAccounting(): Promise<{
 // BOOKING SYSTEM (Danplanner etc.)
 // ──────────────────────────────────────────────
 
-export async function initBookingLogin() {
+export async function initBookingLogin(creds?: { url?: string; username?: string; password?: string; provider?: string }) {
   await requireAuth();
+
+  if (creds) {
+    const updates: Array<{ key: string; value: string }> = [];
+    if (creds.provider !== undefined) updates.push({ key: "booking_provider", value: creds.provider });
+    if (creds.url !== undefined) updates.push({ key: "danplanner_url", value: creds.url });
+    if (creds.username !== undefined) updates.push({ key: "danplanner_username", value: creds.username });
+    if (creds.password !== undefined) updates.push({ key: "danplanner_password", value: creds.password });
+    for (const u of updates) {
+      await prisma.globalSetting.upsert({
+        where: { key: u.key },
+        create: u,
+        update: { value: u.value },
+      });
+    }
+  }
+
   const settings = await getGlobalSettings();
   const result = await danplannerLogin({
     baseUrl: settings.danplanner_url || "https://admin.danplanner.dk",
@@ -5205,4 +5221,32 @@ export async function getMapUnits() {
   );
 
   return unitData;
+}
+
+export async function getBookingLogs(limit = 50) {
+  await requireAuth();
+  const fs = await import("fs");
+  const path = await import("path");
+  const logFile = path.join(process.env.LOG_DIR || path.join(process.cwd(), "logs"), "campsense.log");
+
+  try {
+    if (!fs.existsSync(logFile)) return [];
+    const content = fs.readFileSync(logFile, "utf-8");
+    const lines = content.trim().split("\n").filter(Boolean);
+    const entries: Array<{ timestamp: string; level: string; context: string; message: string; data?: unknown }> = [];
+
+    for (let i = lines.length - 1; i >= 0 && entries.length < limit; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry.context === "danplanner") {
+          entries.push(entry);
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return entries;
+  } catch {
+    return [];
+  }
 }

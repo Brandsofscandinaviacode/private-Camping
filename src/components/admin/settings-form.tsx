@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown,
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -1583,12 +1583,20 @@ export function BookingSettings({ settings }: SettingsFormProps) {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [resourceTypes, setResourceTypes] = useState<Array<{ id: string; name: string }>>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<Array<{ timestamp: string; level: string; context: string; message: string; data?: unknown }>>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
 
   async function handleLogin() {
     setLoginState("logging_in");
     setLoginMsg("");
     try {
-      const result = await initBookingLogin();
+      const result = await initBookingLogin({
+        provider: values.booking_provider,
+        url: values.danplanner_url,
+        username: values.danplanner_username,
+        password: values.danplanner_password,
+      });
       if (result.success) {
         setLoginState("connected");
         setLoginMsg("Forbundet til Danplanner!");
@@ -1603,6 +1611,17 @@ export function BookingSettings({ settings }: SettingsFormProps) {
       setLoginState("error");
       setLoginMsg("Forbindelsesfejl");
     }
+  }
+
+  async function handleLoadLogs() {
+    setLoadingLogs(true);
+    try {
+      const entries = await getBookingLogs(30);
+      setLogs(entries);
+    } catch {
+      setLogs([]);
+    }
+    setLoadingLogs(false);
   }
 
   async function handleVerify() {
@@ -1858,6 +1877,53 @@ export function BookingSettings({ settings }: SettingsFormProps) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {isDanplanner && (
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">Debug log</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Se hvad der sker når der kaldes til Danplanner. Logfilen ligger i <code className="font-mono text-xs">logs/campsense.log</code>.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => { setShowLogs(!showLogs); if (!showLogs) handleLoadLogs(); }}>
+              {showLogs ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              {showLogs ? "Skjul" : "Vis"}
+            </Button>
+          </div>
+          {showLogs && (
+            <div className="p-5 space-y-2">
+              <Button variant="outline" size="sm" onClick={handleLoadLogs} disabled={loadingLogs}>
+                {loadingLogs ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Genindlæs
+              </Button>
+              {logs.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Ingen log-linjer endnu. Prøv at logge ind først.</p>
+              ) : (
+                <div className="font-mono text-xs space-y-1 max-h-96 overflow-y-auto bg-muted/40 rounded-lg p-3">
+                  {logs.map((entry, i) => (
+                    <div key={i} className="flex gap-2 border-b border-border/40 pb-1 last:border-0">
+                      <span className="text-muted-foreground shrink-0">{new Date(entry.timestamp).toLocaleTimeString("da-DK")}</span>
+                      <span className={`shrink-0 ${entry.level === "error" ? "text-red-500" : entry.level === "warn" ? "text-amber-500" : "text-blue-500"}`}>
+                        {entry.level.toUpperCase()}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span>{entry.message}</span>
+                        {entry.data ? (
+                          <pre className="text-muted-foreground text-[10px] whitespace-pre-wrap break-all mt-0.5">
+                            {JSON.stringify(entry.data, null, 2)}
+                          </pre>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
