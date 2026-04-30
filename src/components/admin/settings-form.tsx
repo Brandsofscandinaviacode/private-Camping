@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown,
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType, syncBookings } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -1700,6 +1700,26 @@ export function BookingSettings({ settings, resourceTypes: localResourceTypes = 
     setLoadingTypes(false);
   }
 
+  const [syncingBookings, setSyncingBookings] = useState(false);
+  const [bookingSyncResult, setBookingSyncResult] = useState<{
+    created: number;
+    updated: number;
+    skipped: Array<{ booking: string; reason: string }>;
+    error?: string;
+  } | null>(null);
+
+  async function handleSyncBookings() {
+    setSyncingBookings(true);
+    setBookingSyncResult(null);
+    try {
+      const r = await syncBookings("all");
+      setBookingSyncResult(r);
+    } catch (err) {
+      setBookingSyncResult({ created: 0, updated: 0, skipped: [], error: (err as Error).message });
+    }
+    setSyncingBookings(false);
+  }
+
   async function handleSync() {
     setSyncing(true);
     setSyncResult(null);
@@ -1888,6 +1908,51 @@ export function BookingSettings({ settings, resourceTypes: localResourceTypes = 
             {syncResult && (
               <div className="text-sm p-3 rounded-lg bg-muted">
                 <p>{syncResult}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isDanplanner && (
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="font-semibold">Synkronisér gæster</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Hent aktuelle bookinger fra Danplanner — gæsten oprettes automatisk på den korrekte enhed med ankomst- og afrejsedato.
+            </p>
+          </div>
+          <div className="p-5 space-y-3">
+            <Button onClick={handleSyncBookings} disabled={syncingBookings} size="sm">
+              {syncingBookings ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Cloud className="h-4 w-4 mr-2" />}
+              {syncingBookings ? "Synkroniserer..." : "Synkronisér gæster"}
+            </Button>
+            {bookingSyncResult && (
+              <div className="text-sm p-3 rounded-lg bg-muted space-y-1">
+                {bookingSyncResult.error ? (
+                  <p className="text-red-600">Fejl: {bookingSyncResult.error}</p>
+                ) : (
+                  <>
+                    <p>
+                      <strong>{bookingSyncResult.created}</strong> nye gæster oprettet
+                      {bookingSyncResult.updated > 0 && <>, <strong>{bookingSyncResult.updated}</strong> opdateret</>}
+                    </p>
+                    {bookingSyncResult.skipped.length > 0 && (
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-muted-foreground">
+                          {bookingSyncResult.skipped.length} sprunget over
+                        </summary>
+                        <ul className="mt-2 space-y-0.5 pl-4">
+                          {bookingSyncResult.skipped.map((s, i) => (
+                            <li key={i} className="text-muted-foreground">
+                              {s.booking}: {s.reason}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>

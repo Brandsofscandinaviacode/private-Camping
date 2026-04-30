@@ -1,4 +1,4 @@
-import type { BookingProvider, BookingLoginResult, BookingVerifyResult } from "./types";
+import type { BookingProvider, BookingEntry, BookingLoginResult, BookingVerifyResult } from "./types";
 import { logger } from "../logger";
 
 interface DanplannerConfig {
@@ -414,6 +414,69 @@ export async function danplannerVerify2FA(
   }
 }
 
+function parseBookings(html: string): BookingEntry[] {
+  const bookings: BookingEntry[] = [];
+  const rowRegex = /<tr\s+class="bookingItem"[^>]*>([\s\S]*?)<\/tr>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = rowRegex.exec(html)) !== null) {
+    const row = match[1];
+
+    const bookingIdMatch = row.match(/data-bookingid="(\d+)"/);
+    const customerIdMatch = row.match(/data-customerid="(\d+)"/);
+    const emailMatch = row.match(/data-customermail="([^"]*)"/);
+    const mobileMatch = row.match(/data-mobile="([^"]*)"/);
+    const langMatch = row.match(/data-language="([^"]*)"/);
+
+    const bookingNumMatch = row.match(/<a[^>]*href="\/Booking\/Edit\/[^"]+"[^>]*>[\s\S]*?<\/i>\s*(\d+)\s*<\/a>/);
+    const placeMatch = row.match(/<td[^>]*data-sort="[^"]*"[^>]*>\s*<a[^>]*>\s*<span>([^<]+)<\/span>/);
+    const customerNameMatch = row.match(/<a\s+class="truncate"[^>]*>[\s\S]*?<\/i>\s*([^<]+?)\s*<\/a>/);
+    const guestNamesMatch = row.match(/<td>\s*<span>([^<]+)<\/span>\s*<\/td>/);
+    const countryMatch = row.match(/title="([^"]+)"/);
+
+    const dateColMatch = row.match(
+      /<td[^>]*data-sort="(\d{4}-\d{2}-\d{2})"[^>]*>([\s\S]*?)<\/td>/,
+    );
+
+    if (!bookingIdMatch || !placeMatch || !dateColMatch) continue;
+
+    const arrivalDate = dateColMatch[1];
+    const dateInner = dateColMatch[2];
+    const dateSpans = [...dateInner.matchAll(/<span>(\d{2}-\d{2})<\/span>/g)].map((m) => m[1]);
+    if (dateSpans.length < 2) continue;
+
+    const arrivalYear = parseInt(arrivalDate.slice(0, 4), 10);
+    const arrivalMonth = parseInt(arrivalDate.slice(5, 7), 10);
+    const arrivalDay = parseInt(arrivalDate.slice(8, 10), 10);
+
+    const [depDayStr, depMonthStr] = dateSpans[1].split("-");
+    const depDay = parseInt(depDayStr, 10);
+    const depMonth = parseInt(depMonthStr, 10);
+    let depYear = arrivalYear;
+    if (depMonth < arrivalMonth || (depMonth === arrivalMonth && depDay < arrivalDay)) {
+      depYear = arrivalYear + 1;
+    }
+    const depDate = `${depYear}-${String(depMonth).padStart(2, "0")}-${String(depDay).padStart(2, "0")}`;
+
+    bookings.push({
+      externalBookingId: bookingIdMatch[1],
+      externalCustomerId: customerIdMatch?.[1] || "",
+      bookingNumber: bookingNumMatch?.[1]?.trim() || bookingIdMatch[1],
+      unitName: decodeHtmlEntities(placeMatch[1].trim()),
+      customerName: decodeHtmlEntities((customerNameMatch?.[1] || "").trim()),
+      guestNames: decodeHtmlEntities((guestNamesMatch?.[1] || "").trim()),
+      email: (emailMatch?.[1] || "").trim(),
+      phone: (mobileMatch?.[1] || "").trim(),
+      language: langMatch?.[1] || "da",
+      country: decodeHtmlEntities(countryMatch?.[1] || ""),
+      checkIn: arrivalDate,
+      checkOut: depDate,
+    });
+  }
+
+  return bookings;
+}
+
 export function createDanplannerProvider(config: DanplannerConfig): BookingProvider {
   const cookies = config.sessionCookies || "";
 
@@ -467,6 +530,88 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
         typeId,
         typeName: typeId,
       }));
+    },
+
+    async getBookings(productType = "all") {
+      if (!cookies) throw new Error("Ikke forbundet til Danplanner. Log ind først.");
+
+      const productTypeMap: Record<string, string> = { all: "0", tourist: "1", seasonal: "2" };
+      const productTypeValue = productTypeMap[productType] || "0";
+
+      // First GET dashboard to obtain a fresh antiforgery token (some Danplanner
+      // AJAX endpoints validate the token even though the cookie alone is sent
+      // on subsequent requests).
+      let token = "";
+      try {
+        const dashRes = await fetch(`${config.baseUrl}/`, {
+          headers: { Cookie: cookies },
+          redirect: "manual",
+        });
+        if (dashRes.status === 200) {
+          const dashHtml = await dashRes.text();
+          const m = dashHtml.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+          if (m) token = m[1];
+        }
+        logger.info("danplanner", "Fetched dashboard for antiforgery token", {
+          status: dashRes.status,
+          tokenFound: !!token,
+        });
+      } catch (err) {
+        logger.warn("danplanner", "Could not fetch dashboard for token", { error: (err as Error).message });
+      }
+
+      const bodyParams: Record<string, string> = {
+        GuestsProductType: productTypeValue,
+        IncludeArrivals: "True",
+      };
+      if (token) bodyParams["__RequestVerificationToken"] = token;
+      const body = new URLSearchParams(bodyParams);
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookies,
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${config.baseUrl}/`,
+        Origin: config.baseUrl,
+      };
+      if (token) headers["RequestVerificationToken"] = token;
+
+      const res = await fetch(`${config.baseUrl}/Dashboard/GetGuests`, {
+        method: "POST",
+        headers,
+        body: body.toString(),
+        redirect: "manual",
+      });
+
+      const html = await res.text();
+      logger.info("danplanner", "GetGuests response", {
+        status: res.status,
+        htmlLength: html.length,
+        productType: productTypeValue,
+      });
+
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location") || "";
+        if (loc.includes("login") || loc.includes("Login")) {
+          throw new Error("Session udløbet. Log ind igen.");
+        }
+      }
+
+      if (res.status >= 400) {
+        logger.error("danplanner", "GetGuests failed", {
+          status: res.status,
+          bodySnippet: html.slice(0, 800),
+        });
+        throw new Error(`GetGuests fejlede (status ${res.status})`);
+      }
+
+      if (isLoginPage(html) || isApprovePage(html)) {
+        throw new Error("Session udløbet. Log ind igen.");
+      }
+
+      const bookings = parseBookings(html);
+      logger.info("danplanner", "Parsed bookings", { count: bookings.length });
+      return bookings;
     },
   };
 }

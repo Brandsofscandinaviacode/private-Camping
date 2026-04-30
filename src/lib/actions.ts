@@ -5378,6 +5378,106 @@ export async function syncBookingResources() {
   return { synced };
 }
 
+export async function syncBookings(productType: "all" | "tourist" | "seasonal" = "all") {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const provider = getBookingProvider(
+    (settings.booking_provider || "none") as "danplanner" | "none",
+    settings,
+  );
+  if (!provider) return { created: 0, updated: 0, skipped: [] as Array<{ booking: string; reason: string }>, error: "Ingen booking-udbyder konfigureret" };
+
+  const providerName = settings.booking_provider || "danplanner";
+
+  let bookings;
+  try {
+    bookings = await provider.getBookings(productType);
+  } catch (err) {
+    return {
+      created: 0,
+      updated: 0,
+      skipped: [] as Array<{ booking: string; reason: string }>,
+      error: (err as Error).message,
+    };
+  }
+
+  let created = 0;
+  let updated = 0;
+  const skipped: Array<{ booking: string; reason: string }> = [];
+
+  // Cache units by name for fast lookup
+  const allUnits = await prisma.unit.findMany({ select: { id: true, name: true } });
+  const unitsByName = new Map(allUnits.map((u) => [u.name.toLowerCase().trim(), u.id]));
+
+  for (const booking of bookings) {
+    const unitId = unitsByName.get(booking.unitName.toLowerCase().trim());
+    if (!unitId) {
+      skipped.push({ booking: `${booking.bookingNumber} (${booking.unitName})`, reason: "Enhed findes ikke" });
+      continue;
+    }
+
+    const checkInDate = new Date(booking.checkIn + "T12:00:00");
+    const checkOutDate = new Date(booking.checkOut + "T12:00:00");
+    const externalRef = `${providerName}:${booking.externalBookingId}`;
+
+    // Look up by externalRef (stored in bookingRef field with prefix)
+    const existing = await prisma.session.findFirst({
+      where: { bookingRef: externalRef },
+    });
+
+    const guestName = booking.customerName || booking.guestNames || "Ukendt gæst";
+    const guestEmail = booking.email || null;
+    const guestPhone = booking.phone || null;
+
+    if (existing) {
+      const changes: Record<string, unknown> = {};
+      if (existing.unitId !== unitId) changes.unitId = unitId;
+      if (existing.guestName !== guestName) changes.guestName = guestName;
+      if (existing.guestEmail !== guestEmail) changes.guestEmail = guestEmail;
+      if (existing.guestPhone !== guestPhone) changes.guestPhone = guestPhone;
+      if (existing.checkInTime.getTime() !== checkInDate.getTime()) changes.checkInTime = checkInDate;
+      if (!existing.expectedCheckOut || existing.expectedCheckOut.getTime() !== checkOutDate.getTime()) {
+        changes.expectedCheckOut = checkOutDate;
+      }
+      if (Object.keys(changes).length > 0) {
+        await prisma.session.update({ where: { id: existing.id }, data: changes });
+        updated++;
+      }
+    } else {
+      await prisma.session.create({
+        data: {
+          unitId,
+          guestName,
+          guestEmail,
+          guestPhone,
+          bookingRef: externalRef,
+          guestPortalToken: uuidv4(),
+          status: "ACTIVE",
+          paymentStatus: "UNPAID",
+          checkInTime: checkInDate,
+          expectedCheckOut: checkOutDate,
+          billingMode: "POSTPAID",
+        },
+      });
+      // Mark unit as occupied
+      await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
+      created++;
+    }
+  }
+
+  logger.info("danplanner", "Booking sync completed", {
+    created,
+    updated,
+    skippedCount: skipped.length,
+    totalFromProvider: bookings.length,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/bookings");
+  revalidatePath("/admin/map");
+  return { created, updated, skipped };
+}
+
 // ──────────────────────────────────────────────
 // SITE MAP
 // ──────────────────────────────────────────────
