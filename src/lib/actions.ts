@@ -307,18 +307,186 @@ export async function testEmail(toAddr: string): Promise<{ ok: boolean; message:
 }
 
 // ──────────────────────────────────────────────
+// Resource Types (user-defined unit categories)
+// ──────────────────────────────────────────────
+
+const DEFAULT_RESOURCE_TYPES: Array<{
+  name: string;
+  icon: string;
+  defaultUnitType: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH";
+  sortOrder: number;
+}> = [
+  { name: "Hytter", icon: "Home", defaultUnitType: "CABIN", sortOrder: 0 },
+  { name: "Lejligheder", icon: "Building2", defaultUnitType: "CABIN", sortOrder: 1 },
+  { name: "Fastliggere", icon: "Caravan", defaultUnitType: "SEASONAL", sortOrder: 2 },
+  { name: "Pladser", icon: "MapPin", defaultUnitType: "PITCH", sortOrder: 3 },
+];
+
+const TYPE_TO_DEFAULT_RT: Record<string, string> = {
+  CABIN: "Hytter",
+  SEASONAL: "Fastliggere",
+  CARAVAN: "Fastliggere",
+  PITCH: "Pladser",
+};
+
+/**
+ * Ensures default resource types exist and migrates any unit without a
+ * resourceTypeId to a default based on its legacy `type` enum value.
+ * Idempotent — safe to call repeatedly.
+ */
+async function ensureResourceTypes() {
+  const existing = await prisma.resourceType.findMany();
+  const byName = new Map(existing.map((rt) => [rt.name, rt]));
+
+  for (const def of DEFAULT_RESOURCE_TYPES) {
+    if (!byName.has(def.name)) {
+      const created = await prisma.resourceType.create({ data: def });
+      byName.set(def.name, created);
+    }
+  }
+
+  const orphans = await prisma.unit.findMany({ where: { resourceTypeId: null } });
+  for (const u of orphans) {
+    const targetName = TYPE_TO_DEFAULT_RT[u.type] || "Hytter";
+    const target = byName.get(targetName);
+    if (target) {
+      await prisma.unit.update({
+        where: { id: u.id },
+        data: { resourceTypeId: target.id },
+      });
+    }
+  }
+}
+
+export async function getResourceTypes() {
+  await requireAuth();
+  await ensureResourceTypes();
+  return prisma.resourceType.findMany({
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    include: { _count: { select: { units: true } } },
+  });
+}
+
+export async function createResourceType(data: {
+  name: string;
+  icon?: string;
+  defaultUnitType?: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH";
+}) {
+  await requireAuth();
+  const max = await prisma.resourceType.aggregate({ _max: { sortOrder: true } });
+  const created = await prisma.resourceType.create({
+    data: {
+      name: data.name,
+      icon: data.icon || "Home",
+      defaultUnitType: data.defaultUnitType || "CABIN",
+      sortOrder: (max._max.sortOrder ?? -1) + 1,
+    },
+  });
+  revalidatePath("/admin");
+  revalidatePath("/admin/settings");
+  return created;
+}
+
+export async function updateResourceType(id: number, data: {
+  name?: string;
+  icon?: string;
+  defaultUnitType?: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH";
+  externalId?: string | null;
+  externalProvider?: string | null;
+}) {
+  await requireAuth();
+  await prisma.resourceType.update({
+    where: { id },
+    data: {
+      ...(data.name !== undefined ? { name: data.name } : {}),
+      ...(data.icon !== undefined ? { icon: data.icon } : {}),
+      ...(data.defaultUnitType !== undefined ? { defaultUnitType: data.defaultUnitType } : {}),
+      ...(data.externalId !== undefined ? { externalId: data.externalId } : {}),
+      ...(data.externalProvider !== undefined ? { externalProvider: data.externalProvider } : {}),
+    },
+  });
+  revalidatePath("/admin");
+  revalidatePath("/admin/settings");
+}
+
+export async function deleteResourceType(id: number) {
+  await requireAuth();
+  await prisma.resourceType.delete({ where: { id } });
+  revalidatePath("/admin");
+  revalidatePath("/admin/settings");
+}
+
+export async function reorderResourceTypes(orderedIds: number[]) {
+  await requireAuth();
+  await Promise.all(
+    orderedIds.map((id, index) =>
+      prisma.resourceType.update({ where: { id }, data: { sortOrder: index } }),
+    ),
+  );
+  revalidatePath("/admin");
+  revalidatePath("/admin/settings");
+}
+
+export async function moveUnitToResourceType(unitId: number, resourceTypeId: number | null) {
+  await requireAuth();
+  const max = resourceTypeId
+    ? await prisma.unit.aggregate({
+        where: { resourceTypeId },
+        _max: { sortOrder: true },
+      })
+    : { _max: { sortOrder: 0 } };
+  await prisma.unit.update({
+    where: { id: unitId },
+    data: {
+      resourceTypeId,
+      sortOrder: (max._max.sortOrder ?? -1) + 1,
+    },
+  });
+  revalidatePath("/admin");
+}
+
+export async function reorderUnits(resourceTypeId: number | null, orderedUnitIds: number[]) {
+  await requireAuth();
+  await Promise.all(
+    orderedUnitIds.map((id, index) =>
+      prisma.unit.update({
+        where: { id },
+        data: { sortOrder: index, ...(resourceTypeId !== undefined ? { resourceTypeId } : {}) },
+      }),
+    ),
+  );
+  revalidatePath("/admin");
+}
+
+// ──────────────────────────────────────────────
 // Unit CRUD
 // ──────────────────────────────────────────────
 export async function createUnit(
   name: string,
-  type: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH" = "CABIN"
+  type: "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH" = "CABIN",
+  resourceTypeId?: number,
 ) {
   await requireAuth();
+  await ensureResourceTypes();
+
+  let rtId = resourceTypeId;
+  if (!rtId) {
+    const targetName = TYPE_TO_DEFAULT_RT[type] || "Hytter";
+    const rt = await prisma.resourceType.findUnique({ where: { name: targetName } });
+    rtId = rt?.id;
+  }
+
+  const max = rtId
+    ? await prisma.unit.aggregate({ where: { resourceTypeId: rtId }, _max: { sortOrder: true } })
+    : { _max: { sortOrder: 0 } };
+
   const unit = await prisma.unit.create({
     data: {
       name,
       type,
       isLongTerm: type === "SEASONAL",
+      resourceTypeId: rtId,
+      sortOrder: (max._max.sortOrder ?? -1) + 1,
       hardware: { create: {} },
     },
   });
@@ -334,9 +502,10 @@ export async function deleteUnit(unitId: number) {
 
 export async function getUnits() {
   await requireAuth();
+  await ensureResourceTypes();
   return prisma.unit.findMany({
-    include: { hardware: true },
-    orderBy: { name: "asc" },
+    include: { hardware: true, resourceType: true },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
 }
 
@@ -5139,6 +5308,8 @@ export async function fetchBookingResources(typeId: string) {
 
 export async function syncBookingResources() {
   await requireAuth();
+  await ensureResourceTypes();
+
   const settings = await getGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
@@ -5146,18 +5317,27 @@ export async function syncBookingResources() {
   );
   if (!provider) return { synced: 0, error: "Ingen booking-udbyder konfigureret" };
 
-  const resourceTypes = await provider.getResourceTypes();
-  const pitchTypeId = settings.danplanner_resource_type_pitch || "";
-  const cabinTypeId = settings.danplanner_resource_type_cabin || "";
-
-  let synced = 0;
   const providerName = settings.booking_provider || "danplanner";
 
-  for (const rt of resourceTypes) {
-    if (rt.id !== pitchTypeId && rt.id !== cabinTypeId) continue;
+  const mappedResourceTypes = await prisma.resourceType.findMany({
+    where: { externalProvider: providerName, externalId: { not: null } },
+  });
 
-    const resources = await provider.getResources(rt.id);
-    const unitType = rt.id === cabinTypeId ? "CABIN" : "PITCH";
+  if (mappedResourceTypes.length === 0) {
+    return { synced: 0, error: "Ingen ressourcetyper er mappet til " + providerName + ". Konfigurér det først." };
+  }
+
+  let synced = 0;
+
+  for (const rt of mappedResourceTypes) {
+    if (!rt.externalId) continue;
+
+    const resources = await provider.getResources(rt.externalId);
+    const maxAgg = await prisma.unit.aggregate({
+      where: { resourceTypeId: rt.id },
+      _max: { sortOrder: true },
+    });
+    let nextSortOrder = (maxAgg._max.sortOrder ?? -1) + 1;
 
     for (const res of resources) {
       const existing = await prisma.unit.findFirst({
@@ -5165,20 +5345,25 @@ export async function syncBookingResources() {
       });
 
       if (existing) {
-        if (existing.name !== res.name) {
-          await prisma.unit.update({
-            where: { id: existing.id },
-            data: { name: res.name },
-          });
+        const updates: Record<string, unknown> = {};
+        if (existing.name !== res.name) updates.name = res.name;
+        if (!existing.resourceTypeId) {
+          updates.resourceTypeId = rt.id;
+          updates.sortOrder = nextSortOrder++;
+        }
+        if (Object.keys(updates).length > 0) {
+          await prisma.unit.update({ where: { id: existing.id }, data: updates });
         }
       } else {
         await prisma.unit.create({
           data: {
             name: res.name,
-            type: unitType,
-            isLongTerm: false,
+            type: rt.defaultUnitType as "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH",
+            isLongTerm: rt.defaultUnitType === "SEASONAL",
             externalId: res.externalId,
             externalProvider: providerName,
+            resourceTypeId: rt.id,
+            sortOrder: nextSortOrder++,
             hardware: { create: {} },
           },
         });

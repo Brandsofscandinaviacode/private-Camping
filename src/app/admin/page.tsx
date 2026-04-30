@@ -1,21 +1,15 @@
 import Link from "next/link";
-import { getUnits, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
-import { UnitCard } from "@/components/admin/cabin-card";
+import { getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
-import { Tent, Home, Caravan, MapPin, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
+import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
+import { Tent, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-const typeConfig = [
-  { type: "CABIN", label: "Hytter", icon: Home },
-  { type: "SEASONAL", label: "Fastliggere", icon: Caravan },
-  { type: "CARAVAN", label: "Campingvogne", icon: Caravan },
-  { type: "PITCH", label: "Pladser", icon: MapPin },
-];
-
 export default async function AdminDashboard() {
-  const [units, unpaidCount, totalUsage, alarmResult, elPricing] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing] = await Promise.all([
     getUnits(),
+    getResourceTypes(),
     getUnpaidCount(),
     getTotalUsage().catch(() => null),
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
@@ -29,7 +23,22 @@ export default async function AdminDashboard() {
         getActiveSession(unit.id),
       ]);
       return {
-        unit,
+        unit: {
+          id: unit.id,
+          name: unit.name,
+          type: unit.type,
+          status: unit.status,
+          isLongTerm: unit.isLongTerm,
+          longTermGuestName: unit.longTermGuestName,
+          resourceTypeId: unit.resourceTypeId,
+          sortOrder: unit.sortOrder,
+          hardware: unit.hardware ? {
+            hasElectricity: unit.hardware.hasElectricity,
+            hasWater: unit.hardware.hasWater,
+            hasClimate: unit.hardware.hasClimate,
+            hasSmartLock: unit.hardware.hasSmartLock,
+          } : null,
+        },
         haStates: haStates.status === "fulfilled" ? haStates.value : null,
         activeGuestName: activeSession.status === "fulfilled"
           ? activeSession.value?.guestName ?? null : null,
@@ -39,14 +48,6 @@ export default async function AdminDashboard() {
 
   const occupiedCount = units.filter((u) => u.status === "OCCUPIED").length;
   const vacantCount = units.filter((u) => u.status === "VACANT").length;
-
-  // Group by type
-  const grouped = typeConfig
-    .map((tc) => ({
-      ...tc,
-      units: unitData.filter((d) => d.unit.type === tc.type),
-    }))
-    .filter((g) => g.units.length > 0);
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 sm:space-y-8 max-w-7xl">
@@ -163,30 +164,10 @@ export default async function AdminDashboard() {
           </p>
         </div>
       ) : (
-        <div className="space-y-8">
-          {grouped.map((group) => {
-            const Icon = group.icon;
-            return (
-              <section key={group.type}>
-                <div className="flex items-center gap-2.5 mb-4">
-                  <Icon className="h-5 w-5 text-muted-foreground" />
-                  <h2 className="text-lg font-semibold">{group.label}</h2>
-                  <span className="text-sm text-muted-foreground">({group.units.length})</span>
-                </div>
-                <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
-                  {group.units.map(({ unit, haStates, activeGuestName }) => (
-                    <UnitCard
-                      key={unit.id}
-                      unit={unit}
-                      haStates={haStates}
-                      activeGuestName={activeGuestName}
-                    />
-                  ))}
-                </div>
-              </section>
-            );
-          })}
-        </div>
+        <DashboardUnitsGrid
+          unitData={unitData}
+          resourceTypes={resourceTypes.map((rt) => ({ id: rt.id, name: rt.name, icon: rt.icon }))}
+        />
       )}
     </div>
   );

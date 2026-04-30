@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown,
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -1558,16 +1558,51 @@ export function GuestPortalSettings({ settings }: SettingsFormProps) {
 }
 
 // ─── BOOKING SYSTEM TAB ───
-export function BookingSettings({ settings }: SettingsFormProps) {
+interface BookingSettingsProps extends SettingsFormProps {
+  resourceTypes?: Array<{ id: number; name: string; externalId: string | null; externalProvider: string | null }>;
+}
+
+export function BookingSettings({ settings, resourceTypes: localResourceTypes = [] }: BookingSettingsProps) {
   const [values, setValues] = useState({
     booking_provider: settings.booking_provider || "none",
     danplanner_url: settings.danplanner_url || "https://admin.danplanner.dk",
     danplanner_username: settings.danplanner_username || "",
     danplanner_password: settings.danplanner_password || "",
-    danplanner_resource_type_pitch: settings.danplanner_resource_type_pitch || "",
-    danplanner_resource_type_cabin: settings.danplanner_resource_type_cabin || "",
   });
   const { isPending, saved, handleSave } = useSave(values);
+
+  // Local mapping state: Danplanner type ID → local ResourceType ID
+  const initialMapping: Record<string, number> = {};
+  for (const rt of localResourceTypes) {
+    if (rt.externalProvider === "danplanner" && rt.externalId) {
+      initialMapping[rt.externalId] = rt.id;
+    }
+  }
+  const [mapping, setMapping] = useState<Record<string, number>>(initialMapping);
+  const [savingMapping, setSavingMapping] = useState<string | null>(null);
+
+  async function handleMapResourceType(danplannerId: string, localRtId: number | null) {
+    setSavingMapping(danplannerId);
+    try {
+      // Clear any existing mapping for this Danplanner ID on other ResourceTypes
+      for (const rt of localResourceTypes) {
+        if (rt.externalProvider === "danplanner" && rt.externalId === danplannerId && rt.id !== localRtId) {
+          await updateResourceType(rt.id, { externalId: null, externalProvider: null });
+        }
+      }
+      if (localRtId) {
+        await updateResourceType(localRtId, { externalId: danplannerId, externalProvider: "danplanner" });
+        setMapping((prev) => ({ ...prev, [danplannerId]: localRtId }));
+      } else {
+        const newMapping = { ...mapping };
+        delete newMapping[danplannerId];
+        setMapping(newMapping);
+      }
+    } catch {
+      // ignore
+    }
+    setSavingMapping(null);
+  }
 
   const h = (key: string, value: string) =>
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -1796,62 +1831,41 @@ export function BookingSettings({ settings }: SettingsFormProps) {
               <div className="border-t border-border pt-4 space-y-3">
                 <h3 className="text-sm font-medium">Ressourcetyper</h3>
                 <p className="text-xs text-muted-foreground">
-                  Vælg hvilke ressourcetyper i Danplanner der svarer til pladser og hytter.
+                  Hent typerne fra Danplanner og vælg hvilken lokal ressourcetype hver Danplanner-type skal mappe til.
+                  Du kan oprette nye lokale typer under fanen <strong>Enheder</strong>.
                 </p>
                 <Button variant="outline" size="sm" onClick={handleLoadResourceTypes} disabled={loadingTypes}>
                   {loadingTypes ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ExternalLink className="h-4 w-4 mr-2" />}
-                  {loadingTypes ? "Henter..." : "Hent ressourcetyper"}
+                  {loadingTypes ? "Henter..." : "Hent fra Danplanner"}
                 </Button>
 
                 {resourceTypes.length > 0 && (
                   <div className="space-y-2 mt-2">
-                    {resourceTypes.map((rt) => (
-                      <div key={rt.id} className="flex items-center gap-3 text-sm p-2 rounded bg-muted/50">
-                        <span className="font-mono text-xs text-muted-foreground">#{rt.id}</span>
-                        <span className="font-medium">{rt.name}</span>
-                        <div className="ml-auto flex gap-1">
-                          <Button
-                            variant={values.danplanner_resource_type_pitch === rt.id ? "default" : "outline"}
-                            size="sm"
-                            className="text-xs h-7"
-                            onClick={() => h("danplanner_resource_type_pitch", rt.id)}
+                    {resourceTypes.map((rt) => {
+                      const mapped = mapping[rt.id];
+                      const isSaving = savingMapping === rt.id;
+                      return (
+                        <div key={rt.id} className="flex items-center gap-3 text-sm p-2 rounded bg-muted/50">
+                          <span className="font-mono text-[10px] text-muted-foreground shrink-0">#{rt.id}</span>
+                          <span className="font-medium truncate">{rt.name}</span>
+                          <span className="text-muted-foreground text-xs">→</span>
+                          <select
+                            value={mapped || ""}
+                            onChange={(e) => handleMapResourceType(rt.id, e.target.value ? Number(e.target.value) : null)}
+                            disabled={isSaving}
+                            className="ml-auto rounded-md border border-input bg-background px-2 py-1 text-sm h-8 max-w-[200px]"
                           >
-                            Plads
-                          </Button>
-                          <Button
-                            variant={values.danplanner_resource_type_cabin === rt.id ? "default" : "outline"}
-                            size="sm"
-                            className="text-xs h-7"
-                            onClick={() => h("danplanner_resource_type_cabin", rt.id)}
-                          >
-                            Hytte
-                          </Button>
+                            <option value="">— Ikke mappet —</option>
+                            {localResourceTypes.map((lrt) => (
+                              <option key={lrt.id} value={lrt.id}>{lrt.name}</option>
+                            ))}
+                          </select>
+                          {isSaving && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Plads-type ID</Label>
-                    <Input
-                      value={values.danplanner_resource_type_pitch}
-                      onChange={(e) => h("danplanner_resource_type_pitch", e.target.value)}
-                      placeholder="f.eks. 596"
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Hytte-type ID</Label>
-                    <Input
-                      value={values.danplanner_resource_type_cabin}
-                      onChange={(e) => h("danplanner_resource_type_cabin", e.target.value)}
-                      placeholder="f.eks. 597"
-                      className="mt-1"
-                    />
-                  </div>
-                </div>
               </div>
             </div>
           )}

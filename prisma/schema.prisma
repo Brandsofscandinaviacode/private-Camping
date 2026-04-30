@@ -36,6 +36,30 @@ model GlobalSetting {
 }
 
 // ──────────────────────────────────────────────
+// Resource Type (user-defined unit categories)
+// ──────────────────────────────────────────────
+model ResourceType {
+  id              Int     @id @default(autoincrement())
+  name            String  @unique
+  icon            String  @default("Home")  // Lucide icon name
+  sortOrder       Int     @default(0)
+
+  // Default behavior for units in this category (for billing/long-term logic)
+  defaultUnitType String  @default("CABIN")  // CABIN | SEASONAL | CARAVAN | PITCH
+
+  // Link to external booking system resource type
+  externalId       String?
+  externalProvider String?
+
+  units Unit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("resource_types")
+}
+
+// ──────────────────────────────────────────────
 // Unit (Hytte, Campingvogn, Plads, etc.)
 // ──────────────────────────────────────────────
 enum UnitType {
@@ -70,6 +94,13 @@ model Unit {
   // Site map position (percentage 0-100 of map image dimensions)
   mapX             Float?
   mapY             Float?
+
+  // User-defined resource type (replaces enum-based type for grouping/display)
+  resourceTypeId   Int?
+  resourceType     ResourceType? @relation(fields: [resourceTypeId], references: [id], onDelete: SetNull)
+
+  // Manual ordering on dashboard within resource type
+  sortOrder        Int @default(0)
 
   hardware         UnitHardware?
   sessions         Session[]

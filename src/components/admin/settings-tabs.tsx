@@ -12,7 +12,7 @@ const tabs = [
   { id: "accounting", label: "Bogføring", icon: BookOpen },
   { id: "booking", label: "Booking", icon: CalendarDays },
   { id: "guest", label: "Gæsteportal", icon: Users },
-  { id: "hardware", label: "Pladser", icon: MapPin },
+  { id: "hardware", label: "Enheder", icon: MapPin },
   { id: "system", label: "System", icon: Activity },
 ] as const;
 

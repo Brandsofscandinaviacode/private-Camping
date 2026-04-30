@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Plus, Home, Caravan, MapPin } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Plus, Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,29 +12,52 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createUnit } from "@/lib/actions";
+import { createUnit, getResourceTypes } from "@/lib/actions";
 
-const unitTypes = [
-  { value: "CABIN" as const, label: "Hytte", icon: Home, desc: "Korttidsleje" },
-  { value: "SEASONAL" as const, label: "Fastligger", icon: Caravan, desc: "Langtidsleje med månedlig fakturering" },
-  { value: "CARAVAN" as const, label: "Campingvogn", icon: Caravan, desc: "Korttidsleje" },
-  { value: "PITCH" as const, label: "Plads", icon: MapPin, desc: "Korttidsleje (telt/vogn)" },
-];
+type LucideIcon = typeof Home;
+const ICONS: Record<string, LucideIcon> = {
+  Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor,
+};
+
+interface ResourceType {
+  id: number;
+  name: string;
+  icon: string;
+  defaultUnitType: string;
+}
 
 export function AddUnitDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [type, setType] = useState<"CABIN" | "SEASONAL" | "CARAVAN" | "PITCH">("CABIN");
+  const [resourceTypeId, setResourceTypeId] = useState<number | null>(null);
+  const [resourceTypes, setResourceTypes] = useState<ResourceType[]>([]);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    getResourceTypes().then((types) => {
+      const list = types.map((t) => ({
+        id: t.id,
+        name: t.name,
+        icon: t.icon,
+        defaultUnitType: t.defaultUnitType,
+      }));
+      setResourceTypes(list);
+      if (list.length > 0 && resourceTypeId === null) {
+        setResourceTypeId(list[0].id);
+      }
+    });
+  }, [open, resourceTypeId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !resourceTypeId) return;
     setLoading(true);
     try {
-      await createUnit(name.trim(), type);
+      const rt = resourceTypes.find((r) => r.id === resourceTypeId);
+      const type = (rt?.defaultUnitType || "CABIN") as "CABIN" | "SEASONAL" | "CARAVAN" | "PITCH";
+      await createUnit(name.trim(), type, resourceTypeId);
       setName("");
-      setType("CABIN");
       setOpen(false);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Fejl ved oprettelse");
@@ -42,8 +65,6 @@ export function AddUnitDialog() {
       setLoading(false);
     }
   }
-
-  const selectedType = unitTypes.find((t) => t.value === type);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -68,32 +89,37 @@ export function AddUnitDialog() {
             />
           </div>
           <div>
-            <Label>Type</Label>
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              {unitTypes.map((t) => {
-                const Icon = t.icon;
-                return (
-                  <button
-                    type="button"
-                    key={t.value}
-                    onClick={() => setType(t.value)}
-                    className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors ${
-                      type === t.value
-                        ? "border-primary bg-primary/5 text-primary"
-                        : "border-border hover:border-muted-foreground/30"
-                    }`}
-                  >
-                    <Icon className="h-5 w-5 shrink-0" />
-                    <div>
-                      <p className="text-sm font-medium">{t.label}</p>
-                      <p className="text-xs text-muted-foreground">{t.desc}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+            <Label>Ressourcetype</Label>
+            {resourceTypes.length === 0 ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Ingen ressourcetyper. Opret én under <strong>Indstillinger → Enheder</strong>.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 mt-2 max-h-[280px] overflow-y-auto">
+                {resourceTypes.map((rt) => {
+                  const Icon = ICONS[rt.icon] || Home;
+                  return (
+                    <button
+                      type="button"
+                      key={rt.id}
+                      onClick={() => setResourceTypeId(rt.id)}
+                      className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors ${
+                        resourceTypeId === rt.id
+                          ? "border-primary bg-primary/5 text-primary"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <Icon className="h-5 w-5 shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium">{rt.name}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          <Button type="submit" disabled={loading || !name.trim()} className="w-full">
+          <Button type="submit" disabled={loading || !name.trim() || !resourceTypeId} className="w-full">
             {loading ? "Opretter..." : "Opret enhed"}
           </Button>
         </form>
