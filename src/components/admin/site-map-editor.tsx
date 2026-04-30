@@ -261,7 +261,7 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
       <div className="flex gap-4">
         <div
           ref={containerRef}
-          className={`relative flex-1 rounded-xl overflow-hidden border border-border shadow-sm ${editMode ? "cursor-crosshair" : ""}`}
+          className={`relative flex-1 rounded-xl border border-border shadow-sm ${editMode ? "cursor-crosshair" : ""}`}
           onClick={handleMapClick}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -270,7 +270,7 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
           <img
             src={siteMapUrl}
             alt="Pladskort"
-            className="w-full h-auto block select-none pointer-events-none"
+            className="w-full h-auto block select-none pointer-events-none rounded-xl"
             draggable={false}
           />
 
@@ -291,18 +291,18 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
             return (
               <div
                 key={id}
-                className={`absolute transform -translate-x-1/2 -translate-y-1/2 group ${editMode ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
-                style={{ left: `${pos.x}%`, top: `${pos.y}%`, zIndex: dragging === id ? 50 : 10 }}
+                className={`absolute transform -translate-x-1/2 -translate-y-1/2 group z-10 hover:z-50 ${editMode ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                style={{ left: `${pos.x}%`, top: `${pos.y}%`, zIndex: dragging === id ? 60 : undefined }}
                 title={tooltip}
                 onPointerDown={(e) => handlePointerDown(e, id)}
               >
                 {/* Marker dot */}
-                <div className={`relative h-6 w-6 ${shape} border-2 ${color} flex items-center justify-center text-white shadow-md transition-transform hover:scale-150 hover:z-50`}>
+                <div className={`relative h-6 w-6 ${shape} border-2 ${color} flex items-center justify-center text-white shadow-md transition-transform hover:scale-150`}>
                   <span className={`font-bold tabular-nums leading-none ${fontSize}`}>{label}</span>
                 </div>
 
                 {/* Hover tooltip */}
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50">
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block pointer-events-none">
                   <div className="bg-popover text-popover-foreground text-xs rounded-lg shadow-lg border border-border px-3 py-2 whitespace-nowrap">
                     <p className="font-medium">{unit.name}</p>
                     {unit.resourceTypeName && (
