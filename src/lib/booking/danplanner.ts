@@ -57,6 +57,59 @@ function isLoginPage(html: string): boolean {
   return /name="userName"/i.test(html) && /name="password"/i.test(html);
 }
 
+interface ParsedForm {
+  action: string;
+  method: string;
+  fields: Record<string, string>;
+  visibleInputNames: string[];
+}
+
+function parseFormFromHtml(html: string, hint?: RegExp): ParsedForm | null {
+  const formRegex = /<form([^>]*)>([\s\S]*?)<\/form>/gi;
+  let match: RegExpExecArray | null;
+  let bestForm: { attrs: string; body: string } | null = null;
+
+  while ((match = formRegex.exec(html)) !== null) {
+    const attrs = match[1];
+    const body = match[2];
+    if (hint && hint.test(body)) {
+      bestForm = { attrs, body };
+      break;
+    }
+    if (!bestForm) bestForm = { attrs, body };
+  }
+
+  if (!bestForm) return null;
+
+  const actionMatch = bestForm.attrs.match(/action=["']([^"']*)["']/i);
+  const methodMatch = bestForm.attrs.match(/method=["']([^"']*)["']/i);
+
+  const fields: Record<string, string> = {};
+  const visibleInputNames: string[] = [];
+  const inputRegex = /<input\b([^>]*)>/gi;
+  let im: RegExpExecArray | null;
+  while ((im = inputRegex.exec(bestForm.body)) !== null) {
+    const inputAttrs = im[1];
+    const nameMatch = inputAttrs.match(/name=["']([^"']+)["']/i);
+    if (!nameMatch) continue;
+    const name = nameMatch[1];
+    const valueMatch = inputAttrs.match(/value=["']([^"']*)["']/i);
+    const typeMatch = inputAttrs.match(/type=["']([^"']*)["']/i);
+    const type = (typeMatch?.[1] || "text").toLowerCase();
+    fields[name] = valueMatch ? valueMatch[1] : "";
+    if (type !== "hidden" && type !== "submit" && type !== "button" && type !== "checkbox") {
+      visibleInputNames.push(name);
+    }
+  }
+
+  return {
+    action: actionMatch?.[1] || "",
+    method: (methodMatch?.[1] || "post").toLowerCase(),
+    fields,
+    visibleInputNames,
+  };
+}
+
 async function followRedirect(
   url: string,
   cookies: string,
@@ -148,6 +201,17 @@ export async function danplannerLogin(config: DanplannerConfig): Promise<Booking
 
     if (isApprovePage(finalHtml) || /ApproveIP/i.test(finalUrl)) {
       logger.info("danplanner", "2FA required - approve IP page detected", { finalUrl });
+      const parsed = parseFormFromHtml(finalHtml, /name=["']Code["']|verification|approve/i);
+      if (parsed) {
+        logger.info("danplanner", "Parsed approve form", {
+          action: parsed.action,
+          method: parsed.method,
+          fieldNames: Object.keys(parsed.fields),
+          visibleInputs: parsed.visibleInputNames,
+        });
+      } else {
+        logger.warn("danplanner", "Could not parse approve form");
+      }
       return { success: false, needs2FA: true, sessionToken: cookies };
     }
 
@@ -178,6 +242,7 @@ export async function danplannerVerify2FA(
       `${baseUrl}/Account/ApproveIP`,
       `${baseUrl}/Account/Approve`,
       `${baseUrl}/Account/VerifyCode`,
+      `${baseUrl}/`,
     ];
 
     let approveUrl = "";
@@ -191,27 +256,27 @@ export async function danplannerVerify2FA(
       });
       workingCookies = mergeCookies(workingCookies, extractCookies(res.headers));
 
+      let html = "";
+      let finalUrl = url;
+
       if (res.status === 200) {
-        const html = await res.text();
-        if (isApprovePage(html)) {
-          approveUrl = url;
-          approveHtml = html;
-          logger.info("danplanner", "Found approve page", { url, htmlLength: html.length });
-          break;
-        }
+        html = await res.text();
       } else if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get("location");
         if (loc) {
           const redirectUrl = loc.startsWith("http") ? loc : new URL(loc, baseUrl).toString();
           const followed = await followRedirect(redirectUrl, workingCookies);
           workingCookies = followed.cookies;
-          if (isApprovePage(followed.html)) {
-            approveUrl = followed.finalUrl;
-            approveHtml = followed.html;
-            logger.info("danplanner", "Found approve page via redirect", { url: approveUrl });
-            break;
-          }
+          html = followed.html;
+          finalUrl = followed.finalUrl;
         }
+      }
+
+      if (html && isApprovePage(html)) {
+        approveUrl = finalUrl;
+        approveHtml = html;
+        logger.info("danplanner", "Found approve page", { url: approveUrl, htmlLength: html.length });
+        break;
       }
     }
 
@@ -220,19 +285,44 @@ export async function danplannerVerify2FA(
       return { success: false, error: "Kunne ikke finde godkendelsesside" };
     }
 
-    const tokenMatch = approveHtml.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
-    const token = tokenMatch?.[1] || "";
+    const form = parseFormFromHtml(approveHtml, /name=["']Code["']|verification|approve|otp/i);
+    if (!form) {
+      logger.error("danplanner", "Could not parse approve form", { htmlSnippet: approveHtml.slice(0, 800) });
+      return { success: false, error: "Kunne ikke læse godkendelsesformularen" };
+    }
 
-    const body = new URLSearchParams({
-      Code: code,
-      __RequestVerificationToken: token,
+    const codeFieldCandidates = ["Code", "code", "VerificationCode", "OTP", "PinCode"];
+    let codeFieldName = form.visibleInputNames.find((n) => codeFieldCandidates.some((c) => c.toLowerCase() === n.toLowerCase()));
+    if (!codeFieldName) {
+      codeFieldName = form.visibleInputNames[0] || "Code";
+    }
+
+    const fields: Record<string, string> = { ...form.fields };
+    fields[codeFieldName] = code;
+
+    let actionUrl = form.action;
+    if (!actionUrl) {
+      actionUrl = approveUrl;
+    } else if (!actionUrl.startsWith("http")) {
+      actionUrl = new URL(actionUrl, baseUrl).toString();
+    }
+
+    logger.info("danplanner", "Submitting approve form", {
+      action: actionUrl,
+      codeField: codeFieldName,
+      fieldNames: Object.keys(fields),
+      hasToken: !!fields["__RequestVerificationToken"],
     });
 
-    const verifyRes = await fetch(approveUrl, {
+    const body = new URLSearchParams(fields);
+
+    const verifyRes = await fetch(actionUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Cookie: workingCookies,
+        Referer: approveUrl,
+        Origin: baseUrl,
       },
       body: body.toString(),
       redirect: "manual",
@@ -245,23 +335,44 @@ export async function danplannerVerify2FA(
     logger.info("danplanner", "2FA POST response", { status: verifyStatus, location: verifyLocation });
 
     let finalHtml = "";
+    let finalUrl = actionUrl;
     if (verifyStatus >= 300 && verifyStatus < 400 && verifyLocation) {
       const redirectUrl = verifyLocation.startsWith("http")
         ? verifyLocation
         : new URL(verifyLocation, baseUrl).toString();
       const followed = await followRedirect(redirectUrl, workingCookies);
       finalHtml = followed.html;
+      finalUrl = followed.finalUrl;
       workingCookies = followed.cookies;
+      logger.info("danplanner", "2FA followed redirect", { finalUrl, htmlLength: finalHtml.length });
     } else if (verifyStatus === 200) {
       finalHtml = await verifyRes.text();
     }
 
     if (isApprovePage(finalHtml)) {
-      logger.warn("danplanner", "Still on approve page after verification - wrong code");
-      return { success: false, error: "Forkert kode, prøv igen." };
+      const errorMatch = finalHtml.match(/<div[^>]*(?:validation-summary-errors|alert-danger|text-danger|error)[^>]*>([\s\S]*?)<\/div>/i);
+      const errorText = errorMatch ? errorMatch[1].replace(/<[^>]+>/g, "").trim() : "";
+
+      const formStart = finalHtml.search(/<form/i);
+      const formEnd = finalHtml.indexOf("</form>", formStart);
+      const formSnippet = formStart >= 0 && formEnd > formStart
+        ? finalHtml.slice(formStart, formEnd + 7)
+        : finalHtml.slice(0, 800);
+
+      logger.warn("danplanner", "Still on approve page after verification", {
+        errorText,
+        htmlLength: finalHtml.length,
+        formSnippet: formSnippet.slice(0, 1500),
+      });
+      return { success: false, error: errorText || "Forkert kode, prøv igen." };
     }
 
-    logger.info("danplanner", "2FA verification successful");
+    if (isLoginPage(finalHtml)) {
+      logger.warn("danplanner", "Redirected to login page after verification");
+      return { success: false, error: "Session udløbet. Log ind igen." };
+    }
+
+    logger.info("danplanner", "2FA verification successful", { finalUrl });
     return { success: true, sessionToken: workingCookies };
   } catch (err) {
     logger.error("danplanner", "2FA error", err as Error);
