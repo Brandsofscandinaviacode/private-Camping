@@ -5393,8 +5393,9 @@ export async function updateUnitMapPosition(unitId: number, mapX: number, mapY: 
 
 export async function getMapUnits() {
   await requireAuth();
+  await ensureResourceTypes();
   const units = await prisma.unit.findMany({
-    include: { hardware: true },
+    include: { hardware: true, resourceType: true },
     orderBy: { name: "asc" },
   });
 
@@ -5425,6 +5426,9 @@ export async function getMapUnits() {
         externalId: unit.externalId,
         mapX: unit.mapX,
         mapY: unit.mapY,
+        resourceTypeId: unit.resourceTypeId,
+        resourceTypeIcon: unit.resourceType?.icon ?? null,
+        resourceTypeName: unit.resourceType?.name ?? null,
         powerOn: haStates?.powerOn ?? null,
         haReachable: haStates?.haReachable ?? false,
         activeGuestName,

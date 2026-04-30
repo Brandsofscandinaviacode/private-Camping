@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Zap, ZapOff, User, Home, Caravan, MapPin, GripVertical, X, Save, Loader2 } from "lucide-react";
+import { Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor, GripVertical, X, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { updateUnitMapPosition } from "@/lib/actions";
 import Link from "next/link";
@@ -16,6 +16,9 @@ interface MapUnit {
   externalId: string | null;
   mapX: number | null;
   mapY: number | null;
+  resourceTypeId: number | null;
+  resourceTypeIcon: string | null;
+  resourceTypeName: string | null;
   powerOn: boolean | null;
   haReachable: boolean;
   activeGuestName: string | null;
@@ -27,11 +30,9 @@ interface SiteMapEditorProps {
   siteMapUrl: string | null;
 }
 
-const typeIcons: Record<string, typeof Home> = {
-  CABIN: Home,
-  SEASONAL: Caravan,
-  CARAVAN: Caravan,
-  PITCH: MapPin,
+type LucideIcon = typeof Home;
+const ICONS: Record<string, LucideIcon> = {
+  Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor,
 };
 
 const typeLabels: Record<string, string> = {
@@ -61,6 +62,23 @@ function getMarkerColor(unit: MapUnit): string {
   }
 
   return isOccupied ? "bg-blue-500 border-blue-600" : "bg-gray-300 border-gray-400";
+}
+
+/** Pick a shape for the marker so the user can tell pitches from cabins at a glance. */
+function getMarkerShape(unit: MapUnit): string {
+  // Pitches stay as circles. Other resource types get rounded squares to differentiate.
+  if (!unit.resourceTypeIcon || unit.resourceTypeIcon === "MapPin") {
+    return "rounded-full";
+  }
+  return "rounded-md";
+}
+
+/** Extract a short label for inside the marker — last digit sequence in the name, falling back to first 2 chars. */
+function getMarkerLabel(name: string): string {
+  const trimmed = name.trim();
+  const numMatch = trimmed.match(/(\d+)(?:[^\d]*)?$/);
+  if (numMatch) return numMatch[1];
+  return trimmed.slice(0, 3);
 }
 
 function getMarkerTooltip(unit: MapUnit): string {
@@ -210,7 +228,7 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
         )}
 
         {/* Legend */}
-        <div className="ml-auto flex flex-wrap gap-3 text-xs text-muted-foreground">
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span className="h-3 w-3 rounded-full bg-green-500" />
             Optaget + strøm
@@ -226,6 +244,15 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
           <span className="flex items-center gap-1.5">
             <span className="h-3 w-3 rounded-full bg-gray-400" />
             Ledig
+          </span>
+          <span className="hidden sm:inline-block w-px h-4 bg-border" />
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded-full border-2 border-muted-foreground" />
+            Plads
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded-md border-2 border-muted-foreground" />
+            Hytte/Lejlighed
           </span>
         </div>
       </div>
@@ -254,8 +281,12 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
             if (!unit) return null;
 
             const color = getMarkerColor(unit);
+            const shape = getMarkerShape(unit);
+            const label = getMarkerLabel(unit.name);
             const tooltip = getMarkerTooltip(unit);
             const guest = unit.activeGuestName || unit.longTermGuestName;
+            const labelLength = label.length;
+            const fontSize = labelLength <= 2 ? "text-[10px]" : labelLength === 3 ? "text-[9px]" : "text-[8px]";
 
             return (
               <div
@@ -266,35 +297,26 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
                 onPointerDown={(e) => handlePointerDown(e, id)}
               >
                 {/* Marker dot */}
-                <div className={`relative h-6 w-6 rounded-full border-2 ${color} flex items-center justify-center text-white shadow-md transition-transform hover:scale-125`}>
-                  {unit.hasElectricity && unit.powerOn !== null && (
-                    unit.powerOn
-                      ? <Zap className="h-3 w-3" />
-                      : <ZapOff className="h-3 w-3" />
-                  )}
-                  {(!unit.hasElectricity || unit.powerOn === null) && guest && (
-                    <User className="h-3 w-3" />
-                  )}
-                </div>
-
-                {/* Label */}
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 whitespace-nowrap">
-                  <span className="text-[10px] font-bold bg-background/90 px-1 rounded shadow-sm border border-border/40">
-                    {unit.name}
-                  </span>
+                <div className={`relative h-6 w-6 ${shape} border-2 ${color} flex items-center justify-center text-white shadow-md transition-transform hover:scale-150 hover:z-50`}>
+                  <span className={`font-bold tabular-nums leading-none ${fontSize}`}>{label}</span>
                 </div>
 
                 {/* Hover tooltip */}
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50">
                   <div className="bg-popover text-popover-foreground text-xs rounded-lg shadow-lg border border-border px-3 py-2 whitespace-nowrap">
                     <p className="font-medium">{unit.name}</p>
-                    {guest && <p className="text-muted-foreground">{guest}</p>}
+                    {unit.resourceTypeName && (
+                      <p className="text-muted-foreground">{unit.resourceTypeName}</p>
+                    )}
+                    {guest && <p className="text-foreground/80">{guest}</p>}
                     {unit.hasElectricity && (
                       <p className={unit.powerOn ? "text-green-600" : "text-red-500"}>
                         {unit.powerOn ? "Strøm: TIL" : "Strøm: FRA"}
                       </p>
                     )}
-                    <p className="text-muted-foreground">{typeLabels[unit.type] || unit.type}</p>
+                    {!unit.resourceTypeName && (
+                      <p className="text-muted-foreground">{typeLabels[unit.type] || unit.type}</p>
+                    )}
                   </div>
                 </div>
 
@@ -321,7 +343,7 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
             </p>
             <div className="space-y-1 max-h-[600px] overflow-y-auto">
               {unplacedUnits.map((unit) => {
-                const Icon = typeIcons[unit.type] || MapPin;
+                const Icon = (unit.resourceTypeIcon && ICONS[unit.resourceTypeIcon]) || MapPin;
                 const isSelected = selectedUnit === unit.id;
                 return (
                   <button
