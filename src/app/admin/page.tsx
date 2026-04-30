@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
+import { getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
 import { Tent, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
@@ -18,10 +18,13 @@ export default async function AdminDashboard() {
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
-      const [haStates, activeSession] = await Promise.allSettled([
+      const [haStates, activeSession, pendingSession] = await Promise.allSettled([
         getUnitHAStates(unit.id),
         getActiveSession(unit.id),
+        getPendingSession(unit.id),
       ]);
+      const active = activeSession.status === "fulfilled" ? activeSession.value : null;
+      const pending = pendingSession.status === "fulfilled" ? pendingSession.value : null;
       return {
         unit: {
           id: unit.id,
@@ -40,8 +43,8 @@ export default async function AdminDashboard() {
           } : null,
         },
         haStates: haStates.status === "fulfilled" ? haStates.value : null,
-        activeGuestName: activeSession.status === "fulfilled"
-          ? activeSession.value?.guestName ?? null : null,
+        activeGuestName: active?.guestName ?? null,
+        pendingGuestName: !active && pending ? pending.guestName : null,
       };
     })
   );

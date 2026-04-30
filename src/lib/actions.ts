@@ -1762,6 +1762,92 @@ export async function getActiveSession(unitId: number) {
   });
 }
 
+export async function getPendingSession(unitId: number) {
+  await requireAuth();
+  return prisma.session.findFirst({
+    where: { unitId, status: "PENDING" },
+    orderBy: { checkInTime: "asc" },
+  });
+}
+
+export async function activateBookingSession(
+  sessionId: number,
+  billingMode: "PREPAID" | "POSTPAID",
+  prepaidAmount?: number,
+) {
+  await requireAuth();
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: { include: { hardware: true } } },
+  });
+  if (!session) throw new Error("Booking ikke fundet");
+  if (session.status !== "PENDING") throw new Error("Booking er allerede aktiveret");
+  if (session.unit.status === "OCCUPIED") throw new Error("Enheden er allerede optaget");
+
+  const unit = session.unit;
+  const hw = unit.hardware;
+  const pricing = await getPricing();
+
+  let startKwh: number | null = null;
+  let startHeatingKwh: number | null = null;
+  let startWaterLiters: number | null = null;
+
+  if (hardware.hasElectricityMeter(hw)) {
+    startKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `activate:el unit=${unit.id}`);
+  }
+  if (hardware.hasHeatingMeter(hw)) {
+    startHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `activate:heat unit=${unit.id}`);
+  }
+  if (hardware.hasWaterMeter(hw)) {
+    startWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `activate:water unit=${unit.id}`);
+  }
+
+  if (hardware.hasElectricitySwitch(hw)) {
+    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { logger.error("hardware", "activate el on", e); }
+  }
+  if (hardware.hasHeatingSwitch(hw)) {
+    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { logger.error("hardware", "activate heat on", e); }
+  }
+  if (hw?.hasClimate && hw.climateEntityId) {
+    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { logger.error("hardware", "activate climate", e); }
+  }
+  if (hw?.hasSmartLock && hw.lockEntityId) {
+    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { logger.error("hardware", "activate unlock", e); }
+  }
+
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: {
+      status: "ACTIVE",
+      billingMode,
+      prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null,
+      checkInTime: new Date(),
+      startKwh,
+      startHeatingKwh,
+      startWaterLiters,
+    },
+  });
+
+  const updateData: Record<string, unknown> = { status: "OCCUPIED" };
+  if (unit.isLongTerm) {
+    updateData.longTermGuestName = session.guestName;
+    updateData.longTermGuestEmail = session.guestEmail;
+    updateData.longTermGuestPhone = session.guestPhone;
+    updateData.longTermPortalToken = session.guestPortalToken;
+  }
+  await prisma.unit.update({ where: { id: unit.id }, data: updateData });
+
+  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+  const unitDisplayName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
+  sendCheckInNotificationAsync(session.guestName, session.guestPhone ?? undefined, session.guestEmail ?? undefined, session.guestPortalToken, unitDisplayName);
+
+  revalidatePath("/admin");
+  revalidatePath(`/admin/units/${unit.id}`);
+  revalidatePath(`/admin/bookings/${sessionId}`);
+  revalidatePath("/admin/bookings");
+  return { success: true };
+}
+
 // ──────────────────────────────────────────────
 // INVOICES — Monthly billing
 // ──────────────────────────────────────────────
@@ -2223,11 +2309,12 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
 // ──────────────────────────────────────────────
 // BOOKINGS — Session management
 // ──────────────────────────────────────────────
-export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active", search?: string) {
+export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active" | "pending", search?: string) {
   await requireAuth();
   const filterWhere = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
-    : filter === "active" ? { status: "ACTIVE" as const }
+    : filter === "active" ? { status: { in: ["ACTIVE" as const, "PENDING" as const] } }
+    : filter === "pending" ? { status: "PENDING" as const }
     : {};
 
   const searchWhere = search && search.trim()
@@ -5452,15 +5539,13 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
           guestPhone,
           bookingRef: externalRef,
           guestPortalToken: uuidv4(),
-          status: "ACTIVE",
+          status: "PENDING",
           paymentStatus: "UNPAID",
           checkInTime: checkInDate,
           expectedCheckOut: checkOutDate,
           billingMode: "POSTPAID",
         },
       });
-      // Mark unit as occupied
-      await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED" } });
       created++;
     }
   }

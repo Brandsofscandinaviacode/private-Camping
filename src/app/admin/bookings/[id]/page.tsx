@@ -13,6 +13,7 @@ import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
 import { BookingCheckoutButton } from "@/components/admin/booking-checkout-button";
+import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { PrepaidBalance } from "@/components/admin/prepaid-balance";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,7 @@ export default async function BookingDetailPage({
   if (!session) notFound();
 
   const pricing = await getPricing();
+  const isPendingSession = session.status === "PENDING";
   const isActive = session.status === "ACTIVE";
   const isUnpaid = session.status === "COMPLETED" && session.paymentStatus === "UNPAID";
   const isPaid = session.paymentStatus === "PAID";
@@ -58,6 +60,12 @@ export default async function BookingDetailPage({
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">{session.guestName}</h1>
+            {isPendingSession && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                Reserveret
+              </span>
+            )}
             {isActive && (
               <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
@@ -197,6 +205,16 @@ export default async function BookingDetailPage({
             />
           )}
 
+          {isPendingSession && (
+            <div className="rounded-xl border border-amber-200/60 bg-amber-50/50 shadow-sm p-5">
+              <p className="text-sm text-amber-800 font-medium">Afventer check-in</p>
+              <p className="text-xs text-amber-600 mt-1">
+                Denne booking er importeret fra booking-systemet. Check gæsten ind for at starte forbrugsmåling.
+              </p>
+            </div>
+          )}
+
+          {!isPendingSession && (<>
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Forbrugsfordeling</h2>
@@ -352,6 +370,7 @@ export default async function BookingDetailPage({
               <ConsumptionChart unitId={session.unit.id} />
             </div>
           </div>
+          </>)}
         </div>
       </div>
 
@@ -427,7 +446,19 @@ export default async function BookingDetailPage({
               <h2 className="font-semibold">Opgørelse</h2>
             </div>
             <div className="p-5 space-y-3">
-              {isActive && !session.unit.isLongTerm ? (
+              {isPendingSession ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Denne booking er importeret og afventer check-in.
+                    Vælg afregningsform og aktivér bookingen.
+                  </p>
+                  <BookingActivateButton
+                    sessionId={session.id}
+                    guestName={session.guestName}
+                    unitName={session.unit.name}
+                  />
+                </>
+              ) : isActive && !session.unit.isLongTerm ? (
                 <>
                   <p className="text-xs text-muted-foreground">
                     Checker gæsten ud, aflæser målere, opretter afsluttende faktura

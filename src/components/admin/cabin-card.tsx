@@ -51,19 +51,21 @@ interface UnitCardProps {
     haReachable: boolean;
   } | null;
   activeGuestName: string | null;
+  pendingGuestName?: string | null;
 }
 
-export function UnitCard({ unit, haStates, activeGuestName }: UnitCardProps) {
+export function UnitCard({ unit, haStates, activeGuestName, pendingGuestName }: UnitCardProps) {
   const isOccupied = unit.status === "OCCUPIED";
+  const isPending = !isOccupied && !!pendingGuestName;
   const hw = unit.hardware;
   const TypeIcon = typeIcons[unit.type] || Home;
-  const displayGuest = activeGuestName || unit.longTermGuestName;
+  const displayGuest = activeGuestName || pendingGuestName || unit.longTermGuestName;
 
   return (
     <Link href={`/admin/units/${unit.id}`} className="h-full block">
       <div
         className={`group rounded-xl border border-border/60 bg-card p-5 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all cursor-pointer h-full min-h-[160px] flex flex-col ${
-          isOccupied ? "border-l-[3px] border-l-primary" : ""
+          isOccupied ? "border-l-[3px] border-l-primary" : isPending ? "border-l-[3px] border-l-amber-500" : ""
         }`}
       >
         {/* Header row */}
@@ -87,10 +89,12 @@ export function UnitCard({ unit, haStates, activeGuestName }: UnitCardProps) {
           <span className={`text-xs px-2.5 py-1 rounded-full font-medium inline-flex items-center gap-1.5 ${
             isOccupied
               ? "bg-primary/10 text-primary"
-              : "bg-muted text-muted-foreground"
+              : isPending
+                ? "bg-amber-50 text-amber-600"
+                : "bg-muted text-muted-foreground"
           }`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${isOccupied ? "bg-primary animate-pulse" : "bg-muted-foreground/40"}`} />
-            {isOccupied ? "Optaget" : "Ledig"}
+            <span className={`h-1.5 w-1.5 rounded-full ${isOccupied ? "bg-primary animate-pulse" : isPending ? "bg-amber-500" : "bg-muted-foreground/40"}`} />
+            {isOccupied ? "Optaget" : isPending ? "Reserveret" : "Ledig"}
           </span>
           {unit.isLongTerm && (
             <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 inline-flex items-center gap-1.5">

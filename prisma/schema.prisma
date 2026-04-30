@@ -170,6 +170,7 @@ model UnitHardware {
 // Guest Session (a single stay or billing period)
 // ──────────────────────────────────────────────
 enum SessionStatus {
+  PENDING
   ACTIVE
   COMPLETED
 }

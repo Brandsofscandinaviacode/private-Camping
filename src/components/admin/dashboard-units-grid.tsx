@@ -38,6 +38,7 @@ interface UnitData {
     haReachable: boolean;
   } | null;
   activeGuestName: string | null;
+  pendingGuestName: string | null;
 }
 
 interface ResourceTypeInfo {
@@ -177,12 +178,13 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
               <span className="text-sm text-muted-foreground">({group.items.length})</span>
             </div>
             <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
-              {group.items.map(({ unit, haStates, activeGuestName }) => (
+              {group.items.map(({ unit, haStates, activeGuestName, pendingGuestName }) => (
                 <DraggableUnitCard
                   key={unit.id}
                   unit={unit}
                   haStates={haStates}
                   activeGuestName={activeGuestName}
+                  pendingGuestName={pendingGuestName}
                   editMode={editMode}
                   isDragging={dragId === unit.id}
                   isDragOver={dragOverId === unit.id}
@@ -207,12 +209,13 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
             <span className="text-sm text-muted-foreground">({uncategorized.length})</span>
           </div>
           <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
-            {uncategorized.map(({ unit, haStates, activeGuestName }) => (
+            {uncategorized.map(({ unit, haStates, activeGuestName, pendingGuestName }) => (
               <DraggableUnitCard
                 key={unit.id}
                 unit={unit}
                 haStates={haStates}
                 activeGuestName={activeGuestName}
+                pendingGuestName={pendingGuestName}
                 editMode={editMode}
                 isDragging={false}
                 isDragOver={false}
@@ -236,6 +239,7 @@ interface DraggableUnitCardProps {
   unit: UnitData["unit"];
   haStates: UnitData["haStates"];
   activeGuestName: string | null;
+  pendingGuestName: string | null;
   editMode: boolean;
   isDragging: boolean;
   isDragOver: boolean;
@@ -249,7 +253,7 @@ interface DraggableUnitCardProps {
 }
 
 function DraggableUnitCard({
-  unit, haStates, activeGuestName, editMode, isDragging, isDragOver,
+  unit, haStates, activeGuestName, pendingGuestName, editMode, isDragging, isDragOver,
   resourceTypes, onDragStart, onDragEnd, onDragOver, onDrop, onMove, isMoving,
 }: DraggableUnitCardProps) {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
@@ -308,11 +312,11 @@ function DraggableUnitCard({
       {editMode ? (
         <div onClick={(e) => e.preventDefault()}>
           <div style={{ pointerEvents: "none" }}>
-            <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} />
+            <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} />
           </div>
         </div>
       ) : (
-        <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} />
+        <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} />
       )}
     </div>
   );

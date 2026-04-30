@@ -18,7 +18,7 @@ export default async function BookingsPage({
   searchParams: Promise<{ filter?: string; q?: string }>;
 }) {
   const { filter, q } = await searchParams;
-  const activeFilter = (filter as "all" | "unpaid" | "paid" | "active") || "all";
+  const activeFilter = (filter as "all" | "unpaid" | "paid" | "active" | "pending") || "all";
   const searchQuery = q?.trim() || "";
   const [sessions, unpaidCount] = await Promise.all([
     getAllSessions(activeFilter, searchQuery || undefined),
@@ -49,15 +49,17 @@ export default async function BookingsPage({
       ) : (
         <div className="rounded-xl border border-border/60 bg-card shadow-sm divide-y divide-border/60 overflow-hidden" role="list" aria-label="Bookinger">
           {sessions.map((s) => {
+            const isPending = s.status === "PENDING";
             const isActive = s.status === "ACTIVE";
             const isUnpaid = s.status === "COMPLETED" && s.paymentStatus === "UNPAID";
             const isPaid = s.paymentStatus === "PAID";
-            const statusLabel = isActive ? "Aktiv" : isUnpaid ? "Ubetalt" : isPaid ? "Betalt" : "";
+            const statusLabel = isPending ? "Reserveret" : isActive ? "Aktiv" : isUnpaid ? "Ubetalt" : isPaid ? "Betalt" : "";
 
             return (
               <Link key={s.id} href={`/admin/bookings/${s.id}`} role="listitem" aria-label={`${s.guestName}${statusLabel ? ` — ${statusLabel}` : ""}`}>
                 <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer ${
                   isUnpaid ? "border-l-[3px] border-l-red-500" :
+                  isPending ? "border-l-[3px] border-l-amber-500" :
                   isActive ? "border-l-[3px] border-l-primary" : ""
                 }`}>
                   <div className="min-w-0 flex-1">
@@ -86,6 +88,12 @@ export default async function BookingsPage({
                     {s.totalCost !== null && (
                       <span className="text-sm tabular-nums font-medium">
                         {s.totalCost.toFixed(2)} <span className="text-muted-foreground">DKK</span>
+                      </span>
+                    )}
+                    {isPending && (
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium inline-flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        Reserveret
                       </span>
                     )}
                     {isActive && (

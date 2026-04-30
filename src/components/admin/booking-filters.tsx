@@ -14,6 +14,7 @@ interface BookingFiltersProps {
 const filters = [
   { value: "all", label: "Alle" },
   { value: "active", label: "Aktive" },
+  { value: "pending", label: "Reserveret" },
   { value: "unpaid", label: "Ubetalt" },
   { value: "paid", label: "Betalt" },
 ];
