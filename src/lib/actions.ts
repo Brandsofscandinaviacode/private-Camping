@@ -5054,6 +5054,21 @@ export async function initBookingLogin(creds?: { url?: string; username?: string
     });
   }
 
+  if (result.approveFormData) {
+    await prisma.globalSetting.upsert({
+      where: { key: "danplanner_approve_form" },
+      create: {
+        key: "danplanner_approve_form",
+        value: JSON.stringify({ action: result.approveFormAction, fields: result.approveFormData }),
+      },
+      update: {
+        value: JSON.stringify({ action: result.approveFormAction, fields: result.approveFormData }),
+      },
+    });
+  } else if (result.success) {
+    await prisma.globalSetting.deleteMany({ where: { key: "danplanner_approve_form" } });
+  }
+
   return { success: result.success, needs2FA: result.needs2FA, error: result.error };
 }
 
@@ -5063,7 +5078,16 @@ export async function verifyBooking2FA(code: string) {
   const baseUrl = settings.danplanner_url || "https://admin.danplanner.dk";
   const cookies = settings.danplanner_cookies || "";
 
-  const result = await danplannerVerify2FA(baseUrl, cookies, code);
+  let cachedForm: { action: string; fields: Record<string, string> } | undefined;
+  if (settings.danplanner_approve_form) {
+    try {
+      cachedForm = JSON.parse(settings.danplanner_approve_form);
+    } catch {
+      cachedForm = undefined;
+    }
+  }
+
+  const result = await danplannerVerify2FA(baseUrl, cookies, code, cachedForm);
 
   if (result.sessionToken) {
     await prisma.globalSetting.upsert({
@@ -5071,6 +5095,10 @@ export async function verifyBooking2FA(code: string) {
       create: { key: "danplanner_cookies", value: result.sessionToken },
       update: { value: result.sessionToken },
     });
+  }
+
+  if (result.success) {
+    await prisma.globalSetting.deleteMany({ where: { key: "danplanner_approve_form" } });
   }
 
   return { success: result.success, error: result.error };

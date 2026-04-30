@@ -21,6 +21,8 @@ export interface BookingLoginResult {
   success: boolean;
   needs2FA: boolean;
   sessionToken?: string;
+  approveFormData?: Record<string, string>;
+  approveFormAction?: string;
   error?: string;
 }
 

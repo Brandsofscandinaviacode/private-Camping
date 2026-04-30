@@ -208,7 +208,23 @@ export async function danplannerLogin(config: DanplannerConfig): Promise<Booking
           method: parsed.method,
           fieldNames: Object.keys(parsed.fields),
           visibleInputs: parsed.visibleInputNames,
+          hiddenValuesPresent: Object.entries(parsed.fields)
+            .filter(([k]) => k !== "__RequestVerificationToken")
+            .map(([k, v]) => `${k}=${v ? "[set]" : "[empty]"}`),
         });
+
+        let actionUrl = parsed.action;
+        if (actionUrl && !actionUrl.startsWith("http")) {
+          actionUrl = new URL(actionUrl, config.baseUrl).toString();
+        }
+
+        return {
+          success: false,
+          needs2FA: true,
+          sessionToken: cookies,
+          approveFormData: parsed.fields,
+          approveFormAction: actionUrl || `${config.baseUrl}/Account/ApproveIp`,
+        };
       } else {
         logger.warn("danplanner", "Could not parse approve form");
       }
@@ -234,84 +250,102 @@ export async function danplannerVerify2FA(
   baseUrl: string,
   cookies: string,
   code: string,
+  cachedForm?: { action: string; fields: Record<string, string> },
 ): Promise<BookingVerifyResult> {
   try {
-    logger.info("danplanner", "Starting 2FA verification");
+    logger.info("danplanner", "Starting 2FA verification", { hasCachedForm: !!cachedForm });
 
-    const candidateUrls = [
-      `${baseUrl}/Account/ApproveIP`,
-      `${baseUrl}/Account/Approve`,
-      `${baseUrl}/Account/VerifyCode`,
-      `${baseUrl}/`,
-    ];
-
+    let actionUrl: string;
+    const fields: Record<string, string> = {};
     let approveUrl = "";
-    let approveHtml = "";
     let workingCookies = cookies;
 
-    for (const url of candidateUrls) {
-      const res = await fetch(url, {
-        headers: { Cookie: workingCookies },
-        redirect: "manual",
+    if (cachedForm && Object.keys(cachedForm.fields).length > 0) {
+      Object.assign(fields, cachedForm.fields);
+      actionUrl = cachedForm.action;
+      approveUrl = `${baseUrl}/Account/login`;
+      logger.info("danplanner", "Using cached approve form", {
+        action: actionUrl,
+        fieldNames: Object.keys(fields),
+        hiddenValuesPresent: Object.entries(fields)
+          .filter(([k]) => k !== "__RequestVerificationToken")
+          .map(([k, v]) => `${k}=${v ? "[set]" : "[empty]"}`),
       });
-      workingCookies = mergeCookies(workingCookies, extractCookies(res.headers));
+    } else {
+      const candidateUrls = [
+        `${baseUrl}/Account/ApproveIp`,
+        `${baseUrl}/Account/ApproveIP`,
+        `${baseUrl}/Account/Approve`,
+        `${baseUrl}/`,
+      ];
 
-      let html = "";
-      let finalUrl = url;
+      let approveHtml = "";
+      for (const url of candidateUrls) {
+        const res = await fetch(url, {
+          headers: { Cookie: workingCookies },
+          redirect: "manual",
+        });
+        workingCookies = mergeCookies(workingCookies, extractCookies(res.headers));
 
-      if (res.status === 200) {
-        html = await res.text();
-      } else if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get("location");
-        if (loc) {
-          const redirectUrl = loc.startsWith("http") ? loc : new URL(loc, baseUrl).toString();
-          const followed = await followRedirect(redirectUrl, workingCookies);
-          workingCookies = followed.cookies;
-          html = followed.html;
-          finalUrl = followed.finalUrl;
+        let html = "";
+        let finalUrl = url;
+
+        if (res.status === 200) {
+          html = await res.text();
+        } else if (res.status >= 300 && res.status < 400) {
+          const loc = res.headers.get("location");
+          if (loc) {
+            const redirectUrl = loc.startsWith("http") ? loc : new URL(loc, baseUrl).toString();
+            const followed = await followRedirect(redirectUrl, workingCookies);
+            workingCookies = followed.cookies;
+            html = followed.html;
+            finalUrl = followed.finalUrl;
+          }
+        }
+
+        if (html && isApprovePage(html)) {
+          approveUrl = finalUrl;
+          approveHtml = html;
+          logger.info("danplanner", "Found approve page (fallback)", { url: approveUrl, htmlLength: html.length });
+          break;
         }
       }
 
-      if (html && isApprovePage(html)) {
-        approveUrl = finalUrl;
-        approveHtml = html;
-        logger.info("danplanner", "Found approve page", { url: approveUrl, htmlLength: html.length });
-        break;
+      if (!approveUrl) {
+        logger.error("danplanner", "Could not find approve IP page");
+        return { success: false, error: "Kunne ikke finde godkendelsesside" };
+      }
+
+      const form = parseFormFromHtml(approveHtml, /name=["']Code["']|verification|approve|otp/i);
+      if (!form) {
+        logger.error("danplanner", "Could not parse approve form", { htmlSnippet: approveHtml.slice(0, 800) });
+        return { success: false, error: "Kunne ikke læse godkendelsesformularen" };
+      }
+
+      Object.assign(fields, form.fields);
+      actionUrl = form.action;
+      if (!actionUrl) {
+        actionUrl = approveUrl;
+      } else if (!actionUrl.startsWith("http")) {
+        actionUrl = new URL(actionUrl, baseUrl).toString();
       }
     }
 
-    if (!approveUrl) {
-      logger.error("danplanner", "Could not find approve IP page");
-      return { success: false, error: "Kunne ikke finde godkendelsesside" };
-    }
-
-    const form = parseFormFromHtml(approveHtml, /name=["']Code["']|verification|approve|otp/i);
-    if (!form) {
-      logger.error("danplanner", "Could not parse approve form", { htmlSnippet: approveHtml.slice(0, 800) });
-      return { success: false, error: "Kunne ikke læse godkendelsesformularen" };
-    }
-
     const codeFieldCandidates = ["Code", "code", "VerificationCode", "OTP", "PinCode"];
-    let codeFieldName = form.visibleInputNames.find((n) => codeFieldCandidates.some((c) => c.toLowerCase() === n.toLowerCase()));
+    const fieldKeys = Object.keys(fields);
+    let codeFieldName = fieldKeys.find((n) => codeFieldCandidates.some((c) => c.toLowerCase() === n.toLowerCase()));
     if (!codeFieldName) {
-      codeFieldName = form.visibleInputNames[0] || "Code";
+      codeFieldName = "Code";
     }
-
-    const fields: Record<string, string> = { ...form.fields };
     fields[codeFieldName] = code;
-
-    let actionUrl = form.action;
-    if (!actionUrl) {
-      actionUrl = approveUrl;
-    } else if (!actionUrl.startsWith("http")) {
-      actionUrl = new URL(actionUrl, baseUrl).toString();
-    }
 
     logger.info("danplanner", "Submitting approve form", {
       action: actionUrl,
       codeField: codeFieldName,
       fieldNames: Object.keys(fields),
       hasToken: !!fields["__RequestVerificationToken"],
+      usernameSet: !!fields["Username"],
+      passwordSet: !!fields["Password"],
     });
 
     const body = new URLSearchParams(fields);
@@ -321,7 +355,7 @@ export async function danplannerVerify2FA(
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Cookie: workingCookies,
-        Referer: approveUrl,
+        Referer: approveUrl || `${baseUrl}/Account/login`,
         Origin: baseUrl,
       },
       body: body.toString(),
