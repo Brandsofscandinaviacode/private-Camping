@@ -1,6 +1,6 @@
 import { getGlobalSettings, getUnits } from "@/lib/actions";
 import { requireAuth } from "@/lib/auth";
-import { GeneralSettings, HASettings, MQTTSettings, NotificationSettings, PaymentSettings, AccountingSettings, GuestPortalSettings } from "@/components/admin/settings-form";
+import { GeneralSettings, HASettings, MQTTSettings, NotificationSettings, PaymentSettings, AccountingSettings, BookingSettings, GuestPortalSettings } from "@/components/admin/settings-form";
 import { CabinHardwareForm } from "@/components/admin/cabin-hardware-form";
 import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SystemStatus } from "@/components/admin/system-status";
@@ -111,6 +111,7 @@ export default async function SettingsPage() {
           notifications: <NotificationSettings settings={settings} />,
           payment: <PaymentSettings settings={settings} />,
           accounting: <AccountingSettings settings={settings} />,
+          booking: <BookingSettings settings={settings} />,
           guest: <GuestPortalSettings settings={settings} />,
           hardware: hardwareContent,
           system: systemContent,

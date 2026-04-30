@@ -63,6 +63,14 @@ model Unit {
   longTermGuestPhone   String?
   longTermPortalToken  String?  @unique // Permanent gæsteportal for langtidslejere
 
+  // External booking system (Danplanner etc.)
+  externalId       String?
+  externalProvider String?
+
+  // Site map position (percentage 0-100 of map image dimensions)
+  mapX             Float?
+  mapY             Float?
+
   hardware         UnitHardware?
   sessions         Session[]
   invoices         Invoice[]

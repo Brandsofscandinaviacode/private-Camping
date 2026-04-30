@@ -9,6 +9,7 @@ import type { HardwareEndpoint } from "./hardware";
 import { mqttClient, testMqttBroker } from "./mqtt-client";
 import { requireAuth } from "./auth";
 import { logger } from "./logger";
+import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
 // failure with context instead of swallowing it silently and returns null on
@@ -5014,4 +5015,194 @@ export async function syncSessionsToAccounting(): Promise<{
   logger.info("accounting", "Session sync completed", { synced, skipped, errors: errors.length });
   revalidatePath("/admin/economy");
   return { synced, skipped, errors };
+}
+
+// ──────────────────────────────────────────────
+// BOOKING SYSTEM (Danplanner etc.)
+// ──────────────────────────────────────────────
+
+export async function initBookingLogin() {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const result = await danplannerLogin({
+    baseUrl: settings.danplanner_url || "https://admin.danplanner.dk",
+    username: settings.danplanner_username || "",
+    password: settings.danplanner_password || "",
+  });
+
+  if (result.sessionToken) {
+    await prisma.globalSetting.upsert({
+      where: { key: "danplanner_cookies" },
+      create: { key: "danplanner_cookies", value: result.sessionToken },
+      update: { value: result.sessionToken },
+    });
+  }
+
+  return { success: result.success, needs2FA: result.needs2FA, error: result.error };
+}
+
+export async function verifyBooking2FA(code: string) {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.danplanner_url || "https://admin.danplanner.dk";
+  const cookies = settings.danplanner_cookies || "";
+
+  const result = await danplannerVerify2FA(baseUrl, cookies, code);
+
+  if (result.sessionToken) {
+    await prisma.globalSetting.upsert({
+      where: { key: "danplanner_cookies" },
+      create: { key: "danplanner_cookies", value: result.sessionToken },
+      update: { value: result.sessionToken },
+    });
+  }
+
+  return { success: result.success, error: result.error };
+}
+
+export async function testBookingConnection() {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const provider = getBookingProvider(
+    (settings.booking_provider || "none") as "danplanner" | "none",
+    settings,
+  );
+  if (!provider) return { ok: false, error: "Ingen booking-udbyder konfigureret" };
+  return provider.testConnection();
+}
+
+export async function fetchBookingResourceTypes() {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const provider = getBookingProvider(
+    (settings.booking_provider || "none") as "danplanner" | "none",
+    settings,
+  );
+  if (!provider) return [];
+  return provider.getResourceTypes();
+}
+
+export async function fetchBookingResources(typeId: string) {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const provider = getBookingProvider(
+    (settings.booking_provider || "none") as "danplanner" | "none",
+    settings,
+  );
+  if (!provider) return [];
+  return provider.getResources(typeId);
+}
+
+export async function syncBookingResources() {
+  await requireAuth();
+  const settings = await getGlobalSettings();
+  const provider = getBookingProvider(
+    (settings.booking_provider || "none") as "danplanner" | "none",
+    settings,
+  );
+  if (!provider) return { synced: 0, error: "Ingen booking-udbyder konfigureret" };
+
+  const resourceTypes = await provider.getResourceTypes();
+  const pitchTypeId = settings.danplanner_resource_type_pitch || "";
+  const cabinTypeId = settings.danplanner_resource_type_cabin || "";
+
+  let synced = 0;
+  const providerName = settings.booking_provider || "danplanner";
+
+  for (const rt of resourceTypes) {
+    if (rt.id !== pitchTypeId && rt.id !== cabinTypeId) continue;
+
+    const resources = await provider.getResources(rt.id);
+    const unitType = rt.id === cabinTypeId ? "CABIN" : "PITCH";
+
+    for (const res of resources) {
+      const existing = await prisma.unit.findFirst({
+        where: { externalId: res.externalId, externalProvider: providerName },
+      });
+
+      if (existing) {
+        if (existing.name !== res.name) {
+          await prisma.unit.update({
+            where: { id: existing.id },
+            data: { name: res.name },
+          });
+        }
+      } else {
+        await prisma.unit.create({
+          data: {
+            name: res.name,
+            type: unitType,
+            isLongTerm: false,
+            externalId: res.externalId,
+            externalProvider: providerName,
+            hardware: { create: {} },
+          },
+        });
+      }
+      synced++;
+    }
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/map");
+  revalidatePath("/admin/settings");
+  return { synced };
+}
+
+// ──────────────────────────────────────────────
+// SITE MAP
+// ──────────────────────────────────────────────
+
+export async function updateUnitMapPosition(unitId: number, mapX: number, mapY: number) {
+  await requireAuth();
+  await prisma.unit.update({
+    where: { id: unitId },
+    data: { mapX, mapY },
+  });
+  revalidatePath("/admin/map");
+}
+
+export async function getMapUnits() {
+  await requireAuth();
+  const units = await prisma.unit.findMany({
+    include: { hardware: true },
+    orderBy: { name: "asc" },
+  });
+
+  const unitData = await Promise.all(
+    units.map(async (unit) => {
+      let haStates: { powerOn: boolean | null; temperature: number | null; locked: boolean | null; haReachable: boolean } | null = null;
+      let activeGuestName: string | null = null;
+
+      try {
+        haStates = await getUnitHAStates(unit.id);
+      } catch { /* ignore */ }
+
+      try {
+        const session = await prisma.session.findFirst({
+          where: { unitId: unit.id, status: "ACTIVE" },
+          select: { guestName: true },
+        });
+        activeGuestName = session?.guestName ?? null;
+      } catch { /* ignore */ }
+
+      return {
+        id: unit.id,
+        name: unit.name,
+        type: unit.type,
+        status: unit.status,
+        isLongTerm: unit.isLongTerm,
+        longTermGuestName: unit.longTermGuestName,
+        externalId: unit.externalId,
+        mapX: unit.mapX,
+        mapY: unit.mapY,
+        powerOn: haStates?.powerOn ?? null,
+        haReachable: haStates?.haReachable ?? false,
+        activeGuestName,
+        hasElectricity: unit.hardware?.hasElectricity ?? false,
+      };
+    }),
+  );
+
+  return unitData;
 }

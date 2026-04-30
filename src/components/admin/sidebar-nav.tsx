@@ -10,10 +10,12 @@ import {
   Wallet,
   WashingMachine,
   HelpCircle,
+  Map,
 } from "lucide-react";
 
 const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt", exact: true },
+  { href: "/admin/map", label: "Pladskort", icon: Map, section: "Oversigt" },
   { href: "/admin/bookings", label: "Bookinger", icon: BookOpen, section: "Oversigt", badge: true },
   { href: "/admin/elpriser", label: "Elpriser", icon: Zap, section: "Oversigt" },
   { href: "/admin/services", label: "Services", icon: WashingMachine, section: "Oversigt" },

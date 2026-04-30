@@ -5,7 +5,7 @@ import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown,
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -1551,6 +1551,315 @@ export function GuestPortalSettings({ settings }: SettingsFormProps) {
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUpload} className="hidden" />
         </div>
       </div>
+
+      <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+    </div>
+  );
+}
+
+// ─── BOOKING SYSTEM TAB ───
+export function BookingSettings({ settings }: SettingsFormProps) {
+  const [values, setValues] = useState({
+    booking_provider: settings.booking_provider || "none",
+    danplanner_url: settings.danplanner_url || "https://admin.danplanner.dk",
+    danplanner_username: settings.danplanner_username || "",
+    danplanner_password: settings.danplanner_password || "",
+    danplanner_resource_type_pitch: settings.danplanner_resource_type_pitch || "",
+    danplanner_resource_type_cabin: settings.danplanner_resource_type_cabin || "",
+  });
+  const { isPending, saved, handleSave } = useSave(values);
+
+  const h = (key: string, value: string) =>
+    setValues((prev) => ({ ...prev, [key]: value }));
+
+  const isDanplanner = values.booking_provider === "danplanner";
+
+  const [loginState, setLoginState] = useState<"idle" | "logging_in" | "needs_2fa" | "verifying" | "connected" | "error">("idle");
+  const [loginMsg, setLoginMsg] = useState("");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [resourceTypes, setResourceTypes] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingTypes, setLoadingTypes] = useState(false);
+
+  async function handleLogin() {
+    setLoginState("logging_in");
+    setLoginMsg("");
+    try {
+      const result = await initBookingLogin();
+      if (result.success) {
+        setLoginState("connected");
+        setLoginMsg("Forbundet til Danplanner!");
+      } else if (result.needs2FA) {
+        setLoginState("needs_2fa");
+        setLoginMsg("En bekræftelseskode er sendt. Indtast koden nedenfor.");
+      } else {
+        setLoginState("error");
+        setLoginMsg(result.error || "Login fejlede");
+      }
+    } catch {
+      setLoginState("error");
+      setLoginMsg("Forbindelsesfejl");
+    }
+  }
+
+  async function handleVerify() {
+    if (!verifyCode.trim()) return;
+    setLoginState("verifying");
+    try {
+      const result = await verifyBooking2FA(verifyCode.trim());
+      if (result.success) {
+        setLoginState("connected");
+        setLoginMsg("IP godkendt! Forbundet til Danplanner.");
+      } else {
+        setLoginState("needs_2fa");
+        setLoginMsg(result.error || "Forkert kode, prøv igen.");
+      }
+    } catch {
+      setLoginState("needs_2fa");
+      setLoginMsg("Verifikation fejlede.");
+    }
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await testBookingConnection();
+      setTestResult({ ok: r.ok, message: r.ok ? "Forbindelse OK!" : r.error || "Fejl" });
+    } catch {
+      setTestResult({ ok: false, message: "Forbindelsesfejl" });
+    }
+    setTesting(false);
+  }
+
+  async function handleLoadResourceTypes() {
+    setLoadingTypes(true);
+    try {
+      const types = await fetchBookingResourceTypes();
+      setResourceTypes(types);
+    } catch {
+      setResourceTypes([]);
+    }
+    setLoadingTypes(false);
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const r = await syncBookingResources();
+      if (r.error) {
+        setSyncResult(`Fejl: ${r.error}`);
+      } else {
+        setSyncResult(`${r.synced} enheder synkroniseret`);
+      }
+    } catch {
+      setSyncResult("Synkronisering fejlede");
+    }
+    setSyncing(false);
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Bookingsystem</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Forbind til dit bookingsystem for at synkronisere pladser og hytter automatisk.
+          </p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <Label>Udbyder</Label>
+            <select
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={values.booking_provider}
+              onChange={(e) => h("booking_provider", e.target.value)}
+            >
+              <option value="none">Ingen</option>
+              <option value="danplanner">Danplanner</option>
+            </select>
+          </div>
+
+          {isDanplanner && (
+            <div className="space-y-4 pt-2">
+              <div>
+                <Label>Danplanner URL</Label>
+                <Input
+                  value={values.danplanner_url}
+                  onChange={(e) => h("danplanner_url", e.target.value)}
+                  placeholder="https://admin.danplanner.dk"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>Brugernavn</Label>
+                <Input
+                  value={values.danplanner_username}
+                  onChange={(e) => h("danplanner_username", e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>Adgangskode</Label>
+                <Input
+                  type="password"
+                  value={values.danplanner_password}
+                  onChange={(e) => h("danplanner_password", e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLogin}
+                  disabled={loginState === "logging_in" || loginState === "verifying" || !values.danplanner_username}
+                >
+                  {loginState === "logging_in" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Cloud className="h-4 w-4 mr-2" />}
+                  {loginState === "logging_in" ? "Logger ind..." : "Log ind"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTest}
+                  disabled={testing}
+                >
+                  {testing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wifi className="h-4 w-4 mr-2" />}
+                  {testing ? "Tester..." : "Test forbindelse"}
+                </Button>
+              </div>
+
+              {loginState === "needs_2fa" && (
+                <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 space-y-3">
+                  <p className="text-sm text-amber-800">{loginMsg}</p>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Indtast kode"
+                      value={verifyCode}
+                      onChange={(e) => setVerifyCode(e.target.value)}
+                      className="max-w-[200px]"
+                      onKeyDown={(e) => e.key === "Enter" && handleVerify()}
+                    />
+                    <Button size="sm" onClick={handleVerify} disabled={loginState === "verifying" as never}>
+                      {loginState === ("verifying" as typeof loginState) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Shield className="h-4 w-4 mr-2" />}
+                      Godkend
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {loginState === "connected" && (
+                <div className="flex items-center gap-2 text-sm p-3 rounded-lg bg-green-50 text-green-700">
+                  <Cloud className="h-4 w-4 shrink-0" />
+                  <span>{loginMsg}</span>
+                </div>
+              )}
+
+              {loginState === "error" && (
+                <div className="flex items-center gap-2 text-sm p-3 rounded-lg bg-red-50 text-red-600">
+                  <WifiOff className="h-4 w-4 shrink-0" />
+                  <span>{loginMsg}</span>
+                </div>
+              )}
+
+              {testResult && (
+                <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${testResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                  {testResult.ok ? <Cloud className="h-4 w-4 shrink-0" /> : <WifiOff className="h-4 w-4 shrink-0" />}
+                  <span>{testResult.message}</span>
+                </div>
+              )}
+
+              <div className="border-t border-border pt-4 space-y-3">
+                <h3 className="text-sm font-medium">Ressourcetyper</h3>
+                <p className="text-xs text-muted-foreground">
+                  Vælg hvilke ressourcetyper i Danplanner der svarer til pladser og hytter.
+                </p>
+                <Button variant="outline" size="sm" onClick={handleLoadResourceTypes} disabled={loadingTypes}>
+                  {loadingTypes ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ExternalLink className="h-4 w-4 mr-2" />}
+                  {loadingTypes ? "Henter..." : "Hent ressourcetyper"}
+                </Button>
+
+                {resourceTypes.length > 0 && (
+                  <div className="space-y-2 mt-2">
+                    {resourceTypes.map((rt) => (
+                      <div key={rt.id} className="flex items-center gap-3 text-sm p-2 rounded bg-muted/50">
+                        <span className="font-mono text-xs text-muted-foreground">#{rt.id}</span>
+                        <span className="font-medium">{rt.name}</span>
+                        <div className="ml-auto flex gap-1">
+                          <Button
+                            variant={values.danplanner_resource_type_pitch === rt.id ? "default" : "outline"}
+                            size="sm"
+                            className="text-xs h-7"
+                            onClick={() => h("danplanner_resource_type_pitch", rt.id)}
+                          >
+                            Plads
+                          </Button>
+                          <Button
+                            variant={values.danplanner_resource_type_cabin === rt.id ? "default" : "outline"}
+                            size="sm"
+                            className="text-xs h-7"
+                            onClick={() => h("danplanner_resource_type_cabin", rt.id)}
+                          >
+                            Hytte
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Plads-type ID</Label>
+                    <Input
+                      value={values.danplanner_resource_type_pitch}
+                      onChange={(e) => h("danplanner_resource_type_pitch", e.target.value)}
+                      placeholder="f.eks. 596"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Hytte-type ID</Label>
+                    <Input
+                      value={values.danplanner_resource_type_cabin}
+                      onChange={(e) => h("danplanner_resource_type_cabin", e.target.value)}
+                      placeholder="f.eks. 597"
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {isDanplanner && (
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="font-semibold">Synkronisér enheder</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Hent pladser og hytter fra Danplanner og opret dem automatisk.
+            </p>
+          </div>
+          <div className="p-5 space-y-3">
+            <Button onClick={handleSync} disabled={syncing} size="sm">
+              {syncing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Cloud className="h-4 w-4 mr-2" />}
+              {syncing ? "Synkroniserer..." : "Synkronisér enheder"}
+            </Button>
+            {syncResult && (
+              <div className="text-sm p-3 rounded-lg bg-muted">
+                <p>{syncResult}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
     </div>
