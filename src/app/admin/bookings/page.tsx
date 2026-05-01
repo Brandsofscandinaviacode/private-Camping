@@ -7,10 +7,9 @@ import {
   CreditCard,
   ChevronRight,
 } from "lucide-react";
+import { unitDisplayName } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
-
-const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Vogn", PITCH: "Plads" };
 
 export default async function BookingsPage({
   searchParams,
@@ -72,7 +71,7 @@ export default async function BookingsPage({
                       )}
                     </div>
                     <div className="flex items-center gap-2 text-sm text-muted-foreground mt-0.5">
-                      <span>{typeLabels[s.unit.type] || s.unit.type} {s.unit.name}</span>
+                      <span>{unitDisplayName(s.unit.type, s.unit.name)}</span>
                       <span className="opacity-30">&middot;</span>
                       <span>{new Date(s.checkInTime).toLocaleDateString("da-DK")}</span>
                       {s.checkOutTime && (

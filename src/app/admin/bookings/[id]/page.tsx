@@ -16,9 +16,9 @@ import { BookingCheckoutButton } from "@/components/admin/booking-checkout-butto
 import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { PrepaidBalance } from "@/components/admin/prepaid-balance";
 
-export const dynamic = "force-dynamic";
+import { unitDisplayName } from "@/lib/utils";
 
-const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+export const dynamic = "force-dynamic";
 
 export default async function BookingDetailPage({
   params,
@@ -86,7 +86,7 @@ export default async function BookingDetailPage({
             )}
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {typeLabels[session.unit.type] || session.unit.type} {session.unit.name} &middot; {session.bookingRef || `#${session.id}`}
+            {unitDisplayName(session.unit.type, session.unit.name)} &middot; {session.bookingRef || `#${session.id}`}
           </p>
         </div>
       </div>

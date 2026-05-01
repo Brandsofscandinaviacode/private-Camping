@@ -35,12 +35,7 @@ const ICONS: Record<string, LucideIcon> = {
   Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor,
 };
 
-const typeLabels: Record<string, string> = {
-  CABIN: "Hytte",
-  SEASONAL: "Fastligger",
-  CARAVAN: "Campingvogn",
-  PITCH: "Plads",
-};
+import { typeLabels } from "@/lib/utils";
 
 function getMarkerColor(unit: MapUnit): string {
   const isOccupied = unit.status === "OCCUPIED" || unit.activeGuestName || unit.longTermGuestName;
@@ -240,6 +235,10 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
           <span className="flex items-center gap-1.5">
             <span className="h-3 w-3 rounded-full bg-red-500" />
             Optaget, ingen strøm
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded-full bg-blue-500" />
+            Optaget, uden måler
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-3 w-3 rounded-full bg-gray-400" />

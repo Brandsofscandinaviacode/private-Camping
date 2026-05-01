@@ -5,14 +5,9 @@ import { Button } from "@/components/ui/button";
 import { getSessionStatement } from "@/lib/actions";
 import { PrintButton } from "@/components/admin/print-button";
 
-export const dynamic = "force-dynamic";
+import { unitDisplayName } from "@/lib/utils";
 
-const typeLabels: Record<string, string> = {
-  CABIN: "Hytte",
-  SEASONAL: "Fastligger",
-  CARAVAN: "Campingvogn",
-  PITCH: "Plads",
-};
+export const dynamic = "force-dynamic";
 
 function fmtDKK(v: number) {
   return `${v.toFixed(2)} DKK`;
@@ -84,7 +79,7 @@ export default async function BookingStatementPage({
                 Enhed
               </p>
               <p className="font-medium">
-                {typeLabels[unit.type] || unit.type} {unit.name}
+                {unitDisplayName(unit.type, unit.name)}
               </p>
               <p className="text-gray-700">
                 Check-in: {new Date(session.checkInTime).toLocaleDateString("da-DK")}

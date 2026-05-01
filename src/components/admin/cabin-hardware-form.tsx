@@ -7,13 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { updateUnitHardware, browseHAEntities, type BrowsableEntity, type EntityCategory } from "@/lib/actions";
-
-const typeLabels: Record<string, string> = {
-  CABIN: "Hytte",
-  SEASONAL: "Fastligger",
-  CARAVAN: "Campingvogn",
-  PITCH: "Plads",
-};
+import { unitDisplayName } from "@/lib/utils";
 
 interface CabinHardwareFormProps {
   cabin: { id: number; name: string; type: string };
@@ -301,7 +295,7 @@ export function CabinHardwareForm({ cabin, hardware }: CabinHardwareFormProps) {
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{typeLabels[cabin.type] || cabin.type} {cabin.name}</span>
+          <span className="text-sm font-medium">{unitDisplayName(cabin.type, cabin.name)}</span>
           {capabilities.length > 0 && (
             <span className="text-xs text-muted-foreground">
               ({capabilities.join(", ")})

@@ -14,19 +14,13 @@ import {
   MapPin,
   ChevronRight,
 } from "lucide-react";
+import { typeLabels } from "@/lib/utils";
 
 const typeIcons: Record<string, typeof Home> = {
   CABIN: Home,
   SEASONAL: Caravan,
   CARAVAN: Caravan,
   PITCH: MapPin,
-};
-
-const typeLabels: Record<string, string> = {
-  CABIN: "Hytte",
-  SEASONAL: "Fastligger",
-  CARAVAN: "Campingvogn",
-  PITCH: "Plads",
 };
 
 interface UnitCardProps {

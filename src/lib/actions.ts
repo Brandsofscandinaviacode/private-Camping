@@ -8,6 +8,7 @@ import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
 import { mqttClient, testMqttBroker } from "./mqtt-client";
 import { requireAuth } from "./auth";
+import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
 import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
 
@@ -246,11 +247,11 @@ async function getUsedEntityMap(): Promise<Map<string, string>> {
     include: { unit: true },
   });
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
   const map = new Map<string, string>();
 
   for (const row of allHw) {
-    const unitName = `${typeLabels[row.unit.type] || ""} ${row.unit.name}`.trim();
+    const unitName = unitDisplayName(row.unit.type, row.unit.name);
     // Only count HA entity IDs — MQTT prefixes are free-form and can legitimately
     // be reused (e.g. different components of a Shelly Plus 2PM).
     const ids = [
@@ -721,9 +722,9 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   await prisma.unit.update({ where: { id: unitId }, data: updateData });
 
   // Send notifications (non-blocking)
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
-  const unitDisplayName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
-  sendCheckInNotificationAsync(guestName, guestPhone, guestEmail, guestPortalToken, unitDisplayName);
+
+  const dispName = unitDisplayName(unit.type, unit.name);
+  sendCheckInNotificationAsync(guestName, guestPhone, guestEmail, guestPortalToken, dispName);
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unitId}`);
@@ -1857,9 +1858,9 @@ export async function activateBookingSession(
   }
   await prisma.unit.update({ where: { id: unit.id }, data: updateData });
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
-  const unitDisplayName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
-  sendCheckInNotificationAsync(finalGuestName, finalGuestPhone ?? undefined, finalGuestEmail ?? undefined, session.guestPortalToken, unitDisplayName);
+
+  const dispName = unitDisplayName(unit.type, unit.name);
+  sendCheckInNotificationAsync(finalGuestName, finalGuestPhone ?? undefined, finalGuestEmail ?? undefined, session.guestPortalToken, dispName);
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unit.id}`);
@@ -2301,8 +2302,8 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
   const baseUrl = settings.site_url || "http://localhost:3000";
   const portalUrl = portalToken ? `${baseUrl}/guest/${portalToken}` : baseUrl;
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
-  const unitName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
+
+  const unitName = unitDisplayName(unit.type, unit.name);
   const periodLabel = new Date(invoice.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" });
 
   try {
@@ -2503,8 +2504,8 @@ export async function resendGuestNotification(sessionId: number) {
   });
   if (!session) throw new Error("Session ikke fundet");
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
-  const unitDisplayName = `${typeLabels[session.unit.type] || ""} ${session.unit.name}`.trim();
+
+  const dispName = unitDisplayName(session.unit.type, session.unit.name);
 
   const { sendCheckInNotification } = await import("./notifications");
   const settings = await getGlobalSettings();
@@ -2516,7 +2517,7 @@ export async function resendGuestNotification(sessionId: number) {
     session.guestPhone || undefined,
     session.guestEmail || undefined,
     portalUrl,
-    unitDisplayName,
+    dispName,
   );
 
   return { ok: true };
@@ -2777,7 +2778,7 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
     return s;
   };
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
   const header = [
     "ID",
     "Enhed",
@@ -2900,7 +2901,7 @@ export async function exportInvoicesCSV() {
     return s;
   };
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
   const header = [
     "ID",
     "Enhed",
@@ -2985,7 +2986,7 @@ export async function checkConsumptionAlarms(): Promise<{
   const units = await prisma.unit.findMany({ include: { hardware: true } });
   const alerts: { unitId: number; unitName: string; type: "electricity" | "water"; usage: number; threshold: number }[] = [];
 
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
 
   for (const unit of units) {
     const logs = await prisma.consumptionLog.findMany({
@@ -2997,7 +2998,7 @@ export async function checkConsumptionAlarms(): Promise<{
 
     const firstLog = logs[0];
     const lastLog = logs[logs.length - 1];
-    const unitName = `${typeLabels[unit.type] || ""} ${unit.name}`.trim();
+    const unitName = unitDisplayName(unit.type, unit.name);
 
     if (firstLog.electricityKwh !== null && lastLog.electricityKwh !== null) {
       const usage = lastLog.electricityKwh - firstLog.electricityKwh;
@@ -3322,7 +3323,7 @@ export async function getEconomySummary(): Promise<{
   laundryTotals: { total: number; count: number; paid: number };
 }> {
   await requireAuth();
-  const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
+
 
   const [sessions, invoices, laundrySessions] = await Promise.all([
     prisma.session.findMany({
@@ -3412,7 +3413,7 @@ export async function getEconomySummary(): Promise<{
     .filter((s) => s.paymentStatus === "UNPAID" && (s.totalCost ?? 0) > 0)
     .map((s) => ({
       id: s.id,
-      unitName: `${typeLabels[s.unit.type] || ""} ${s.unit.name}`.trim(),
+      unitName: unitDisplayName(s.unit.type, s.unit.name),
       guestName: s.guestName,
       total: s.totalCost ?? 0,
       checkOut: s.checkOutTime?.toISOString().slice(0, 10) || "",
@@ -3423,7 +3424,7 @@ export async function getEconomySummary(): Promise<{
     .filter((inv) => inv.status !== "PAID" && inv.totalAmount > 0)
     .map((inv) => ({
       id: inv.id,
-      unitName: `${typeLabels[inv.unit.type] || ""} ${inv.unit.name}`.trim(),
+      unitName: unitDisplayName(inv.unit.type, inv.unit.name),
       total: inv.totalAmount,
       periodEnd: inv.periodEnd.toISOString().slice(0, 10),
     }));

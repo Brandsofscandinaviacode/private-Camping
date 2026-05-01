@@ -17,10 +17,9 @@ import { CabinControls } from "@/components/admin/cabin-controls";
 import { CopyButton } from "@/components/admin/copy-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
 import { LivePowerDraw } from "@/components/admin/live-power-draw";
+import { unitDisplayName as formatUnitName } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
-
-const typeLabels: Record<string, string> = { CABIN: "Hytte", SEASONAL: "Fastligger", CARAVAN: "Campingvogn", PITCH: "Plads" };
 
 export default async function UnitDetailPage({
   params,
@@ -45,7 +44,7 @@ export default async function UnitDetailPage({
   const isOccupied = unit.status === "OCCUPIED";
   const hw = unit.hardware;
   const completedSessions = unit.sessions.filter((s) => s.status === "COMPLETED");
-  const unitDisplayName = `${typeLabels[unit.type]} ${unit.name}`;
+  const unitDisplayName = formatUnitName(unit.type, unit.name);
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
