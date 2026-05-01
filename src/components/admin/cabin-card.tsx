@@ -54,6 +54,36 @@ interface UnitCardProps {
   pendingGuestName?: string | null;
 }
 
+export function UnitCardCompact({
+  unit,
+  activeGuestName,
+  pendingGuestName,
+}: Omit<UnitCardProps, "haStates">) {
+  const isOccupied = unit.status === "OCCUPIED";
+  const isPending = !isOccupied && !!pendingGuestName;
+  const displayGuest = activeGuestName || pendingGuestName || unit.longTermGuestName;
+
+  return (
+    <Link href={`/admin/units/${unit.id}`} className="h-full block">
+      <div
+        className={`group rounded-lg border border-border/60 bg-card px-3 py-2.5 shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full flex flex-col gap-1 ${
+          isOccupied ? "border-l-[3px] border-l-primary" : isPending ? "border-l-[3px] border-l-amber-500" : ""
+        }`}
+      >
+        <div className="flex items-center justify-between gap-1">
+          <p className="text-sm font-semibold leading-tight truncate">{unit.name}</p>
+          <span className={`h-2 w-2 rounded-full shrink-0 ${
+            isOccupied ? "bg-primary" : isPending ? "bg-amber-500" : "bg-muted-foreground/30"
+          }`} />
+        </div>
+        {displayGuest && (
+          <p className="text-xs text-muted-foreground truncate">{displayGuest}</p>
+        )}
+      </div>
+    </Link>
+  );
+}
+
 export function UnitCard({ unit, haStates, activeGuestName, pendingGuestName }: UnitCardProps) {
   const isOccupied = unit.status === "OCCUPIED";
   const isPending = !isOccupied && !!pendingGuestName;
