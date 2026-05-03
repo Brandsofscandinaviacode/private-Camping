@@ -6,14 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { getPublicLaundryGroup, createPublicLaundryPayment, completeExpiredLaundry } from "@/lib/actions";
 
+interface Program {
+  id: number;
+  name: string;
+  durationMinutes: number;
+  pricePerUse: number;
+}
+
 interface Machine {
   id: number;
   name: string;
+  kind?: string;
   durationMinutes: number;
   pricePerUse: number;
   available: boolean;
   minutesLeft: number;
   endsAt: string | null;
+  programs: Program[];
 }
 
 interface Props {
@@ -26,6 +35,7 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
   const [machines, setMachines] = useState(initialMachines);
   const [startingId, setStartingId] = useState<number | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pickingProgramFor, setPickingProgramFor] = useState<number | null>(null);
 
   // Auto-refresh every 15 seconds
   useEffect(() => {
@@ -59,18 +69,18 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
     return () => clearInterval(interval);
   }, [stoppedIds]);
 
-  async function handleStart(machineId: number) {
+  async function handleStart(machineId: number, programId?: number) {
     setStartingId(machineId);
     setMessage(null);
     try {
-      const res = await createPublicLaundryPayment(machineId, token);
+      const res = await createPublicLaundryPayment(machineId, token, programId ?? null);
       if (res.ok && res.paymentLink) {
         window.location.href = res.paymentLink;
         return;
       }
       setMessage({ ok: res.ok, text: res.message });
       if (res.ok) {
-        // Refresh machines after successful start
+        setPickingProgramFor(null);
         const data = await getPublicLaundryGroup(token);
         if (data) setMachines(data.machines);
       }
@@ -79,6 +89,13 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
     } finally {
       setStartingId(null);
     }
+  }
+
+  function formatDuration(min: number): string {
+    if (min < 60) return `${min} min`;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m === 0 ? `${h} t` : `${h} t ${m} min`;
   }
 
   const availableCount = machines.filter((m) => m.available).length;
@@ -150,24 +167,73 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
 
               {/* Action area */}
               <div className={`px-4 pb-4 ${m.available ? "" : "opacity-60"}`}>
-                <div className="flex items-center justify-between text-sm text-muted-foreground mb-3">
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5" />
-                    {m.durationMinutes} minutter
-                  </div>
-                  <span className="font-semibold text-foreground">{m.pricePerUse.toFixed(0)} DKK</span>
-                </div>
-                <Button
-                  className="w-full"
-                  size="lg"
-                  disabled={!m.available || startingId !== null}
-                  onClick={() => handleStart(m.id)}
-                >
-                  {startingId === m.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  ) : null}
-                  {startingId === m.id ? "Opretter betaling..." : `Betal ${m.pricePerUse.toFixed(0)} DKK & Start`}
-                </Button>
+                {m.programs.length > 0 ? (
+                  pickingProgramFor === m.id ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground mb-1">Vælg program:</p>
+                      {m.programs.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          disabled={!m.available || startingId !== null}
+                          onClick={() => handleStart(m.id, p.id)}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left disabled:opacity-50"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-medium text-sm truncate">{p.name}</p>
+                            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                              <Clock className="h-3 w-3" />
+                              {formatDuration(p.durationMinutes)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-semibold text-sm">{p.pricePerUse.toFixed(0)} DKK</span>
+                            {startingId === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          </div>
+                        </button>
+                      ))}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => setPickingProgramFor(null)}
+                        disabled={startingId !== null}
+                      >
+                        Annullér
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      className="w-full"
+                      size="lg"
+                      disabled={!m.available || startingId !== null}
+                      onClick={() => setPickingProgramFor(m.id)}
+                    >
+                      Vælg program
+                    </Button>
+                  )
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-sm text-muted-foreground mb-3">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="h-3.5 w-3.5" />
+                        {formatDuration(m.durationMinutes)}
+                      </div>
+                      <span className="font-semibold text-foreground">{m.pricePerUse.toFixed(0)} DKK</span>
+                    </div>
+                    <Button
+                      className="w-full"
+                      size="lg"
+                      disabled={!m.available || startingId !== null}
+                      onClick={() => handleStart(m.id)}
+                    >
+                      {startingId === m.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : null}
+                      {startingId === m.id ? "Opretter betaling..." : `Betal ${m.pricePerUse.toFixed(0)} DKK & Start`}
+                    </Button>
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>

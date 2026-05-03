@@ -370,12 +370,33 @@ model LaundryMachine {
   groupId          Int?
   group            LaundryGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
+  programs LaundryProgram[]
   sessions LaundrySess[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("laundry_machines")
+}
+
+// ──────────────────────────────────────────────
+// Laundry Program (e.g. Hurtig vask 60min, Standard 140min, Kogevask 180min)
+// ──────────────────────────────────────────────
+model LaundryProgram {
+  id              Int     @id @default(autoincrement())
+  machineId       Int
+  machine         LaundryMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  name            String                            // "Hurtig vask", "Standard", "Kogevask"
+  durationMinutes Int                               // Relay on for this many minutes
+  pricePerUse     Float                             // DKK
+  sortOrder       Int     @default(0)
+  enabled         Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([machineId, sortOrder])
+  @@map("laundry_programs")
 }
 
 // ──────────────────────────────────────────────
@@ -464,6 +485,11 @@ model LaundrySess {
   machineId       Int
   machine         LaundryMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
 
+  // Optional: which program the guest picked. Snapshot of name/duration is kept
+  // on the session itself so program edits/deletions don't break history.
+  programId       Int?
+  programName     String?                          // Snapshot of program name at start
+
   // Link to guest session (who started it)
   sessionId       Int?
   session         Session?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
@@ -472,6 +498,7 @@ model LaundrySess {
   startedAt       DateTime @default(now())
   endsAt          DateTime                         // When the machine should turn off
   status          String   @default("ACTIVE")      // ACTIVE, COMPLETED, CANCELLED
+  durationMinutes Int      @default(0)             // Snapshot of duration at start
   pricePaid       Float    @default(0)
   paymentStatus   String   @default("UNPAID")      // UNPAID, PAID
   paymentId       String?                           // QuickPay transaction ID

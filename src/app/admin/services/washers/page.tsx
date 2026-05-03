@@ -32,6 +32,13 @@ export default async function AdminWashersPage() {
             enabled: m.enabled,
             code: m.code,
             location: m.location,
+            programs: m.programs.map((p) => ({
+              id: p.id,
+              name: p.name,
+              durationMinutes: p.durationMinutes,
+              pricePerUse: p.pricePerUse,
+              enabled: p.enabled,
+            })),
           }))}
         />
       </div>

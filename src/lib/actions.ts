@@ -3545,6 +3545,9 @@ export async function getLaundryMachines() {
         where: { status: "ACTIVE" },
         take: 1,
       },
+      programs: {
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      },
     },
   });
 }
@@ -3618,6 +3621,63 @@ export async function deleteLaundryMachine(id: number) {
   revalidatePath("/admin/settings");
 }
 
+// ── Laundry Programs ───────────────────────────────────────────
+export async function getLaundryPrograms(machineId: number) {
+  await requireAuth();
+  return prisma.laundryProgram.findMany({
+    where: { machineId },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+  });
+}
+
+export async function createLaundryProgram(data: {
+  machineId: number;
+  name: string;
+  durationMinutes: number;
+  pricePerUse: number;
+}) {
+  await requireAuth();
+  const last = await prisma.laundryProgram.findFirst({
+    where: { machineId: data.machineId },
+    orderBy: { sortOrder: "desc" },
+  });
+  await prisma.laundryProgram.create({
+    data: {
+      machineId: data.machineId,
+      name: data.name,
+      durationMinutes: data.durationMinutes,
+      pricePerUse: data.pricePerUse,
+      sortOrder: (last?.sortOrder ?? -1) + 1,
+    },
+  });
+  revalidatePath("/admin/services");
+}
+
+export async function updateLaundryProgram(id: number, data: {
+  name: string;
+  durationMinutes: number;
+  pricePerUse: number;
+  enabled: boolean;
+}) {
+  await requireAuth();
+  await prisma.laundryProgram.update({
+    where: { id },
+    data: {
+      name: data.name,
+      durationMinutes: data.durationMinutes,
+      pricePerUse: data.pricePerUse,
+      enabled: data.enabled,
+    },
+  });
+  revalidatePath("/admin/services");
+}
+
+export async function deleteLaundryProgram(id: number) {
+  await requireAuth();
+  await prisma.laundryProgram.delete({ where: { id } });
+  revalidatePath("/admin/services");
+}
+
 // Get laundry machines with status for guest portal
 export async function getGuestLaundryMachines() {
   // Auto-expire stale PENDING sessions (older than 5 minutes)
@@ -3635,6 +3695,10 @@ export async function getGuestLaundryMachines() {
         where: { status: "ACTIVE" },
         orderBy: { startedAt: "desc" },
         take: 1,
+      },
+      programs: {
+        where: { enabled: true },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       },
     },
   });
@@ -3658,6 +3722,12 @@ export async function getGuestLaundryMachines() {
       available: !isRunning,
       minutesLeft,
       endsAt: isRunning ? activeSession.endsAt.toISOString() : null,
+      programs: m.programs.map((p) => ({
+        id: p.id,
+        name: p.name,
+        durationMinutes: p.durationMinutes,
+        pricePerUse: p.pricePerUse,
+      })),
     };
   });
 }
@@ -3701,6 +3771,7 @@ export async function getGuestShowers() {
 export async function createLaundryPayment(
   machineId: number,
   guestPortalToken: string,
+  programId?: number | null,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   // Auto-expire stale PENDING sessions before checking availability
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
@@ -3711,11 +3782,24 @@ export async function createLaundryPayment(
 
   const machine = await prisma.laundryMachine.findUnique({
     where: { id: machineId },
-    include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
+    include: {
+      sessions: { where: { status: "ACTIVE" }, take: 1 },
+      programs: { where: { enabled: true } },
+    },
   });
 
   if (!machine) return { ok: false, message: "Maskine ikke fundet" };
   if (!machine.enabled) return { ok: false, message: "Maskine er deaktiveret" };
+
+  // Resolve program (if any). When the machine has programs defined, a
+  // program must be selected; otherwise fall back to machine defaults.
+  let chosenProgram: { id: number; name: string; durationMinutes: number; pricePerUse: number } | null = null;
+  if (machine.programs.length > 0) {
+    if (!programId) return { ok: false, message: "Vælg et program" };
+    const p = machine.programs.find((pp) => pp.id === programId);
+    if (!p) return { ok: false, message: "Ugyldigt program" };
+    chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
+  }
 
   // Check if currently running
   const activeSession = machine.sessions[0];
@@ -3736,7 +3820,8 @@ export async function createLaundryPayment(
     where: { guestPortalToken },
   });
   let credit = guestSession?.laundryCredit ?? 0;
-  const price = machine.pricePerUse;
+  const price = chosenProgram ? chosenProgram.pricePerUse : machine.pricePerUse;
+  const duration = chosenProgram ? chosenProgram.durationMinutes : machine.durationMinutes;
 
   // If prepaid credit for services is enabled and guest is PREPAID,
   // allow them to pay from their prepaid balance as extra credit.
@@ -3754,7 +3839,7 @@ export async function createLaundryPayment(
   const creditUsed = Math.min(guestSession?.laundryCredit ?? 0, price);
 
   const endsAt = new Date();
-  endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
+  endsAt.setMinutes(endsAt.getMinutes() + duration);
 
   // If guest has enough credit, start immediately (no payment needed)
   if (amountToPay <= 0) {
@@ -3773,20 +3858,27 @@ export async function createLaundryPayment(
       });
     }
 
-    const laundrySess = await prisma.laundrySess.create({
+    await prisma.laundrySess.create({
       data: {
         machineId,
         sessionId: guestSession?.id || null,
         guestPortalToken,
         endsAt,
         pricePaid: price,
+        durationMinutes: duration,
+        programId: chosenProgram?.id ?? null,
+        programName: chosenProgram?.name ?? null,
         status: "ACTIVE",
         paymentStatus: "PAID",
       },
     });
 
-    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { logger.error("laundry", "laundry on", e); }
-    return { ok: true, message: `${machine.name} startet med kredit — kører i ${machine.durationMinutes} minutter` };
+    try {
+      const autoOffSec = duration * 60 + 120;
+      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
+    } catch (e) { logger.error("laundry", "laundry on", e); }
+    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
+    return { ok: true, message: `${machine.name}${programLabel} startet med kredit — kører i ${duration} minutter` };
   }
 
   // Create laundry session in PENDING state (waiting for payment)
@@ -3797,6 +3889,9 @@ export async function createLaundryPayment(
       guestPortalToken,
       endsAt,
       pricePaid: price,
+      durationMinutes: duration,
+      programId: chosenProgram?.id ?? null,
+      programName: chosenProgram?.name ?? null,
       status: "PENDING",
       paymentStatus: "UNPAID",
     },
@@ -3818,8 +3913,12 @@ export async function createLaundryPayment(
       where: { id: laundrySess.id },
       data: { status: "ACTIVE", paymentStatus: "PAID" },
     });
-    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { logger.error("laundry", "laundry on", e); }
-    return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
+    try {
+      const autoOffSec = duration * 60 + 120;
+      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
+    } catch (e) { logger.error("laundry", "laundry on", e); }
+    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
+    return { ok: true, message: `${machine.name}${programLabel} startet — kører i ${duration} minutter` };
   }
 
   try {
@@ -3864,9 +3963,13 @@ export async function activateLaundrySession(laundrySessionId: number) {
   });
   if (!sess || sess.status !== "PENDING") return;
 
+  // Use snapshotted duration from the session (set at payment time based on
+  // the chosen program), falling back to machine default for legacy sessions.
+  const duration = sess.durationMinutes > 0 ? sess.durationMinutes : sess.machine.durationMinutes;
+
   // Recalculate endsAt from now (since guest just paid)
   const endsAt = new Date();
-  endsAt.setMinutes(endsAt.getMinutes() + sess.machine.durationMinutes);
+  endsAt.setMinutes(endsAt.getMinutes() + duration);
 
   await prisma.laundrySess.update({
     where: { id: laundrySessionId },
@@ -3876,7 +3979,7 @@ export async function activateLaundrySession(laundrySessionId: number) {
   // Turn on the Shelly relay with hardware auto-off safety net.
   // Add 120s buffer so the cron/client stop fires first under normal conditions.
   try {
-    const autoOffSec = sess.machine.durationMinutes * 60 + 120;
+    const autoOffSec = duration * 60 + 120;
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), autoOffSec);
   } catch (e) {
     logger.error("laundry", "Failed to turn on laundry machine", e);
@@ -4213,7 +4316,13 @@ export async function getPublicLaundryGroup(token: string) {
     include: {
       machines: {
         where: { enabled: true },
-        include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
+        include: {
+          sessions: { where: { status: "ACTIVE" }, take: 1 },
+          programs: {
+            where: { enabled: true },
+            orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+          },
+        },
         orderBy: { id: "asc" },
       },
     },
@@ -4231,11 +4340,18 @@ export async function getPublicLaundryGroup(token: string) {
       return {
         id: m.id,
         name: m.name,
+        kind: m.kind,
         durationMinutes: m.durationMinutes,
         pricePerUse: m.pricePerUse,
         available: !isRunning,
         minutesLeft,
         endsAt: isRunning ? active!.endsAt.toISOString() : null,
+        programs: m.programs.map((p) => ({
+          id: p.id,
+          name: p.name,
+          durationMinutes: p.durationMinutes,
+          pricePerUse: p.pricePerUse,
+        })),
       };
     }),
   };
@@ -4245,6 +4361,7 @@ export async function getPublicLaundryGroup(token: string) {
 export async function createPublicLaundryPayment(
   machineId: number,
   groupToken: string,
+  programId?: number | null,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   // Auto-expire stale PENDING sessions before checking availability
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
@@ -4255,11 +4372,24 @@ export async function createPublicLaundryPayment(
 
   const machine = await prisma.laundryMachine.findUnique({
     where: { id: machineId },
-    include: { sessions: { where: { status: "ACTIVE" }, take: 1 } },
+    include: {
+      sessions: { where: { status: "ACTIVE" }, take: 1 },
+      programs: { where: { enabled: true } },
+    },
   });
 
   if (!machine) return { ok: false, message: "Maskine ikke fundet" };
   if (!machine.enabled) return { ok: false, message: "Maskine er deaktiveret" };
+
+  // Resolve program (if any). When the machine has programs defined, a
+  // program must be selected; otherwise fall back to machine defaults.
+  let chosenProgram: { id: number; name: string; durationMinutes: number; pricePerUse: number } | null = null;
+  if (machine.programs.length > 0) {
+    if (!programId) return { ok: false, message: "Vælg et program" };
+    const p = machine.programs.find((pp) => pp.id === programId);
+    if (!p) return { ok: false, message: "Ugyldigt program" };
+    chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
+  }
 
   // Check if currently running
   const activeSession = machine.sessions[0];
@@ -4275,9 +4405,10 @@ export async function createPublicLaundryPayment(
     });
   }
 
-  const price = machine.pricePerUse;
+  const price = chosenProgram ? chosenProgram.pricePerUse : machine.pricePerUse;
+  const duration = chosenProgram ? chosenProgram.durationMinutes : machine.durationMinutes;
   const endsAt = new Date();
-  endsAt.setMinutes(endsAt.getMinutes() + machine.durationMinutes);
+  endsAt.setMinutes(endsAt.getMinutes() + duration);
 
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
@@ -4290,12 +4421,19 @@ export async function createPublicLaundryPayment(
         guestPortalToken: `qr:${groupToken}`,
         endsAt,
         pricePaid: price,
+        durationMinutes: duration,
+        programId: chosenProgram?.id ?? null,
+        programName: chosenProgram?.name ?? null,
         status: "ACTIVE",
         paymentStatus: "PAID",
       },
     });
-    try { await hardware.setSwitch(hardware.switchRowEp(machine), true); } catch (e) { logger.error("laundry", "laundry on", e); }
-    return { ok: true, message: `${machine.name} startet — kører i ${machine.durationMinutes} minutter` };
+    try {
+      const autoOffSec = duration * 60 + 120;
+      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
+    } catch (e) { logger.error("laundry", "laundry on", e); }
+    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
+    return { ok: true, message: `${machine.name}${programLabel} startet — kører i ${duration} minutter` };
   }
 
   // Create pending session
@@ -4305,6 +4443,9 @@ export async function createPublicLaundryPayment(
       guestPortalToken: `qr:${groupToken}`,
       endsAt,
       pricePaid: price,
+      durationMinutes: duration,
+      programId: chosenProgram?.id ?? null,
+      programName: chosenProgram?.name ?? null,
       status: "PENDING",
       paymentStatus: "UNPAID",
     },

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Plus, Save, Trash2, Loader2, WashingMachine, Wind } from "lucide-react";
+import { Plus, Save, Trash2, Loader2, WashingMachine, Wind, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,7 +10,18 @@ import {
   createLaundryMachine,
   updateLaundryMachine,
   deleteLaundryMachine,
+  createLaundryProgram,
+  updateLaundryProgram,
+  deleteLaundryProgram,
 } from "@/lib/actions";
+
+interface Program {
+  id: number;
+  name: string;
+  durationMinutes: number;
+  pricePerUse: number;
+  enabled: boolean;
+}
 
 interface Machine {
   id: number;
@@ -25,6 +36,7 @@ interface Machine {
   enabled: boolean;
   code: string | null;
   location: string | null;
+  programs: Program[];
 }
 
 type KindFilter = "WASHER" | "DRYER" | "ALL";
@@ -32,6 +44,188 @@ type KindFilter = "WASHER" | "DRYER" | "ALL";
 interface LaundrySettingsProps {
   machines: Machine[];
   kind?: KindFilter;
+}
+
+function ProgramRow({ program }: { program: Program }) {
+  const [isPending, startTransition] = useTransition();
+  const [values, setValues] = useState({
+    name: program.name,
+    durationMinutes: String(program.durationMinutes),
+    pricePerUse: String(program.pricePerUse),
+    enabled: program.enabled,
+  });
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  function handleSave() {
+    startTransition(async () => {
+      await updateLaundryProgram(program.id, {
+        name: values.name.trim(),
+        durationMinutes: parseInt(values.durationMinutes, 10) || 60,
+        pricePerUse: parseFloat(values.pricePerUse) || 0,
+        enabled: values.enabled,
+      });
+    });
+  }
+
+  function handleDelete() {
+    startTransition(async () => {
+      await deleteLaundryProgram(program.id);
+    });
+  }
+
+  return (
+    <div className="flex items-center gap-2 py-2">
+      <Switch
+        checked={values.enabled}
+        onCheckedChange={(checked) => {
+          setValues((v) => ({ ...v, enabled: checked }));
+          startTransition(async () => {
+            await updateLaundryProgram(program.id, {
+              name: values.name.trim(),
+              durationMinutes: parseInt(values.durationMinutes, 10) || 60,
+              pricePerUse: parseFloat(values.pricePerUse) || 0,
+              enabled: checked,
+            });
+          });
+        }}
+      />
+      <Input
+        value={values.name}
+        onChange={(e) => setValues((v) => ({ ...v, name: e.target.value }))}
+        onBlur={handleSave}
+        placeholder="Hurtig vask"
+        className="flex-1 min-w-0"
+      />
+      <div className="flex items-center gap-1 shrink-0">
+        <Input
+          type="number"
+          value={values.durationMinutes}
+          onChange={(e) => setValues((v) => ({ ...v, durationMinutes: e.target.value }))}
+          onBlur={handleSave}
+          className="w-20"
+        />
+        <span className="text-xs text-muted-foreground">min</span>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <Input
+          type="number"
+          step="0.5"
+          value={values.pricePerUse}
+          onChange={(e) => setValues((v) => ({ ...v, pricePerUse: e.target.value }))}
+          onBlur={handleSave}
+          className="w-20"
+        />
+        <span className="text-xs text-muted-foreground">DKK</span>
+      </div>
+      {!confirmDelete ? (
+        <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)} disabled={isPending}>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      ) : (
+        <>
+          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={isPending}>
+            Slet
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+            Annullér
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProgramList({ machineId, programs }: { machineId: number; programs: Program[] }) {
+  const [isPending, startTransition] = useTransition();
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDuration, setNewDuration] = useState("60");
+  const [newPrice, setNewPrice] = useState("10");
+
+  function handleAdd() {
+    if (!newName.trim()) return;
+    startTransition(async () => {
+      await createLaundryProgram({
+        machineId,
+        name: newName.trim(),
+        durationMinutes: parseInt(newDuration, 10) || 60,
+        pricePerUse: parseFloat(newPrice) || 0,
+      });
+      setNewName("");
+      setNewDuration("60");
+      setNewPrice("10");
+      setShowAdd(false);
+    });
+  }
+
+  return (
+    <div className="border-t border-border/40 pt-3 mt-1">
+      <div className="flex items-center gap-2 mb-2">
+        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+        <Label className="text-xs font-medium">Programmer</Label>
+        <span className="text-xs text-muted-foreground">
+          {programs.length === 0
+            ? "(ingen — bruger maskinens standardvarighed nedenfor)"
+            : `(gæsten vælger inden betaling)`}
+        </span>
+      </div>
+
+      {programs.length > 0 && (
+        <div className="space-y-1 mb-2">
+          {programs.map((p) => (
+            <ProgramRow key={p.id} program={p} />
+          ))}
+        </div>
+      )}
+
+      {showAdd ? (
+        <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="F.eks. Hurtig vask"
+              className="flex-1"
+              autoFocus
+            />
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                value={newDuration}
+                onChange={(e) => setNewDuration(e.target.value)}
+                placeholder="60"
+                className="w-20"
+              />
+              <span className="text-xs text-muted-foreground">min</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                step="0.5"
+                value={newPrice}
+                onChange={(e) => setNewPrice(e.target.value)}
+                placeholder="10"
+                className="w-20"
+              />
+              <span className="text-xs text-muted-foreground">DKK</span>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" disabled={isPending || !newName.trim()} onClick={handleAdd}>
+              {isPending ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Plus className="h-3 w-3 mr-1.5" />}
+              Tilføj program
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowAdd(false)}>Annullér</Button>
+          </div>
+        </div>
+      ) : (
+        <Button variant="outline" size="sm" onClick={() => setShowAdd(true)}>
+          <Plus className="h-3 w-3 mr-1.5" />
+          Tilføj program
+        </Button>
+      )}
+    </div>
+  );
 }
 
 function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boolean }) {
@@ -165,41 +359,20 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
           </div>
         </div>
       )}
-      <div className={`grid ${kindLocked ? "grid-cols-1" : "grid-cols-2"} gap-3`}>
-        {!kindLocked && (
-          <div>
-            <Label className="text-xs text-muted-foreground">Type</Label>
-            <select
-              value={values.kind}
-              onChange={(e) => setValues((v) => ({ ...v, kind: e.target.value }))}
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="WASHER">Vaskemaskine</option>
-              <option value="DRYER">Tørretumbler</option>
-            </select>
-          </div>
-        )}
+      {!kindLocked && (
         <div>
-          <Label className="text-xs text-muted-foreground">Varighed (minutter)</Label>
-          <Input
-            type="number"
-            value={values.durationMinutes}
-            onChange={(e) => setValues((v) => ({ ...v, durationMinutes: e.target.value }))}
-            className="mt-1"
-          />
+          <Label className="text-xs text-muted-foreground">Type</Label>
+          <select
+            value={values.kind}
+            onChange={(e) => setValues((v) => ({ ...v, kind: e.target.value }))}
+            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="WASHER">Vaskemaskine</option>
+            <option value="DRYER">Tørretumbler</option>
+          </select>
         </div>
-      </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label className="text-xs text-muted-foreground">Pris pr. vask (DKK)</Label>
-          <Input
-            type="number"
-            step="0.5"
-            value={values.pricePerUse}
-            onChange={(e) => setValues((v) => ({ ...v, pricePerUse: e.target.value }))}
-            className="mt-1"
-          />
-        </div>
         <div>
           <Label className="text-xs text-muted-foreground">
             4-cifret kode ({values.kind === "DRYER" ? "3xxx" : "2xxx"})
@@ -211,16 +384,42 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
             className="mt-1"
           />
         </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Lokation</Label>
+          <Input
+            value={values.location}
+            onChange={(e) => setValues((v) => ({ ...v, location: e.target.value }))}
+            placeholder="Bygning A, Vaskerum 1"
+            className="mt-1"
+          />
+        </div>
       </div>
-      <div>
-        <Label className="text-xs text-muted-foreground">Lokation</Label>
-        <Input
-          value={values.location}
-          onChange={(e) => setValues((v) => ({ ...v, location: e.target.value }))}
-          placeholder="Bygning A, Vaskerum 1"
-          className="mt-1"
-        />
-      </div>
+
+      <ProgramList machineId={machine.id} programs={machine.programs} />
+
+      {machine.programs.length === 0 && (
+        <div className="grid grid-cols-2 gap-3 border-t border-border/40 pt-3">
+          <div>
+            <Label className="text-xs text-muted-foreground">Standard varighed (min)</Label>
+            <Input
+              type="number"
+              value={values.durationMinutes}
+              onChange={(e) => setValues((v) => ({ ...v, durationMinutes: e.target.value }))}
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground">Standard pris (DKK)</Label>
+            <Input
+              type="number"
+              step="0.5"
+              value={values.pricePerUse}
+              onChange={(e) => setValues((v) => ({ ...v, pricePerUse: e.target.value }))}
+              className="mt-1"
+            />
+          </div>
+        </div>
+      )}
       {error && <p className="text-xs text-red-600">{error}</p>}
       <div className="flex items-center gap-2 pt-1">
         <Button size="sm" disabled={isPending} onClick={handleSave}>

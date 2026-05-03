@@ -84,7 +84,7 @@ interface GuestPortalClientProps {
   unitType: string;
   practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
-  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null }[];
+  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null; programs: { id: number; name: string; durationMinutes: number; pricePerUse: number }[] }[];
   laundryCredit: number;
   showers: { id: number; name: string; location: string | null; pricePerMinute: number; minMinutes: number; maxMinutes: number; available: boolean; minutesLeft: number }[];
   nextInvoiceDay: number | null; // 1-31 or null
@@ -922,6 +922,7 @@ function GuestServicesSection({
   const [selectedType, setSelectedType] = useState<ServiceType | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
+  const [pickingProgramFor, setPickingProgramFor] = useState<number | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Refresh availability periodically
@@ -1018,15 +1019,16 @@ function GuestServicesSection({
     return pool.filter((m) => (m.location?.trim() || NO_LOCATION_KEY) === locKey);
   }
 
-  async function handleStartMachine(machineId: number) {
+  async function handleStartMachine(machineId: number, programId?: number) {
     setStartingId(`m-${machineId}`);
     setMessage(null);
     try {
-      const res = await createLaundryPayment(machineId, token);
+      const res = await createLaundryPayment(machineId, token, programId ?? null);
       if (res.ok && res.paymentLink) {
         window.location.href = res.paymentLink;
         return;
       }
+      setPickingProgramFor(null);
       setMessage({ ok: res.ok, text: res.message });
     } catch {
       setMessage({ ok: false, text: "Fejl" });
@@ -1196,31 +1198,62 @@ function GuestServicesSection({
               </div>
             ))
           : (items as GuestPortalClientProps["laundryMachines"]).map((m) => (
-              <div key={m.id} className="flex items-center justify-between py-2.5 px-2 rounded-lg border-b last:border-0">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">{m.name}</p>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {m.available ? (
-                      <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
-                    ) : (
-                      <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
-                        {labels.inUse} · {m.minutesLeft} {labels.minutesLeft}
-                      </span>
-                    )}
-                    <span className="text-[11px] text-muted-foreground">{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}</span>
+              <div key={m.id} className="py-2.5 px-2 border-b last:border-0">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">{m.name}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {m.available ? (
+                        <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
+                      ) : (
+                        <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
+                          {labels.inUse} · {m.minutesLeft} {labels.minutesLeft}
+                        </span>
+                      )}
+                      {m.programs.length === 0 && (
+                        <span className="text-[11px] text-muted-foreground">{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}</span>
+                      )}
+                    </div>
                   </div>
+                  <Button
+                    size="sm"
+                    disabled={!m.available || startingId !== null}
+                    onClick={() => {
+                      if (m.programs.length > 0) {
+                        setPickingProgramFor(pickingProgramFor === m.id ? null : m.id);
+                      } else {
+                        handleStartMachine(m.id);
+                      }
+                    }}
+                  >
+                    {startingId === `m-${m.id}` ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : m.programs.length > 0 ? (
+                      pickingProgramFor === m.id ? labels.back : labels.choose
+                    ) : (
+                      machineButtonLabel(m)
+                    )}
+                  </Button>
                 </div>
-                <Button
-                  size="sm"
-                  disabled={!m.available || startingId !== null}
-                  onClick={() => handleStartMachine(m.id)}
-                >
-                  {startingId === `m-${m.id}` ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    machineButtonLabel(m)
-                  )}
-                </Button>
+                {m.programs.length > 0 && pickingProgramFor === m.id && m.available && (
+                  <div className="mt-2 space-y-1.5">
+                    {m.programs.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        disabled={startingId !== null}
+                        onClick={() => handleStartMachine(m.id, p.id)}
+                        className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left disabled:opacity-50"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{p.name}</p>
+                          <p className="text-[11px] text-muted-foreground">{p.durationMinutes} min</p>
+                        </div>
+                        <span className="text-sm font-semibold shrink-0">{p.pricePerUse.toFixed(0)} DKK</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
       </div>
