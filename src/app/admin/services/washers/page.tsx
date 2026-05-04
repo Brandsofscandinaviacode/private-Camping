@@ -1,11 +1,14 @@
-import { getLaundryMachines } from "@/lib/actions";
+import { getLaundryMachines, getGlobalSettings } from "@/lib/actions";
 import { LaundrySettings } from "@/components/admin/laundry-settings";
 import { ServicesSubnav } from "@/components/admin/services-subnav";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminWashersPage() {
-  const laundryMachines = await getLaundryMachines();
+  const [laundryMachines, settings] = await Promise.all([
+    getLaundryMachines(),
+    getGlobalSettings(),
+  ]);
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
@@ -19,6 +22,7 @@ export default async function AdminWashersPage() {
       <div className="pt-2">
         <LaundrySettings
           kind="WASHER"
+          baseUrl={settings.site_url || ""}
           machines={laundryMachines.map((m) => ({
             id: m.id,
             name: m.name,

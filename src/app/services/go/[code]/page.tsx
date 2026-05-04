@@ -3,7 +3,8 @@ import { resolveServiceCode } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
-// Convenience redirect: /services/go/1001 → /shower/1, /services/go/2001 → /laundry/<group-token>
+// Convenience redirect: /services/go/1001 → /shower/1,
+// /services/go/2001 → /laundry/machine/<id>
 export default async function ServiceCodePage({
   params,
 }: {
@@ -14,7 +15,6 @@ export default async function ServiceCodePage({
   if (!resolved) notFound();
 
   if (resolved.type === "shower") redirect(`/shower/${resolved.id}`);
-  // Washer/dryer share the laundry group token flow
-  if (resolved.groupToken) redirect(`/laundry/${resolved.groupToken}`);
-  notFound();
+  // Washer/dryer go directly to the per-machine page
+  redirect(`/laundry/machine/${resolved.id}`);
 }

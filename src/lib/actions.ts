@@ -4357,10 +4357,58 @@ export async function getPublicLaundryGroup(token: string) {
   };
 }
 
-// Public: start a laundry machine from QR page (no guest session required)
+// Public: get a single machine for the per-machine QR flow
+export async function getPublicLaundryMachine(machineId: number) {
+  // Auto-expire stale PENDING sessions older than 5 minutes
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  await prisma.laundrySess.updateMany({
+    where: { machineId, status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    data: { status: "CANCELLED" },
+  });
+
+  const machine = await prisma.laundryMachine.findUnique({
+    where: { id: machineId },
+    include: {
+      sessions: { where: { status: "ACTIVE" }, take: 1 },
+      programs: {
+        where: { enabled: true },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      },
+    },
+  });
+  if (!machine || !machine.enabled) return null;
+
+  const now = new Date();
+  const active = machine.sessions[0];
+  const isRunning = active && new Date(active.endsAt) > now;
+  const minutesLeft = isRunning ? Math.max(0, Math.ceil((new Date(active.endsAt).getTime() - now.getTime()) / 60000)) : 0;
+
+  return {
+    id: machine.id,
+    name: machine.name,
+    kind: machine.kind,
+    location: machine.location,
+    durationMinutes: machine.durationMinutes,
+    pricePerUse: machine.pricePerUse,
+    available: !isRunning,
+    minutesLeft,
+    endsAt: isRunning ? active!.endsAt.toISOString() : null,
+    programs: machine.programs.map((p) => ({
+      id: p.id,
+      name: p.name,
+      durationMinutes: p.durationMinutes,
+      pricePerUse: p.pricePerUse,
+    })),
+  };
+}
+
+// Public: start a laundry machine from QR page (no guest session required).
+// `returnToken` is a free-form string used both as the QR identifier on the
+// session (for traceability) and to build the QuickPay continue/cancel URLs.
+// Pass `"machine:<id>"` for the per-machine QR route.
 export async function createPublicLaundryPayment(
   machineId: number,
-  groupToken: string,
+  returnToken: string,
   programId?: number | null,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   // Auto-expire stale PENDING sessions before checking availability
@@ -4413,12 +4461,19 @@ export async function createPublicLaundryPayment(
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
 
+  // Build the QuickPay return URL based on the token format. Per-machine QR
+  // codes pass "machine:<id>" and return to /laundry/machine/<id>; group QRs
+  // return to /laundry/<groupToken> as before.
+  const returnPath = returnToken.startsWith("machine:")
+    ? `/laundry/machine/${returnToken.slice("machine:".length)}`
+    : `/laundry/${returnToken}`;
+
   if (settings.quickpay_enabled !== "true") {
     // No payment configured — start directly
     await prisma.laundrySess.create({
       data: {
         machineId,
-        guestPortalToken: `qr:${groupToken}`,
+        guestPortalToken: `qr:${returnToken}`,
         endsAt,
         pricePaid: price,
         durationMinutes: duration,
@@ -4440,7 +4495,7 @@ export async function createPublicLaundryPayment(
   const laundrySess = await prisma.laundrySess.create({
     data: {
       machineId,
-      guestPortalToken: `qr:${groupToken}`,
+      guestPortalToken: `qr:${returnToken}`,
       endsAt,
       pricePaid: price,
       durationMinutes: duration,
@@ -4459,8 +4514,8 @@ export async function createPublicLaundryPayment(
       orderId,
       amount: price,
       currency: settings.currency || "DKK",
-      continueUrl: `${baseUrl}/laundry/${groupToken}?paid=1`,
-      cancelUrl: `${baseUrl}/laundry/${groupToken}?cancelled=1`,
+      continueUrl: `${baseUrl}${returnPath}?paid=1`,
+      cancelUrl: `${baseUrl}${returnPath}?cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
 

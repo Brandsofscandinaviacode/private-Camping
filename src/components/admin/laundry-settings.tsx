@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Plus, Save, Trash2, Loader2, WashingMachine, Wind, Clock } from "lucide-react";
+import { useState, useTransition, useEffect, useRef } from "react";
+import { Plus, Save, Trash2, Loader2, WashingMachine, Wind, Clock, QrCode, Download } from "lucide-react";
+import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,28 @@ import {
   updateLaundryProgram,
   deleteLaundryProgram,
 } from "@/lib/actions";
+
+function QRPreview({ url }: { url: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [, setRendered] = useState(false);
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, url, {
+        width: 200,
+        margin: 2,
+        color: { dark: "#000000", light: "#FFFFFF" },
+      }).then(() => setRendered(true));
+    }
+  }, [url]);
+
+  return (
+    <div className="flex flex-col items-center gap-2 py-2 border-t border-border/40">
+      <canvas ref={canvasRef} className="rounded-lg border border-border/60" />
+      <p className="text-[10px] text-muted-foreground text-center break-all max-w-[200px]">{url}</p>
+    </div>
+  );
+}
 
 interface Program {
   id: number;
@@ -44,6 +67,7 @@ type KindFilter = "WASHER" | "DRYER" | "ALL";
 interface LaundrySettingsProps {
   machines: Machine[];
   kind?: KindFilter;
+  baseUrl?: string;
 }
 
 function ProgramRow({ program }: { program: Program }) {
@@ -228,7 +252,7 @@ function ProgramList({ machineId, programs }: { machineId: number; programs: Pro
   );
 }
 
-function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boolean }) {
+function MachineRow({ machine, kindLocked, baseUrl }: { machine: Machine; kindLocked: boolean; baseUrl: string }) {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState({
     name: machine.name,
@@ -246,6 +270,29 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+
+  const qrUrl = (() => {
+    const base = baseUrl || (typeof window !== "undefined" ? window.location.origin : "");
+    return `${base}/laundry/machine/${machine.id}`;
+  })();
+
+  async function downloadQR() {
+    try {
+      const dataUrl = await QRCode.toDataURL(qrUrl, {
+        width: 512,
+        margin: 2,
+        color: { dark: "#000000", light: "#FFFFFF" },
+      });
+      const a = document.createElement("a");
+      const prefix = machine.kind === "DRYER" ? "torretumbler" : "vaskemaskine";
+      a.download = `qr-${prefix}-${machine.name.toLowerCase().replace(/\s+/g, "-")}.png`;
+      a.href = dataUrl;
+      a.click();
+    } catch (e) {
+      console.error("QR generation error:", e);
+    }
+  }
 
   function handleSave() {
     setError(null);
@@ -421,10 +468,19 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
         </div>
       )}
       {error && <p className="text-xs text-red-600">{error}</p>}
-      <div className="flex items-center gap-2 pt-1">
+      {showQR && <QRPreview url={qrUrl} />}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         <Button size="sm" disabled={isPending} onClick={handleSave}>
           <Save className="h-3 w-3 mr-1.5" />
           {saved ? "Gemt!" : "Gem"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setShowQR((v) => !v)}>
+          <QrCode className="h-3 w-3 mr-1.5" />
+          {showQR ? "Skjul QR" : "Vis QR"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={downloadQR}>
+          <Download className="h-3 w-3 mr-1.5" />
+          Download PNG
         </Button>
         {!confirmDelete ? (
           <Button variant="outline" size="sm" onClick={() => setConfirmDelete(true)}>
@@ -446,7 +502,7 @@ function MachineRow({ machine, kindLocked }: { machine: Machine; kindLocked: boo
   );
 }
 
-export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps) {
+export function LaundrySettings({ machines, kind = "ALL", baseUrl = "" }: LaundrySettingsProps) {
   const kindLocked = kind !== "ALL";
   const filteredMachines = kindLocked ? machines.filter((m) => m.kind === kind) : machines;
 
@@ -550,7 +606,7 @@ export function LaundrySettings({ machines, kind = "ALL" }: LaundrySettingsProps
 
       <div className="space-y-3">
         {filteredMachines.map((m) => (
-          <MachineRow key={m.id} machine={m} kindLocked={kindLocked} />
+          <MachineRow key={m.id} machine={m} kindLocked={kindLocked} baseUrl={baseUrl} />
         ))}
       </div>
 
