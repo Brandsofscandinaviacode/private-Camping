@@ -36,6 +36,12 @@ export default async function AdminWashersPage() {
             enabled: m.enabled,
             code: m.code,
             location: m.location,
+            billingMode: m.billingMode,
+            pricePerMinute: m.pricePerMinute,
+            powerThresholdW: m.powerThresholdW,
+            idleTimeoutMinutes: m.idleTimeoutMinutes,
+            maxReservationDKK: m.maxReservationDKK,
+            powerEntityId: m.powerEntityId,
             programs: m.programs.map((p) => ({
               id: p.id,
               name: p.name,

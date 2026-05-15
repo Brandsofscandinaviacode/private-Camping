@@ -367,6 +367,14 @@ model LaundryMachine {
   code             String? @unique                  // 4-digit quick-select code (washers 2xxx, dryers 3xxx)
   location         String?                          // Free-form location label ("Bygning A", "Vaskerum 2")
 
+  // Metered billing: charge per-minute based on actual power consumption
+  billingMode        String  @default("FIXED")      // FIXED | METERED
+  pricePerMinute     Float   @default(1)            // DKK per minute (metered)
+  powerThresholdW    Float   @default(10)           // Watts above which machine is "active"
+  idleTimeoutMinutes Int     @default(5)            // Minutes below threshold → done
+  maxReservationDKK  Float   @default(150)          // Pre-auth reservation amount
+  powerEntityId      String?                        // HA power sensor entity (MQTT uses same component)
+
   groupId          Int?
   group            LaundryGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
@@ -495,6 +503,8 @@ model LaundrySess {
   session         Session?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   guestPortalToken String?  // To identify the guest if session is null
 
+  accessToken     String?  @unique                   // Secret URL token for metered session page
+
   startedAt       DateTime @default(now())
   endsAt          DateTime                         // When the machine should turn off
   status          String   @default("ACTIVE")      // ACTIVE, COMPLETED, CANCELLED
@@ -503,8 +513,20 @@ model LaundrySess {
   paymentStatus   String   @default("UNPAID")      // UNPAID, PAID
   paymentId       String?                           // QuickPay transaction ID
 
+  // Metered billing fields
+  billingMode      String    @default("FIXED")       // FIXED | METERED
+  pricePerMinute   Float?                            // Snapshot of rate
+  reservedAmount   Float?                            // Pre-authorized amount
+  meterStartedAt   DateTime?                         // When billing timer started (power > threshold)
+  meterEndedAt     DateTime?                         // When billing timer ended (idle timeout)
+  billedMinutes    Float     @default(0)             // Accumulated billable minutes
+  lastPowerW       Float?                            // Last measured power in watts
+  lastPowerAt      DateTime?                         // When last power was measured
+  idleSince        DateTime?                         // When power first dropped below threshold
+
   createdAt DateTime @default(now())
 
+  @@index([status, billingMode])
   @@map("laundry_sessions")
 }
 

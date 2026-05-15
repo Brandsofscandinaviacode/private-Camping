@@ -84,7 +84,7 @@ interface GuestPortalClientProps {
   unitType: string;
   practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
-  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; available: boolean; minutesLeft: number; endsAt: string | null; programs: { id: number; name: string; durationMinutes: number; pricePerUse: number }[] }[];
+  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; billingMode?: "FIXED" | "METERED"; pricePerMinute?: number; maxReservationDKK?: number; available: boolean; minutesLeft: number; endsAt: string | null; programs: { id: number; name: string; durationMinutes: number; pricePerUse: number }[] }[];
   laundryCredit: number;
   showers: { id: number; name: string; location: string | null; pricePerMinute: number; minMinutes: number; maxMinutes: number; available: boolean; minutesLeft: number }[];
   nextInvoiceDay: number | null; // 1-31 or null
@@ -1043,6 +1043,7 @@ function GuestServicesSection({
   }
 
   function machineButtonLabel(m: GuestPortalClientProps["laundryMachines"][number]) {
+    if (m.billingMode === "METERED") return labels.start;
     if (credit >= m.pricePerUse) return freeLabel;
     if (credit > 0) {
       const toPay = m.pricePerUse - credit;

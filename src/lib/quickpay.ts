@@ -82,6 +82,48 @@ export async function createPaymentLink(params: {
 }
 
 // ──────────────────────────────────────────────
+// Create a payment with pre-authorization (no auto-capture)
+// Used for metered billing where the final amount is unknown
+// ──────────────────────────────────────────────
+export async function createAuthPaymentLink(params: {
+  orderId: string;
+  amount: number;        // Max reservation amount in DKK
+  currency?: string;
+  continueUrl: string;
+  cancelUrl: string;
+  callbackUrl: string;
+}): Promise<{ paymentId: number; paymentLink: string }> {
+  const payment = await quickPayRequest("POST", "/payments", {
+    order_id: params.orderId,
+    currency: params.currency || "DKK",
+  });
+
+  const paymentId = payment.id as number;
+  const amountInOere = Math.round(params.amount * 100);
+
+  const linkResponse = await quickPayRequest("PUT", `/payments/${paymentId}/link`, {
+    amount: amountInOere,
+    continue_url: params.continueUrl,
+    cancel_url: params.cancelUrl,
+    callback_url: params.callbackUrl,
+    auto_capture: false,
+  });
+
+  const paymentLink = linkResponse.url as string;
+  return { paymentId, paymentLink };
+}
+
+// ──────────────────────────────────────────────
+// Capture an authorized payment (partial or full)
+// ──────────────────────────────────────────────
+export async function capturePayment(paymentId: string, amountDKK: number): Promise<void> {
+  const amountInOere = Math.round(amountDKK * 100);
+  await quickPayRequest("POST", `/payments/${paymentId}/capture`, {
+    amount: amountInOere,
+  });
+}
+
+// ──────────────────────────────────────────────
 // Verify QuickPay callback checksum
 // ──────────────────────────────────────────────
 export async function verifyCallbackChecksum(rawBody: string, checksum: string): Promise<boolean> {

@@ -60,6 +60,12 @@ interface Machine {
   code: string | null;
   location: string | null;
   programs: Program[];
+  billingMode: string;
+  pricePerMinute: number;
+  powerThresholdW: number;
+  idleTimeoutMinutes: number;
+  maxReservationDKK: number;
+  powerEntityId: string | null;
 }
 
 type KindFilter = "WASHER" | "DRYER" | "ALL";
@@ -266,6 +272,12 @@ function MachineRow({ machine, kindLocked, baseUrl }: { machine: Machine; kindLo
     enabled: machine.enabled,
     code: machine.code ?? "",
     location: machine.location ?? "",
+    billingMode: machine.billingMode || "FIXED",
+    pricePerMinute: String(machine.pricePerMinute ?? 1),
+    powerThresholdW: String(machine.powerThresholdW ?? 10),
+    idleTimeoutMinutes: String(machine.idleTimeoutMinutes ?? 5),
+    maxReservationDKK: String(machine.maxReservationDKK ?? 150),
+    powerEntityId: machine.powerEntityId ?? "",
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -322,6 +334,12 @@ function MachineRow({ machine, kindLocked, baseUrl }: { machine: Machine; kindLo
           enabled: values.enabled,
           code: values.code.trim() || null,
           location: values.location.trim() || null,
+          billingMode: values.billingMode,
+          pricePerMinute: parseFloat(values.pricePerMinute) || 1,
+          powerThresholdW: parseFloat(values.powerThresholdW) || 10,
+          idleTimeoutMinutes: parseInt(values.idleTimeoutMinutes, 10) || 5,
+          maxReservationDKK: parseFloat(values.maxReservationDKK) || 150,
+          powerEntityId: values.source === "HA" ? values.powerEntityId.trim() || null : null,
         });
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
@@ -442,30 +460,106 @@ function MachineRow({ machine, kindLocked, baseUrl }: { machine: Machine; kindLo
         </div>
       </div>
 
-      <ProgramList machineId={machine.id} programs={machine.programs} />
+      {/* Billing mode toggle */}
+      <div className="border-t border-border/40 pt-3">
+        <Label className="text-xs text-muted-foreground">Afregning</Label>
+        <select
+          value={values.billingMode}
+          onChange={(e) => setValues((v) => ({ ...v, billingMode: e.target.value }))}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="FIXED">Fast pris (pr. vask/program)</option>
+          <option value="METERED">Forbrugsmålt (pr. minut)</option>
+        </select>
+      </div>
 
-      {machine.programs.length === 0 && (
-        <div className="grid grid-cols-2 gap-3 border-t border-border/40 pt-3">
-          <div>
-            <Label className="text-xs text-muted-foreground">Standard varighed (min)</Label>
-            <Input
-              type="number"
-              value={values.durationMinutes}
-              onChange={(e) => setValues((v) => ({ ...v, durationMinutes: e.target.value }))}
-              className="mt-1"
-            />
+      {values.billingMode === "METERED" ? (
+        <div className="space-y-3 border-t border-border/40 pt-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Pris pr. minut (DKK)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={values.pricePerMinute}
+                onChange={(e) => setValues((v) => ({ ...v, pricePerMinute: e.target.value }))}
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Maks reservation (DKK)</Label>
+              <Input
+                type="number"
+                value={values.maxReservationDKK}
+                onChange={(e) => setValues((v) => ({ ...v, maxReservationDKK: e.target.value }))}
+                className="mt-1"
+              />
+            </div>
           </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Standard pris (DKK)</Label>
-            <Input
-              type="number"
-              step="0.5"
-              value={values.pricePerUse}
-              onChange={(e) => setValues((v) => ({ ...v, pricePerUse: e.target.value }))}
-              className="mt-1"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Strøm-grænse (W)</Label>
+              <Input
+                type="number"
+                value={values.powerThresholdW}
+                onChange={(e) => setValues((v) => ({ ...v, powerThresholdW: e.target.value }))}
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Timeout lav strøm (min)</Label>
+              <Input
+                type="number"
+                value={values.idleTimeoutMinutes}
+                onChange={(e) => setValues((v) => ({ ...v, idleTimeoutMinutes: e.target.value }))}
+                className="mt-1"
+              />
+            </div>
           </div>
+          {values.source === "HA" && (
+            <div>
+              <Label className="text-xs text-muted-foreground">Power Entity ID (HA)</Label>
+              <Input
+                value={values.powerEntityId}
+                onChange={(e) => setValues((v) => ({ ...v, powerEntityId: e.target.value }))}
+                placeholder="sensor.washing_machine_power"
+                className="mt-1"
+              />
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Gæsten reserverer maks-beløbet ved betaling. Når strømforbruget falder under {values.powerThresholdW}W
+            i {values.idleTimeoutMinutes} min, stopper timeren og kun det faktiske beløb trækkes.
+          </p>
         </div>
+      ) : (
+        <>
+          <ProgramList machineId={machine.id} programs={machine.programs} />
+
+          {machine.programs.length === 0 && (
+            <div className="grid grid-cols-2 gap-3 border-t border-border/40 pt-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">Standard varighed (min)</Label>
+                <Input
+                  type="number"
+                  value={values.durationMinutes}
+                  onChange={(e) => setValues((v) => ({ ...v, durationMinutes: e.target.value }))}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Standard pris (DKK)</Label>
+                <Input
+                  type="number"
+                  step="0.5"
+                  value={values.pricePerUse}
+                  onChange={(e) => setValues((v) => ({ ...v, pricePerUse: e.target.value }))}
+                  className="mt-1"
+                />
+              </div>
+            </div>
+          )}
+        </>
       )}
       {error && <p className="text-xs text-red-600">{error}</p>}
       {showQR && <QRPreview url={qrUrl} />}

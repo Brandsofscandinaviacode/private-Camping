@@ -20,6 +20,9 @@ interface Machine {
   location: string | null;
   durationMinutes: number;
   pricePerUse: number;
+  billingMode: "FIXED" | "METERED";
+  pricePerMinute: number;
+  maxReservationDKK: number;
   available: boolean;
   minutesLeft: number;
   endsAt: string | null;
@@ -153,7 +156,32 @@ export function PublicLaundryMachineClient({ machine: initialMachine }: Props) {
             </div>
 
             {/* Action area */}
-            {machine.programs.length > 0 ? (
+            {machine.billingMode === "METERED" ? (
+              <>
+                <div className="space-y-2 text-sm text-muted-foreground mb-3">
+                  <div className="flex items-center justify-between">
+                    <span>Takst</span>
+                    <span className="font-semibold text-foreground">{machine.pricePerMinute.toFixed(2)} DKK/min</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Reservation</span>
+                    <span className="font-semibold text-foreground">{machine.maxReservationDKK.toFixed(0)} DKK</span>
+                  </div>
+                  <p className="text-xs">
+                    Du reserverer {machine.maxReservationDKK.toFixed(0)} DKK. Kun den faktiske forbrugstid trækkes.
+                  </p>
+                </div>
+                <Button
+                  className="w-full"
+                  size="lg"
+                  disabled={!machine.available || starting}
+                  onClick={() => handleStart()}
+                >
+                  {starting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  {starting ? "Opretter betaling..." : "Start maskine"}
+                </Button>
+              </>
+            ) : machine.programs.length > 0 ? (
               pickingProgram ? (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground mb-1">Vælg program:</p>

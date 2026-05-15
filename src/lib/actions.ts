@@ -3563,6 +3563,12 @@ export async function createLaundryMachine(data: {
   pricePerUse: number;
   code?: string | null;
   location?: string | null;
+  billingMode?: string;
+  pricePerMinute?: number;
+  powerThresholdW?: number;
+  idleTimeoutMinutes?: number;
+  maxReservationDKK?: number;
+  powerEntityId?: string | null;
 }) {
   await requireAuth();
   await prisma.laundryMachine.create({
@@ -3577,6 +3583,12 @@ export async function createLaundryMachine(data: {
       pricePerUse: data.pricePerUse,
       code: data.code || null,
       location: data.location || null,
+      billingMode: data.billingMode || "FIXED",
+      pricePerMinute: data.pricePerMinute ?? 1,
+      powerThresholdW: data.powerThresholdW ?? 10,
+      idleTimeoutMinutes: data.idleTimeoutMinutes ?? 5,
+      maxReservationDKK: data.maxReservationDKK ?? 150,
+      powerEntityId: data.powerEntityId || null,
     },
   });
   revalidatePath("/admin/settings");
@@ -3594,6 +3606,12 @@ export async function updateLaundryMachine(id: number, data: {
   enabled: boolean;
   code?: string | null;
   location?: string | null;
+  billingMode?: string;
+  pricePerMinute?: number;
+  powerThresholdW?: number;
+  idleTimeoutMinutes?: number;
+  maxReservationDKK?: number;
+  powerEntityId?: string | null;
 }) {
   await requireAuth();
   await prisma.laundryMachine.update({
@@ -3610,6 +3628,12 @@ export async function updateLaundryMachine(id: number, data: {
       enabled: data.enabled,
       code: data.code || null,
       location: data.location || null,
+      billingMode: data.billingMode || "FIXED",
+      pricePerMinute: data.pricePerMinute ?? 1,
+      powerThresholdW: data.powerThresholdW ?? 10,
+      idleTimeoutMinutes: data.idleTimeoutMinutes ?? 5,
+      maxReservationDKK: data.maxReservationDKK ?? 150,
+      powerEntityId: data.powerEntityId || null,
     },
   });
   revalidatePath("/admin/settings");
@@ -3719,6 +3743,9 @@ export async function getGuestLaundryMachines() {
       location: m.location,
       durationMinutes: m.durationMinutes,
       pricePerUse: m.pricePerUse,
+      billingMode: m.billingMode as "FIXED" | "METERED",
+      pricePerMinute: m.pricePerMinute,
+      maxReservationDKK: m.maxReservationDKK,
       available: !isRunning,
       minutesLeft,
       endsAt: isRunning ? activeSession.endsAt.toISOString() : null,
@@ -3791,16 +3818,6 @@ export async function createLaundryPayment(
   if (!machine) return { ok: false, message: "Maskine ikke fundet" };
   if (!machine.enabled) return { ok: false, message: "Maskine er deaktiveret" };
 
-  // Resolve program (if any). When the machine has programs defined, a
-  // program must be selected; otherwise fall back to machine defaults.
-  let chosenProgram: { id: number; name: string; durationMinutes: number; pricePerUse: number } | null = null;
-  if (machine.programs.length > 0) {
-    if (!programId) return { ok: false, message: "Vælg et program" };
-    const p = machine.programs.find((pp) => pp.id === programId);
-    if (!p) return { ok: false, message: "Ugyldigt program" };
-    chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
-  }
-
   // Check if currently running
   const activeSession = machine.sessions[0];
   if (activeSession && new Date(activeSession.endsAt) > new Date()) {
@@ -3813,6 +3830,23 @@ export async function createLaundryPayment(
       where: { id: activeSession.id },
       data: { status: "COMPLETED" },
     });
+  }
+
+  // ── METERED billing mode — delegate to metered flow ──
+  if (machine.billingMode === "METERED") {
+    const settings = await getGlobalSettings();
+    const baseUrl = settings.site_url || "http://localhost:3000";
+    const returnPath = `/guest/${guestPortalToken}`;
+    return createMeteredLaundryPaymentPortal(machine, guestPortalToken, returnPath, baseUrl, settings);
+  }
+
+  // ── FIXED billing mode (existing logic) ──
+  let chosenProgram: { id: number; name: string; durationMinutes: number; pricePerUse: number } | null = null;
+  if (machine.programs.length > 0) {
+    if (!programId) return { ok: false, message: "Vælg et program" };
+    const p = machine.programs.find((pp) => pp.id === programId);
+    if (!p) return { ok: false, message: "Ugyldigt program" };
+    chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
   }
 
   // Find guest session and check laundry credit
@@ -3963,11 +3997,24 @@ export async function activateLaundrySession(laundrySessionId: number) {
   });
   if (!sess || sess.status !== "PENDING") return;
 
-  // Use snapshotted duration from the session (set at payment time based on
-  // the chosen program), falling back to machine default for legacy sessions.
-  const duration = sess.durationMinutes > 0 ? sess.durationMinutes : sess.machine.durationMinutes;
+  if (sess.billingMode === "METERED") {
+    // Metered: relay opens, max 4h hardware safety, cron monitors power
+    const maxHours = 4;
+    const endsAt = new Date(Date.now() + maxHours * 60 * 60 * 1000);
+    await prisma.laundrySess.update({
+      where: { id: laundrySessionId },
+      data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
+    });
+    try {
+      await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), maxHours * 3600);
+    } catch (e) {
+      logger.error("laundry", "Failed to turn on metered laundry machine", e);
+    }
+    return;
+  }
 
-  // Recalculate endsAt from now (since guest just paid)
+  // Fixed: use snapshotted duration from the session
+  const duration = sess.durationMinutes > 0 ? sess.durationMinutes : sess.machine.durationMinutes;
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + duration);
 
@@ -3976,8 +4023,6 @@ export async function activateLaundrySession(laundrySessionId: number) {
     data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
   });
 
-  // Turn on the Shelly relay with hardware auto-off safety net.
-  // Add 120s buffer so the cron/client stop fires first under normal conditions.
   try {
     const autoOffSec = duration * 60 + 120;
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), autoOffSec);
@@ -4033,27 +4078,42 @@ export async function createPrepaidTopUp(
 
 // Called by cron to turn off expired laundry machines
 export async function checkLaundryMachines() {
+  // Fixed-mode sessions: turn off when endsAt passes
   const expired = await prisma.laundrySess.findMany({
     where: {
       status: "ACTIVE",
+      billingMode: "FIXED",
       endsAt: { lte: new Date() },
     },
     include: { machine: true },
   });
 
   for (const session of expired) {
-    // Turn off relay (HA or MQTT)
     try {
       await hardware.setSwitch(hardware.switchRowEp(session.machine), false);
     } catch (e) {
       logger.error("laundry", `Failed to turn off laundry machine ${session.machine.name}`, e);
     }
-
-    // Mark completed
     await prisma.laundrySess.update({
       where: { id: session.id },
       data: { status: "COMPLETED" },
     });
+  }
+
+  // Metered sessions: tick power monitoring
+  const meteredResult = await tickMeteredLaundry();
+
+  // Safety: force-complete metered sessions past their 4h safety timeout
+  const meteredExpired = await prisma.laundrySess.findMany({
+    where: {
+      status: "ACTIVE",
+      billingMode: "METERED",
+      endsAt: { lte: new Date() },
+    },
+    include: { machine: true },
+  });
+  for (const sess of meteredExpired) {
+    await completeMeteredSession(sess);
   }
 
   // Auto-expire PENDING laundry sessions older than 5 minutes
@@ -4343,6 +4403,9 @@ export async function getPublicLaundryGroup(token: string) {
         kind: m.kind,
         durationMinutes: m.durationMinutes,
         pricePerUse: m.pricePerUse,
+        billingMode: m.billingMode as "FIXED" | "METERED",
+        pricePerMinute: m.pricePerMinute,
+        maxReservationDKK: m.maxReservationDKK,
         available: !isRunning,
         minutesLeft,
         endsAt: isRunning ? active!.endsAt.toISOString() : null,
@@ -4390,6 +4453,9 @@ export async function getPublicLaundryMachine(machineId: number) {
     location: machine.location,
     durationMinutes: machine.durationMinutes,
     pricePerUse: machine.pricePerUse,
+    billingMode: machine.billingMode as "FIXED" | "METERED",
+    pricePerMinute: machine.pricePerMinute,
+    maxReservationDKK: machine.maxReservationDKK,
     available: !isRunning,
     minutesLeft,
     endsAt: isRunning ? active!.endsAt.toISOString() : null,
@@ -4429,16 +4495,6 @@ export async function createPublicLaundryPayment(
   if (!machine) return { ok: false, message: "Maskine ikke fundet" };
   if (!machine.enabled) return { ok: false, message: "Maskine er deaktiveret" };
 
-  // Resolve program (if any). When the machine has programs defined, a
-  // program must be selected; otherwise fall back to machine defaults.
-  let chosenProgram: { id: number; name: string; durationMinutes: number; pricePerUse: number } | null = null;
-  if (machine.programs.length > 0) {
-    if (!programId) return { ok: false, message: "Vælg et program" };
-    const p = machine.programs.find((pp) => pp.id === programId);
-    if (!p) return { ok: false, message: "Ugyldigt program" };
-    chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
-  }
-
   // Check if currently running
   const activeSession = machine.sessions[0];
   if (activeSession && new Date(activeSession.endsAt) > new Date()) {
@@ -4453,23 +4509,32 @@ export async function createPublicLaundryPayment(
     });
   }
 
+  const settings = await getGlobalSettings();
+  const baseUrl = settings.site_url || "http://localhost:3000";
+  const returnPath = returnToken.startsWith("machine:")
+    ? `/laundry/machine/${returnToken.slice("machine:".length)}`
+    : `/laundry/${returnToken}`;
+
+  // ── METERED billing mode ──
+  if (machine.billingMode === "METERED") {
+    return createMeteredLaundryPayment(machine, returnToken, returnPath, baseUrl, settings);
+  }
+
+  // ── FIXED billing mode (existing logic) ──
+  let chosenProgram: { id: number; name: string; durationMinutes: number; pricePerUse: number } | null = null;
+  if (machine.programs.length > 0) {
+    if (!programId) return { ok: false, message: "Vælg et program" };
+    const p = machine.programs.find((pp) => pp.id === programId);
+    if (!p) return { ok: false, message: "Ugyldigt program" };
+    chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
+  }
+
   const price = chosenProgram ? chosenProgram.pricePerUse : machine.pricePerUse;
   const duration = chosenProgram ? chosenProgram.durationMinutes : machine.durationMinutes;
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + duration);
 
-  const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
-
-  // Build the QuickPay return URL based on the token format. Per-machine QR
-  // codes pass "machine:<id>" and return to /laundry/machine/<id>; group QRs
-  // return to /laundry/<groupToken> as before.
-  const returnPath = returnToken.startsWith("machine:")
-    ? `/laundry/machine/${returnToken.slice("machine:".length)}`
-    : `/laundry/${returnToken}`;
-
   if (settings.quickpay_enabled !== "true") {
-    // No payment configured — start directly
     await prisma.laundrySess.create({
       data: {
         machineId,
@@ -4491,7 +4556,6 @@ export async function createPublicLaundryPayment(
     return { ok: true, message: `${machine.name}${programLabel} startet — kører i ${duration} minutter` };
   }
 
-  // Create pending session
   const laundrySess = await prisma.laundrySess.create({
     data: {
       machineId,
@@ -4527,6 +4591,158 @@ export async function createPublicLaundryPayment(
     return { ok: true, message: "Går til betaling...", paymentLink };
   } catch (e) {
     await prisma.laundrySess.delete({ where: { id: laundrySess.id } });
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// Metered: create a pre-authorized payment for max reservation, relay opens after payment
+async function createMeteredLaundryPayment(
+  machine: { id: number; name: string; pricePerMinute: number; maxReservationDKK: number; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null },
+  returnToken: string,
+  returnPath: string,
+  baseUrl: string,
+  settings: Record<string, string>,
+): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  const { randomUUID } = await import("crypto");
+  const accessToken = randomUUID().replace(/-/g, "");
+  const maxHours = 4;
+  const endsAt = new Date(Date.now() + maxHours * 60 * 60 * 1000);
+
+  if (settings.quickpay_enabled !== "true") {
+    const sess = await prisma.laundrySess.create({
+      data: {
+        machineId: machine.id,
+        guestPortalToken: `qr:${returnToken}`,
+        accessToken,
+        endsAt,
+        pricePaid: 0,
+        billingMode: "METERED",
+        pricePerMinute: machine.pricePerMinute,
+        reservedAmount: machine.maxReservationDKK,
+        status: "ACTIVE",
+        paymentStatus: "PAID",
+      },
+    });
+    try {
+      await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
+    } catch (e) { logger.error("laundry", "metered laundry on", e); }
+    return { ok: true, message: `${machine.name} startet — strømmåler overvåger forbruget`, paymentLink: `${baseUrl}${returnPath}?s=${sess.accessToken}` };
+  }
+
+  const sess = await prisma.laundrySess.create({
+    data: {
+      machineId: machine.id,
+      guestPortalToken: `qr:${returnToken}`,
+      accessToken,
+      endsAt,
+      pricePaid: 0,
+      billingMode: "METERED",
+      pricePerMinute: machine.pricePerMinute,
+      reservedAmount: machine.maxReservationDKK,
+      status: "PENDING",
+      paymentStatus: "UNPAID",
+    },
+  });
+
+  try {
+    const { createAuthPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("M", sess.id);
+
+    const { paymentId, paymentLink } = await createAuthPaymentLink({
+      orderId,
+      amount: machine.maxReservationDKK,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}${returnPath}?s=${accessToken}`,
+      cancelUrl: `${baseUrl}${returnPath}?cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    await prisma.laundrySess.update({
+      where: { id: sess.id },
+      data: { paymentId: String(paymentId) },
+    });
+
+    return { ok: true, message: "Går til betaling...", paymentLink };
+  } catch (e) {
+    await prisma.laundrySess.delete({ where: { id: sess.id } });
+    return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// Metered: create payment from guest portal (linked to guest session)
+async function createMeteredLaundryPaymentPortal(
+  machine: { id: number; name: string; pricePerMinute: number; maxReservationDKK: number; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null },
+  guestPortalToken: string,
+  returnPath: string,
+  baseUrl: string,
+  settings: Record<string, string>,
+): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
+  const { randomUUID } = await import("crypto");
+  const accessToken = randomUUID().replace(/-/g, "");
+  const maxHours = 4;
+  const endsAt = new Date(Date.now() + maxHours * 60 * 60 * 1000);
+
+  const guestSession = await prisma.session.findUnique({ where: { guestPortalToken } });
+
+  if (settings.quickpay_enabled !== "true") {
+    const sess = await prisma.laundrySess.create({
+      data: {
+        machineId: machine.id,
+        sessionId: guestSession?.id ?? null,
+        guestPortalToken,
+        accessToken,
+        endsAt,
+        pricePaid: 0,
+        billingMode: "METERED",
+        pricePerMinute: machine.pricePerMinute,
+        reservedAmount: machine.maxReservationDKK,
+        status: "ACTIVE",
+        paymentStatus: "PAID",
+      },
+    });
+    try {
+      await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
+    } catch (e) { logger.error("laundry", "metered laundry on", e); }
+    return { ok: true, message: `${machine.name} startet — strømmåler overvåger forbruget`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
+  }
+
+  const sess = await prisma.laundrySess.create({
+    data: {
+      machineId: machine.id,
+      sessionId: guestSession?.id ?? null,
+      guestPortalToken,
+      accessToken,
+      endsAt,
+      pricePaid: 0,
+      billingMode: "METERED",
+      pricePerMinute: machine.pricePerMinute,
+      reservedAmount: machine.maxReservationDKK,
+      status: "PENDING",
+      paymentStatus: "UNPAID",
+    },
+  });
+
+  try {
+    const { createAuthPaymentLink, generateOrderId } = await import("./quickpay");
+    const orderId = generateOrderId("M", sess.id);
+
+    const { paymentId, paymentLink } = await createAuthPaymentLink({
+      orderId,
+      amount: machine.maxReservationDKK,
+      currency: settings.currency || "DKK",
+      continueUrl: `${baseUrl}/laundry/meter/${accessToken}`,
+      cancelUrl: `${baseUrl}${returnPath}?laundry_cancelled=1`,
+      callbackUrl: `${baseUrl}/api/quickpay/callback`,
+    });
+
+    await prisma.laundrySess.update({
+      where: { id: sess.id },
+      data: { paymentId: String(paymentId) },
+    });
+
+    return { ok: true, message: "Går til betaling...", paymentLink };
+  } catch (e) {
+    await prisma.laundrySess.delete({ where: { id: sess.id } });
     return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
@@ -5227,6 +5443,7 @@ export async function completeExpiredLaundry(laundrySessionId: number) {
     include: { machine: true },
   });
   if (!sess || sess.status !== "ACTIVE") return;
+  if (sess.billingMode === "METERED") return; // metered sessions handled by tickMeteredLaundry
   if (new Date(sess.endsAt) > new Date()) return; // not expired yet
 
   const res = await prisma.laundrySess.updateMany({
@@ -5240,6 +5457,195 @@ export async function completeExpiredLaundry(laundrySessionId: number) {
   } catch (e) {
     logger.error("laundry", "completeExpiredLaundry relay off", e);
   }
+}
+
+// ──────────────────────────────────────────────
+// Metered Laundry — server-side power monitoring tick
+// Called by cron every 2 minutes. Reads power consumption from Shelly/HA,
+// tracks billing timer start/stop based on power threshold.
+// ──────────────────────────────────────────────
+export async function tickMeteredLaundry() {
+  const sessions = await prisma.laundrySess.findMany({
+    where: { status: "ACTIVE", billingMode: "METERED" },
+    include: { machine: true },
+  });
+
+  let monitored = 0;
+  let completed = 0;
+
+  for (const sess of sessions) {
+    try {
+      const ep = buildPowerEndpoint(sess.machine);
+      if (!ep) {
+        logger.warn("laundry", `Metered session ${sess.id}: no power endpoint configured`);
+        continue;
+      }
+
+      const reading = await hardware.readPowerWatts(ep);
+      const now = new Date();
+      const watts = reading?.watts ?? 0;
+      const threshold = sess.machine.powerThresholdW;
+      const idleTimeout = sess.machine.idleTimeoutMinutes;
+
+      // Update last power reading
+      const updates: Record<string, unknown> = {
+        lastPowerW: watts,
+        lastPowerAt: now,
+      };
+
+      if (watts >= threshold) {
+        // Power is above threshold — machine is running
+        updates.idleSince = null;
+
+        if (!sess.meterStartedAt) {
+          // First time above threshold — start billing timer
+          updates.meterStartedAt = now;
+          logger.info("laundry", `Metered session ${sess.id}: billing started (${watts.toFixed(1)}W)`);
+        } else {
+          // Accumulate billed minutes since last tick
+          const lastAt = sess.lastPowerAt ?? sess.meterStartedAt;
+          const deltaMin = Math.max(0, (now.getTime() - lastAt.getTime()) / 60000);
+          updates.billedMinutes = sess.billedMinutes + deltaMin;
+        }
+      } else {
+        // Power is below threshold
+        if (sess.meterStartedAt) {
+          // Billing was active — accumulate remaining time up to this moment
+          if (!sess.idleSince) {
+            const lastAt = sess.lastPowerAt ?? sess.meterStartedAt;
+            const deltaMin = Math.max(0, (now.getTime() - lastAt.getTime()) / 60000);
+            updates.billedMinutes = sess.billedMinutes + deltaMin;
+            updates.idleSince = now;
+            logger.info("laundry", `Metered session ${sess.id}: idle detected (${watts.toFixed(1)}W)`);
+          } else {
+            // Already idle — check if timeout reached
+            const idleMinutes = (now.getTime() - new Date(sess.idleSince).getTime()) / 60000;
+            if (idleMinutes >= idleTimeout) {
+              await completeMeteredSession(sess);
+              completed++;
+              continue;
+            }
+          }
+        }
+      }
+
+      await prisma.laundrySess.update({
+        where: { id: sess.id },
+        data: updates,
+      });
+      monitored++;
+    } catch (e) {
+      logger.error("laundry", `tickMeteredLaundry error (session ${sess.id})`, e);
+    }
+  }
+
+  return { monitored, completed };
+}
+
+function buildPowerEndpoint(machine: {
+  source: string;
+  powerEntityId: string | null;
+  mqttPrefix: string | null;
+  mqttComponent: string | null;
+  switchEntityId: string | null;
+}): hardware.HardwareEndpoint | null {
+  const source = machine.source === "MQTT" ? "MQTT" as const : "HA" as const;
+  if (source === "MQTT") {
+    if (!machine.mqttPrefix || !machine.mqttComponent) return null;
+    return { source, mqttPrefix: machine.mqttPrefix, mqttComponent: machine.mqttComponent };
+  }
+  const entityId = machine.powerEntityId || machine.switchEntityId;
+  if (!entityId) return null;
+  return { source, haEntityId: entityId };
+}
+
+async function completeMeteredSession(sess: {
+  id: number;
+  billedMinutes: number;
+  pricePerMinute: number | null;
+  reservedAmount: number | null;
+  paymentId: string | null;
+  meterStartedAt: Date | null;
+  idleSince: Date | null;
+  lastPowerAt: Date | null;
+  machine: { id: number; name: string; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null; idleTimeoutMinutes: number };
+}) {
+  const now = new Date();
+  const rate = sess.pricePerMinute ?? 0;
+  const finalMinutes = sess.billedMinutes;
+  const finalCost = Math.min(finalMinutes * rate, sess.reservedAmount ?? Infinity);
+
+  // Capture actual amount via QuickPay (if payment was pre-authorized)
+  if (sess.paymentId && finalCost > 0) {
+    try {
+      const { capturePayment } = await import("./quickpay");
+      await capturePayment(sess.paymentId, finalCost);
+      logger.info("laundry", `Metered session ${sess.id}: captured ${finalCost.toFixed(2)} DKK`);
+    } catch (e) {
+      logger.error("laundry", `Metered session ${sess.id}: capture failed`, e);
+    }
+  }
+
+  await prisma.laundrySess.update({
+    where: { id: sess.id },
+    data: {
+      status: "COMPLETED",
+      meterEndedAt: now,
+      billedMinutes: finalMinutes,
+      pricePaid: finalCost,
+    },
+  });
+
+  try {
+    await hardware.setSwitch(hardware.switchRowEp(sess.machine), false);
+  } catch (e) {
+    logger.error("laundry", `Metered session ${sess.id}: relay off failed`, e);
+  }
+
+  logger.info("laundry", `Metered session ${sess.id} completed: ${finalMinutes.toFixed(1)} min, ${finalCost.toFixed(2)} DKK`);
+}
+
+// Get metered session status for guest live view
+export async function getMeteredLaundryStatus(accessToken: string) {
+  const sess = await prisma.laundrySess.findUnique({
+    where: { accessToken },
+    include: { machine: { select: { name: true, kind: true, location: true, powerThresholdW: true } } },
+  });
+  if (!sess) return null;
+
+  const rate = sess.pricePerMinute ?? 0;
+  const now = new Date();
+  let currentMinutes = sess.billedMinutes;
+
+  // If actively billing (meterStarted, not idle, not completed), add time since last tick
+  if (sess.status === "ACTIVE" && sess.meterStartedAt && !sess.idleSince && sess.lastPowerAt) {
+    const sinceTick = Math.max(0, (now.getTime() - sess.lastPowerAt.getTime()) / 60000);
+    currentMinutes += sinceTick;
+  }
+
+  const currentCost = Math.min(currentMinutes * rate, sess.reservedAmount ?? Infinity);
+
+  let phase: "waiting" | "billing" | "idle" | "done";
+  if (sess.status === "COMPLETED") phase = "done";
+  else if (!sess.meterStartedAt) phase = "waiting";
+  else if (sess.idleSince) phase = "idle";
+  else phase = "billing";
+
+  return {
+    sessionId: sess.id,
+    machineName: sess.machine.name,
+    machineKind: sess.machine.kind,
+    machineLocation: sess.machine.location,
+    phase,
+    billedMinutes: currentMinutes,
+    currentCost,
+    reservedAmount: sess.reservedAmount ?? 0,
+    pricePerMinute: rate,
+    lastPowerW: sess.lastPowerW,
+    meterStartedAt: sess.meterStartedAt?.toISOString() ?? null,
+    meterEndedAt: sess.meterEndedAt?.toISOString() ?? null,
+    pricePaid: sess.pricePaid,
+  };
 }
 
 /**

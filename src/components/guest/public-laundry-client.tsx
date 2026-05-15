@@ -19,6 +19,9 @@ interface Machine {
   kind?: string;
   durationMinutes: number;
   pricePerUse: number;
+  billingMode?: "FIXED" | "METERED";
+  pricePerMinute?: number;
+  maxReservationDKK?: number;
   available: boolean;
   minutesLeft: number;
   endsAt: string | null;
@@ -167,7 +170,26 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
 
               {/* Action area */}
               <div className={`px-4 pb-4 ${m.available ? "" : "opacity-60"}`}>
-                {m.programs.length > 0 ? (
+                {m.billingMode === "METERED" ? (
+                  <>
+                    <div className="space-y-1 text-sm text-muted-foreground mb-3">
+                      <div className="flex items-center justify-between">
+                        <span>Takst</span>
+                        <span className="font-semibold text-foreground">{(m.pricePerMinute ?? 0).toFixed(2)} DKK/min</span>
+                      </div>
+                      <p className="text-xs">Reservation: {(m.maxReservationDKK ?? 0).toFixed(0)} DKK — kun faktisk forbrug trækkes.</p>
+                    </div>
+                    <Button
+                      className="w-full"
+                      size="lg"
+                      disabled={!m.available || startingId !== null}
+                      onClick={() => handleStart(m.id)}
+                    >
+                      {startingId === m.id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      {startingId === m.id ? "Opretter betaling..." : "Start maskine"}
+                    </Button>
+                  </>
+                ) : m.programs.length > 0 ? (
                   pickingProgramFor === m.id ? (
                     <div className="space-y-2">
                       <p className="text-xs text-muted-foreground mb-1">Vælg program:</p>
