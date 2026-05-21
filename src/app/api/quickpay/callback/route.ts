@@ -82,7 +82,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (laundrySess) {
-      if (paidAmountOere !== null) {
+      // Skip amount validation for metered sessions (pre-auth amount ≠ final charge)
+      if (paidAmountOere !== null && laundrySess.billingMode !== "METERED") {
         const expectedOere = Math.round(laundrySess.pricePaid * 100);
         if (paidAmountOere < expectedOere) {
           logger.error("quickpay", `Laundry ${laundrySess.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);

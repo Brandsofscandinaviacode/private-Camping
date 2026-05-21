@@ -5483,42 +5483,51 @@ export async function tickMeteredLaundry() {
 
       const reading = await hardware.readPowerWatts(ep);
       const now = new Date();
-      const watts = reading?.watts ?? 0;
+
+      // If reading fails, skip this session entirely — don't trigger false idle
+      if (!reading) {
+        logger.warn("laundry", `Metered session ${sess.id}: power reading failed, skipping tick`);
+        continue;
+      }
+
+      const watts = reading.watts;
       const threshold = sess.machine.powerThresholdW;
       const idleTimeout = sess.machine.idleTimeoutMinutes;
 
-      // Update last power reading
       const updates: Record<string, unknown> = {
         lastPowerW: watts,
         lastPowerAt: now,
       };
 
       if (watts >= threshold) {
-        // Power is above threshold — machine is running
-        updates.idleSince = null;
+        if (sess.idleSince) {
+          // Resuming from idle (e.g. spin cycle after pause) — don't bill the idle gap
+          updates.idleSince = null;
+          logger.info("laundry", `Metered session ${sess.id}: resumed from idle (${watts.toFixed(1)}W)`);
+        } else {
+          updates.idleSince = null;
+        }
 
         if (!sess.meterStartedAt) {
-          // First time above threshold — start billing timer
           updates.meterStartedAt = now;
           logger.info("laundry", `Metered session ${sess.id}: billing started (${watts.toFixed(1)}W)`);
-        } else {
-          // Accumulate billed minutes since last tick
+        } else if (!sess.idleSince) {
+          // Only accumulate if we weren't idle (idle gap is not billed)
           const lastAt = sess.lastPowerAt ?? sess.meterStartedAt;
           const deltaMin = Math.max(0, (now.getTime() - lastAt.getTime()) / 60000);
           updates.billedMinutes = sess.billedMinutes + deltaMin;
         }
       } else {
-        // Power is below threshold
+        // Power below threshold
         if (sess.meterStartedAt) {
-          // Billing was active — accumulate remaining time up to this moment
           if (!sess.idleSince) {
+            // First tick below threshold — accumulate remaining time, mark idle start
             const lastAt = sess.lastPowerAt ?? sess.meterStartedAt;
             const deltaMin = Math.max(0, (now.getTime() - lastAt.getTime()) / 60000);
             updates.billedMinutes = sess.billedMinutes + deltaMin;
             updates.idleSince = now;
             logger.info("laundry", `Metered session ${sess.id}: idle detected (${watts.toFixed(1)}W)`);
           } else {
-            // Already idle — check if timeout reached
             const idleMinutes = (now.getTime() - new Date(sess.idleSince).getTime()) / 60000;
             if (idleMinutes >= idleTimeout) {
               await completeMeteredSession(sess);
@@ -5529,11 +5538,12 @@ export async function tickMeteredLaundry() {
         }
       }
 
-      await prisma.laundrySess.update({
-        where: { id: sess.id },
+      // Optimistic concurrency: only apply if lastPowerAt hasn't changed
+      const applied = await prisma.laundrySess.updateMany({
+        where: { id: sess.id, status: "ACTIVE", lastPowerAt: sess.lastPowerAt },
         data: updates,
       });
-      monitored++;
+      if (applied.count > 0) monitored++;
     } catch (e) {
       logger.error("laundry", `tickMeteredLaundry error (session ${sess.id})`, e);
     }
@@ -5570,6 +5580,13 @@ async function completeMeteredSession(sess: {
   lastPowerAt: Date | null;
   machine: { id: number; name: string; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null; idleTimeoutMinutes: number };
 }) {
+  // Atomic guard: only complete if still ACTIVE (prevents double-completion)
+  const res = await prisma.laundrySess.updateMany({
+    where: { id: sess.id, status: "ACTIVE" },
+    data: { status: "COMPLETED" },
+  });
+  if (res.count === 0) return; // already completed by another tick
+
   const now = new Date();
   const rate = sess.pricePerMinute ?? 0;
   const finalMinutes = sess.billedMinutes;
@@ -5589,7 +5606,6 @@ async function completeMeteredSession(sess: {
   await prisma.laundrySess.update({
     where: { id: sess.id },
     data: {
-      status: "COMPLETED",
       meterEndedAt: now,
       billedMinutes: finalMinutes,
       pricePaid: finalCost,
