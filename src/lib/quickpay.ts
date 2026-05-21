@@ -124,6 +124,13 @@ export async function capturePayment(paymentId: string, amountDKK: number): Prom
 }
 
 // ──────────────────────────────────────────────
+// Cancel/void an authorized payment (release held funds)
+// ──────────────────────────────────────────────
+export async function cancelPayment(paymentId: string): Promise<void> {
+  await quickPayRequest("POST", `/payments/${paymentId}/cancel`);
+}
+
+// ──────────────────────────────────────────────
 // Verify QuickPay callback checksum
 // ──────────────────────────────────────────────
 export async function verifyCallbackChecksum(rawBody: string, checksum: string): Promise<boolean> {

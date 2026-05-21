@@ -4626,7 +4626,7 @@ async function createMeteredLaundryPayment(
     try {
       await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
     } catch (e) { logger.error("laundry", "metered laundry on", e); }
-    return { ok: true, message: `${machine.name} startet — strømmåler overvåger forbruget`, paymentLink: `${baseUrl}${returnPath}?s=${sess.accessToken}` };
+    return { ok: true, message: `${machine.name} startet — strømmåler overvåger forbruget`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
   }
 
   const sess = await prisma.laundrySess.create({
@@ -4652,7 +4652,7 @@ async function createMeteredLaundryPayment(
       orderId,
       amount: machine.maxReservationDKK,
       currency: settings.currency || "DKK",
-      continueUrl: `${baseUrl}${returnPath}?s=${accessToken}`,
+      continueUrl: `${baseUrl}/laundry/meter/${accessToken}`,
       cancelUrl: `${baseUrl}${returnPath}?cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
@@ -5592,14 +5592,20 @@ async function completeMeteredSession(sess: {
   const finalMinutes = sess.billedMinutes;
   const finalCost = Math.min(finalMinutes * rate, sess.reservedAmount ?? Infinity);
 
-  // Capture actual amount via QuickPay (if payment was pre-authorized)
-  if (sess.paymentId && finalCost > 0) {
+  // Capture actual amount or void the pre-auth if 0 DKK
+  if (sess.paymentId) {
     try {
-      const { capturePayment } = await import("./quickpay");
-      await capturePayment(sess.paymentId, finalCost);
-      logger.info("laundry", `Metered session ${sess.id}: captured ${finalCost.toFixed(2)} DKK`);
+      if (finalCost > 0) {
+        const { capturePayment } = await import("./quickpay");
+        await capturePayment(sess.paymentId, finalCost);
+        logger.info("laundry", `Metered session ${sess.id}: captured ${finalCost.toFixed(2)} DKK`);
+      } else {
+        const { cancelPayment } = await import("./quickpay");
+        await cancelPayment(sess.paymentId);
+        logger.info("laundry", `Metered session ${sess.id}: voided (0 DKK usage)`);
+      }
     } catch (e) {
-      logger.error("laundry", `Metered session ${sess.id}: capture failed`, e);
+      logger.error("laundry", `Metered session ${sess.id}: payment finalization failed`, e);
     }
   }
 
