@@ -17,6 +17,7 @@ import { CabinControls } from "@/components/admin/cabin-controls";
 import { CopyButton } from "@/components/admin/copy-button";
 import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
 import { LivePowerDraw } from "@/components/admin/live-power-draw";
+import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { unitDisplayName as formatUnitName } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -48,11 +49,17 @@ export default async function UnitDetailPage({
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: "/admin" },
+          { label: unitDisplayName },
+        ]}
+      />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link href="/admin">
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" aria-label="Tilbage til dashboard">
               <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>

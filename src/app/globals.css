@@ -136,12 +136,12 @@
   }
 }
 
-/* Override Tailwind's text size variables so all text maps to 1rem (16px) */
+/* Restore typographic hierarchy — xs/sm must differ from base for visual weight */
 :root {
-  --text-xs: 1rem;
-  --text-xs--line-height: 1.5rem;
-  --text-sm: 1rem;
-  --text-sm--line-height: 1.5rem;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
 }
 
 /* Print styles — used by /admin/bookings/[id]/statement */

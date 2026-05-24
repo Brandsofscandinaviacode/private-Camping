@@ -15,6 +15,7 @@ import { InvoiceRow } from "@/components/admin/invoice-row";
 import { BookingCheckoutButton } from "@/components/admin/booking-checkout-button";
 import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { PrepaidBalance } from "@/components/admin/prepaid-balance";
+import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 
 import { unitDisplayName } from "@/lib/utils";
 
@@ -50,10 +51,16 @@ export default async function BookingDetailPage({
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-4xl">
+      <Breadcrumbs
+        items={[
+          { label: "Bookinger", href: "/admin/bookings" },
+          { label: session.guestName },
+        ]}
+      />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/admin/bookings">
-          <Button variant="ghost" size="sm">
+          <Button variant="ghost" size="sm" aria-label="Tilbage til bookinger">
             <ArrowLeft className="h-4 w-4" />
           </Button>
         </Link>

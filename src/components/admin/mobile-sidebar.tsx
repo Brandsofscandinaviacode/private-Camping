@@ -14,11 +14,13 @@ import {
   Menu,
   X,
   Tent,
+  Map,
 } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
 
 const navItems = [
-  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt" },
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt", exact: true },
+  { href: "/admin/map", label: "Pladskort", icon: Map, section: "Oversigt" },
   { href: "/admin/bookings", label: "Bookinger", icon: BookOpen, section: "Oversigt", badge: true },
   { href: "/admin/elpriser", label: "Elpriser", icon: Zap, section: "Oversigt" },
   { href: "/admin/services", label: "Services", icon: WashingMachine, section: "Oversigt" },
@@ -74,7 +76,7 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
                       .filter((item) => item.section === section)
                       .map((item) => {
                         const Icon = item.icon;
-                        const isActive = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));
+                        const isActive = item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(item.href + "/");
                         return (
                           <Link
                             key={item.href}
