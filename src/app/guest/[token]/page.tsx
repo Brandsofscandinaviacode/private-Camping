@@ -15,6 +15,7 @@ export default async function GuestPortalPage({
   const quickpayEnabled = globalSettings.quickpay_enabled === "true";
   const siteMapUrl = globalSettings.site_map_url || null;
   const invoiceDay = globalSettings.invoice_email_day ? parseInt(globalSettings.invoice_email_day, 10) || null : null;
+  const postpaidServicesMode = globalSettings.postpaid_services_mode || "PAY_PER_USE";
 
   // Try session-based token first
   const [laundryMachines, showers] = await Promise.all([
@@ -101,6 +102,7 @@ export default async function GuestPortalPage({
         showers={showers}
         laundryCredit={session.laundryCredit ?? 0}
         nextInvoiceDay={isFastligger ? invoiceDay : null}
+        servicesOnAccount={session.billingMode === "POSTPAID" && postpaidServicesMode === "ON_ACCOUNT"}
       />
     );
   }
@@ -162,6 +164,7 @@ export default async function GuestPortalPage({
         showers={showers}
         laundryCredit={activeSession?.laundryCredit ?? 0}
         nextInvoiceDay={invoiceDay}
+        servicesOnAccount={postpaidServicesMode === "ON_ACCOUNT"}
       />
     );
   }

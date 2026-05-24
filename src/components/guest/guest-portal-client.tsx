@@ -88,6 +88,7 @@ interface GuestPortalClientProps {
   laundryCredit: number;
   showers: { id: number; name: string; location: string | null; pricePerMinute: number; minMinutes: number; maxMinutes: number; available: boolean; minutesLeft: number }[];
   nextInvoiceDay: number | null; // 1-31 or null
+  servicesOnAccount?: boolean;
 }
 
 interface ConsumptionData {
@@ -95,6 +96,7 @@ interface ConsumptionData {
   electricityCost: number | null;
   usedWaterLiters: number | null;
   waterCost: number | null;
+  servicesCost: number | null;
   totalLiveCost: number | null;
   currency: string;
 }
@@ -164,6 +166,7 @@ export function GuestPortalClient({
   laundryCredit,
   showers,
   nextInvoiceDay,
+  servicesOnAccount,
 }: GuestPortalClientProps) {
   const [locale, setLocale] = useState<Locale>(() => {
     if (typeof window !== "undefined") {
@@ -513,6 +516,17 @@ export function GuestPortalClient({
                     <span className="font-semibold">{formatDKK(waterCost)}</span>
                   </div>
                 )}
+                {isCurrentMonth && (consumption?.servicesCost ?? 0) > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                        <WashingMachine className="h-4 w-4 text-purple-500" />
+                      </div>
+                      <p className="text-sm font-medium">Services</p>
+                    </div>
+                    <span className="font-semibold">{formatDKK(consumption!.servicesCost)}</span>
+                  </div>
+                )}
                 <Separator />
                 <div className="flex items-center justify-between p-3 rounded-xl bg-primary/5">
                   <span className="font-bold">{tx.total}</span>
@@ -708,6 +722,7 @@ export function GuestPortalClient({
                   token={token}
                   locale={locale}
                   credit={laundryCredit}
+                  onAccount={servicesOnAccount}
                 />
               )}
 
@@ -910,12 +925,14 @@ function GuestServicesSection({
   token,
   locale,
   credit,
+  onAccount,
 }: {
   showers: GuestPortalClientProps["showers"];
   machines: GuestPortalClientProps["laundryMachines"];
   token: string;
   locale: string;
   credit: number;
+  onAccount?: boolean;
 }) {
   const [showers, setShowers] = useState(initialShowers);
   const [machines, setMachines] = useState(initialMachines);
@@ -951,7 +968,9 @@ function GuestServicesSection({
     availablePlural: locale === "en" ? "available" : locale === "de" ? "verfügbar" : "ledige",
     inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
     minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
-    start: locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start",
+    start: onAccount
+      ? (locale === "en" ? "Start" : locale === "de" ? "Starten" : "Start")
+      : (locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start"),
     choose: locale === "en" ? "Choose" : locale === "de" ? "Wählen" : "Vælg",
     perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
     perMinute: locale === "en" ? "per minute" : locale === "de" ? "pro Minute" : "pr. min",
@@ -1043,6 +1062,7 @@ function GuestServicesSection({
   }
 
   function machineButtonLabel(m: GuestPortalClientProps["laundryMachines"][number]) {
+    if (onAccount) return labels.start;
     if (m.billingMode === "METERED") return labels.start;
     if (credit >= m.pricePerUse) return freeLabel;
     if (credit > 0) {

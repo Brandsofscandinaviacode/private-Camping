@@ -54,7 +54,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
     default_vacant_temp: settings.default_vacant_temp || "15",
     auto_power_off_on_checkout: settings.auto_power_off_on_checkout || "false",
     prepaid_auto_power_off: settings.prepaid_auto_power_off || "false",
-    prepaid_credit_for_services: settings.prepaid_credit_for_services || "false",
+    postpaid_services_mode: settings.postpaid_services_mode || "PAY_PER_USE",
     invoice_email_enabled: settings.invoice_email_enabled || "false",
     invoice_email_day: settings.invoice_email_day || "1",
     invoice_payment_deadline_days: settings.invoice_payment_deadline_days || "14",
@@ -198,22 +198,42 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
         </div>
       </div>
 
+      {/* Billing — services */}
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Betaling af services (vask, tørring, bad)</h2></div>
+        <div className="p-5 space-y-4">
+          <div>
+            <Label className="text-sm text-muted-foreground">Bagudbetaling — services</Label>
+            <select value={values.postpaid_services_mode} onChange={(e) => h("postpaid_services_mode", e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+              <option value="PAY_PER_USE">Betal per brug (gæsten betaler med kort for hver service)</option>
+              <option value="ON_ACCOUNT">På regning (services samles og betales ved udtjek/faktura)</option>
+            </select>
+          </div>
+          {values.postpaid_services_mode === "PAY_PER_USE" && (
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              Bagudbetalende gæster betaler med kort (QuickPay) for hver vask, tørring eller bad de bruger. Kun el og vand samles på regningen.
+            </div>
+          )}
+          {values.postpaid_services_mode === "ON_ACCOUNT" && (
+            <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
+              Alle services skrives på gæstens regning og betales samlet ved udtjekning — eller løbende via faktura for fastliggere. Gæsten starter services direkte uden kortbetaling.
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Forudbetaling */}
       <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Forudbetaling (prepaid)</h2></div>
         <div className="p-5 space-y-4">
+          <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+            Forudbetalende gæster trækker automatisk fra deres saldo for el, vand og services (vask, tørring, bad). De kan tanke op via gæstesiden.
+          </div>
           <label className="flex items-start gap-3 cursor-pointer">
             <input type="checkbox" checked={values.prepaid_auto_power_off === "true"} onChange={(e) => h("prepaid_auto_power_off", e.target.checked ? "true" : "false")} className="mt-0.5 h-4 w-4 accent-primary" />
             <div>
               <p className="text-sm font-medium">Sluk strøm automatisk når saldo er brugt</p>
               <p className="text-xs text-muted-foreground mt-0.5">Strømmen slukkes automatisk hvis kundens forudbetalte saldo rammer 0 DKK</p>
-            </div>
-          </label>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input type="checkbox" checked={values.prepaid_credit_for_services === "true"} onChange={(e) => h("prepaid_credit_for_services", e.target.checked ? "true" : "false")} className="mt-0.5 h-4 w-4 accent-primary" />
-            <div>
-              <p className="text-sm font-medium">Tillad kredit til services (vask m.m.)</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Gæster med forudbetalt saldo kan bruge den til at betale for vask og andre services i stedet for separat betaling</p>
             </div>
           </label>
         </div>
