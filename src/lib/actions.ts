@@ -5592,6 +5592,16 @@ export async function tickMeteredLaundry() {
 
   for (const sess of sessions) {
     try {
+      // Auto-cancel if 10 minutes elapsed with no power detected
+      if (!sess.meterStartedAt) {
+        const elapsed = Date.now() - new Date(sess.createdAt).getTime();
+        if (elapsed > 10 * 60 * 1000) {
+          await cancelMeteredSession(sess);
+          completed++;
+          continue;
+        }
+      }
+
       const ep = buildPowerEndpoint(sess.machine);
       if (!ep) {
         logger.warn("laundry", `Metered session ${sess.id}: no power endpoint configured`);
@@ -5686,6 +5696,35 @@ function buildPowerEndpoint(machine: {
   return { source, haEntityId: entityId };
 }
 
+async function cancelMeteredSession(sess: {
+  id: number;
+  paymentId: string | null;
+  machine: { id: number; name: string; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null; idleTimeoutMinutes: number };
+}) {
+  const res = await prisma.laundrySess.updateMany({
+    where: { id: sess.id, status: "ACTIVE" },
+    data: { status: "CANCELLED", meterEndedAt: new Date(), pricePaid: 0 },
+  });
+  if (res.count === 0) return;
+
+  if (sess.paymentId) {
+    try {
+      const { cancelPayment } = await import("./quickpay");
+      await cancelPayment(sess.paymentId);
+    } catch (e) {
+      logger.error("laundry", `Metered session ${sess.id}: cancel payment failed`, e);
+    }
+  }
+
+  try {
+    await hardware.setSwitch(hardware.switchRowEp(sess.machine), false);
+  } catch (e) {
+    logger.error("laundry", `Metered session ${sess.id}: relay off failed`, e);
+  }
+
+  logger.info("laundry", `Metered session ${sess.id}: auto-cancelled (no power detected within 10 min)`);
+}
+
 async function completeMeteredSession(sess: {
   id: number;
   billedMinutes: number;
@@ -5764,8 +5803,9 @@ export async function getMeteredLaundryStatus(accessToken: string) {
 
   const currentCost = Math.min(currentMinutes * rate, sess.reservedAmount ?? Infinity);
 
-  let phase: "waiting" | "billing" | "idle" | "done";
+  let phase: "waiting" | "billing" | "idle" | "done" | "cancelled";
   if (sess.status === "COMPLETED") phase = "done";
+  else if (sess.status === "CANCELLED") phase = "cancelled";
   else if (!sess.meterStartedAt) phase = "waiting";
   else if (sess.idleSince) phase = "idle";
   else phase = "billing";
@@ -5784,6 +5824,7 @@ export async function getMeteredLaundryStatus(accessToken: string) {
     meterStartedAt: sess.meterStartedAt?.toISOString() ?? null,
     meterEndedAt: sess.meterEndedAt?.toISOString() ?? null,
     pricePaid: sess.pricePaid,
+    createdAt: sess.createdAt.toISOString(),
   };
 }
 

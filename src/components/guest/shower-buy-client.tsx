@@ -6,6 +6,8 @@ import { Droplets, Loader2, Minus, Plus, ArrowLeft, Tent, XCircle } from "lucide
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { createShowerPayment } from "@/lib/actions";
+import { type Locale, detectLocale, getTranslations } from "@/lib/guest-translations";
+import { LanguagePicker } from "./language-picker";
 
 interface Shower {
   id: number;
@@ -18,6 +20,8 @@ interface Shower {
 }
 
 export function ShowerBuyClient({ shower }: { shower: Shower }) {
+  const [locale, setLocale] = useState<Locale>(detectLocale);
+  const tx = getTranslations(locale);
   const [minutes, setMinutes] = useState<number>(
     Math.min(10, Math.max(shower.minMinutes, Math.floor((shower.minMinutes + shower.maxMinutes) / 2)))
   );
@@ -52,7 +56,7 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
         return;
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Der opstod en fejl");
+      setError(e instanceof Error ? e.message : tx.errorOccurred);
       setLoading(false);
     }
   }
@@ -64,14 +68,13 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
           <Card>
             <CardContent className="py-8 text-center">
               <XCircle className="h-10 w-10 mx-auto mb-3 text-orange-500" />
-              <h1 className="text-lg font-bold">{shower.name} er optaget</h1>
-              <p className="text-sm text-muted-foreground mt-2">
-                Prøv igen om et par minutter, eller vælg et andet bad.
-              </p>
+              <h1 className="text-lg font-bold">{shower.name} {tx.occupied}</h1>
+              <p className="text-sm text-muted-foreground mt-2">{tx.tryAgainLater}</p>
+              <LanguagePicker locale={locale} onChange={setLocale} />
               <Link href="/services">
                 <Button variant="outline" className="mt-5" size="sm">
                   <ArrowLeft className="h-3.5 w-3.5 mr-1.5" />
-                  Se alle services
+                  {tx.allServices}
                 </Button>
               </Link>
             </CardContent>
@@ -83,7 +86,6 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
       <div className="bg-gradient-to-br from-sky-500/15 via-sky-400/5 to-background px-4 pt-6 pb-10 text-center relative overflow-hidden">
         <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-sky-500/5" />
         <div className="absolute -bottom-8 -left-8 w-32 h-32 rounded-full bg-sky-500/5" />
@@ -95,6 +97,7 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
           {shower.location && (
             <p className="text-muted-foreground text-sm mt-1">{shower.location}</p>
           )}
+          <LanguagePicker locale={locale} onChange={setLocale} />
         </div>
       </div>
 
@@ -103,40 +106,26 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
           <CardContent className="p-5 space-y-5">
             <div>
               <p className="text-sm text-muted-foreground text-center">
-                {shower.pricePerMinute.toFixed(2)} DKK pr. minut
+                {shower.pricePerMinute.toFixed(2)} {tx.pricePerMinute}
               </p>
               <p className="text-xs text-muted-foreground/70 text-center mt-1">
-                {shower.minMinutes}–{shower.maxMinutes} min
+                {shower.minMinutes}–{shower.maxMinutes} {tx.minRange}
               </p>
             </div>
 
-            {/* Minute picker */}
             <div className="flex items-center justify-center gap-4">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-12 w-12 rounded-full"
-                onClick={dec}
-                disabled={minutes <= shower.minMinutes}
-              >
+              <Button variant="outline" size="icon" className="h-12 w-12 rounded-full" onClick={dec} disabled={minutes <= shower.minMinutes}>
                 <Minus className="h-5 w-5" />
               </Button>
               <div className="text-center w-24">
                 <div className="text-4xl font-bold tabular-nums">{minutes}</div>
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">min</div>
               </div>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-12 w-12 rounded-full"
-                onClick={inc}
-                disabled={minutes >= shower.maxMinutes}
-              >
+              <Button variant="outline" size="icon" className="h-12 w-12 rounded-full" onClick={inc} disabled={minutes >= shower.maxMinutes}>
                 <Plus className="h-5 w-5" />
               </Button>
             </div>
 
-            {/* Quick picks */}
             <div className="grid grid-cols-4 gap-2">
               {[5, 10, 15, 20]
                 .filter((n) => n >= shower.minMinutes && n <= shower.maxMinutes)
@@ -156,7 +145,7 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
             </div>
 
             <div className="flex items-center justify-between pt-2 border-t border-border">
-              <span className="text-sm text-muted-foreground">Samlet pris</span>
+              <span className="text-sm text-muted-foreground">{tx.totalPrice}</span>
               <span className="text-2xl font-bold tabular-nums">
                 {price.toFixed(2)} <span className="text-sm text-muted-foreground">DKK</span>
               </span>
@@ -169,32 +158,25 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
               </div>
             )}
 
-            <Button
-              className="w-full h-12 text-base"
-              size="lg"
-              disabled={loading}
-              onClick={handleBuy}
-            >
+            <Button className="w-full h-12 text-base" size="lg" disabled={loading} onClick={handleBuy}>
               {loading ? (
                 <>
                   <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                  Opretter betaling...
+                  {tx.creatingPayment}
                 </>
               ) : (
-                `Betal ${price.toFixed(0)} DKK & start`
+                tx.payAndStartShower.replace("{amount}", price.toFixed(0))
               )}
             </Button>
 
-            <p className="text-[11px] text-muted-foreground text-center">
-              Du kan pause timeren op til 5 minutter ad gangen, og købe ekstra tid undervejs.
-            </p>
+            <p className="text-[11px] text-muted-foreground text-center">{tx.pauseInfo}</p>
           </CardContent>
         </Card>
 
         <Link href="/services">
           <Button variant="ghost" size="sm" className="w-full">
             <ArrowLeft className="h-3.5 w-3.5 mr-1.5" />
-            Alle services
+            {tx.allServices}
           </Button>
         </Link>
       </div>
