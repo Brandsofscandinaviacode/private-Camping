@@ -1,19 +1,25 @@
 import Link from "next/link";
-import { getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession, getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing } from "@/lib/actions";
+import {
+  getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession,
+  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing,
+} from "@/lib/actions";
+import { getDashboardMovements } from "@/lib/dashboard-actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
-import { Tent, AlertCircle, Zap, Droplets, AlertTriangle } from "lucide-react";
+import { DashboardKpis } from "@/components/admin/dashboard-kpis";
+import { Tent, AlertCircle, AlertTriangle, WifiOff } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements] = await Promise.all([
     getUnits(),
     getResourceTypes(),
     getUnpaidCount(),
     getTotalUsage().catch(() => null),
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
     getEffectiveElPricing().catch(() => null),
+    getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
   ]);
 
   const unitData = await Promise.all(
@@ -27,14 +33,9 @@ export default async function AdminDashboard() {
       const pending = pendingSession.status === "fulfilled" ? pendingSession.value : null;
       return {
         unit: {
-          id: unit.id,
-          name: unit.name,
-          type: unit.type,
-          status: unit.status,
-          isLongTerm: unit.isLongTerm,
-          longTermGuestName: unit.longTermGuestName,
-          resourceTypeId: unit.resourceTypeId,
-          sortOrder: unit.sortOrder,
+          id: unit.id, name: unit.name, type: unit.type, status: unit.status,
+          isLongTerm: unit.isLongTerm, longTermGuestName: unit.longTermGuestName,
+          resourceTypeId: unit.resourceTypeId, sortOrder: unit.sortOrder,
           hardware: unit.hardware ? {
             hasElectricity: unit.hardware.hasElectricity,
             hasWater: unit.hardware.hasWater,
@@ -45,60 +46,93 @@ export default async function AdminDashboard() {
         haStates: haStates.status === "fulfilled" ? haStates.value : null,
         activeGuestName: active?.guestName ?? null,
         pendingGuestName: !active && pending ? pending.guestName : null,
+        activeCheckOut: active?.expectedCheckOut ? active.expectedCheckOut.toISOString() : null,
+        pendingCheckIn: !active && pending ? pending.checkInTime.toISOString() : null,
       };
     })
   );
 
   const occupiedCount = units.filter((u) => u.status === "OCCUPIED").length;
-  const vacantCount = units.filter((u) => u.status === "VACANT").length;
+  const reservedCount = unitData.filter((d) => d.unit.status !== "OCCUPIED" && !!d.pendingGuestName).length;
+  const vacantCount = units.length - occupiedCount - reservedCount;
+
+  // Consolidated HA status — one banner instead of a label on every card.
+  const haTracked = unitData.filter((d) => d.haStates !== null).length;
+  const haOffline = unitData.filter((d) => d.haStates && !d.haStates.haReachable).length;
+  const haAllOffline = haTracked > 0 && haOffline === haTracked;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-10 space-y-6 sm:space-y-8 max-w-7xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-7xl">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
-            {units.length} enheder &middot;{" "}
-            <span className="text-primary font-medium">{occupiedCount} optaget</span> &middot;{" "}
+          <p className="text-muted-foreground mt-1 text-sm">
+            <b className="text-foreground font-semibold">{units.length}</b> enheder ·{" "}
+            <span className="text-blue-600 font-medium">{occupiedCount} optaget</span> ·{" "}
+            {reservedCount > 0 && <><span className="text-amber-600 font-medium">{reservedCount} reserveret</span> · </>}
             <span className="font-medium">{vacantCount} ledige</span>
           </p>
         </div>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <AddUnitDialog />
-        </div>
+        <AddUnitDialog />
       </div>
 
-      {/* Alerts */}
-      {unpaidCount > 0 && (
-        <Link href="/admin/bookings?filter=unpaid">
-          <div className="flex items-center gap-3 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3.5 hover:bg-red-100/80 transition-all cursor-pointer shadow-sm">
-            <div className="h-8 w-8 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-            </div>
-            <p className="text-sm text-red-700">
-              <span className="font-bold">{unpaidCount}</span>{" "}
-              {unpaidCount === 1 ? "booking" : "bookinger"} afventer betaling
-            </p>
-          </div>
-        </Link>
-      )}
+      {/* Attention zone */}
+      <DashboardKpis
+        total={units.length}
+        occupied={occupiedCount}
+        reserved={reservedCount}
+        vacant={vacantCount}
+        totalUsage={totalUsage}
+        elPricing={elPricing}
+        movements={movements}
+      />
 
-      {/* Consumption Alarms */}
-      {alarmResult.alerts.length > 0 && (
-        <div className="space-y-2">
+      {/* Consolidated alerts */}
+      {(unpaidCount > 0 || haOffline > 0 || alarmResult.alerts.length > 0) && (
+        <div className="space-y-2.5">
+          {unpaidCount > 0 && (
+            <Link href="/admin/bookings?filter=unpaid">
+              <div className="flex items-center gap-3.5 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3 hover:bg-red-100/80 transition-all cursor-pointer">
+                <div className="h-9 w-9 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                  <AlertCircle className="h-[18px] w-[18px] text-red-500" />
+                </div>
+                <p className="text-sm text-red-700 flex-1">
+                  <span className="font-bold">{unpaidCount}</span> {unpaidCount === 1 ? "booking" : "bookinger"} afventer betaling
+                </p>
+                <span className="text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-3 py-1.5">Se bookinger</span>
+              </div>
+            </Link>
+          )}
+
+          {haOffline > 0 && (
+            <Link href="/admin/settings">
+              <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
+                <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                  <WifiOff className="h-[18px] w-[18px] text-amber-600" />
+                </div>
+                <p className="text-sm text-amber-800 flex-1">
+                  <span className="font-bold">Home Assistant er offline.</span>{" "}
+                  {haAllOffline
+                    ? "Live styring og forbrugsmålinger er utilgængelige for alle enheder."
+                    : `Live data mangler for ${haOffline} af ${haTracked} enheder.`}
+                </p>
+                <span className="text-xs font-semibold text-amber-700 border border-amber-300 rounded-lg px-3 py-1.5">Genopret forbindelse</span>
+              </div>
+            </Link>
+          )}
+
           {alarmResult.alerts.map((alert, i) => (
             <Link key={i} href={`/admin/units/${alert.unitId}`}>
-              <div className="flex items-center gap-3 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3.5 hover:bg-amber-100/80 transition-all cursor-pointer shadow-sm">
-                <div className="h-8 w-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
+                <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="h-[18px] w-[18px] text-amber-600" />
                 </div>
                 <p className="text-sm text-amber-800">
                   <span className="font-bold">{alert.unitName}</span> bruger{" "}
                   {alert.type === "electricity"
                     ? `${alert.usage.toFixed(1)} kWh (grænse: ${alert.threshold} kWh)`
-                    : `${alert.usage.toFixed(0)} liter vand (grænse: ${alert.threshold} L)`
-                  }
+                    : `${alert.usage.toFixed(0)} liter vand (grænse: ${alert.threshold} L)`}
                 </p>
               </div>
             </Link>
@@ -106,65 +140,14 @@ export default async function AdminDashboard() {
         </div>
       )}
 
-      {/* Total Usage Summary — current rate per hour + spot price */}
-      {(totalUsage?.unitCount ?? 0) > 0 && (
-        <div className={`grid gap-3 sm:gap-4 grid-cols-1 ${elPricing && elPricing.mode !== "fixed" ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 hover:shadow-md transition-shadow">
-            <div className="flex items-center gap-4">
-              <div className="h-11 w-11 rounded-xl bg-amber-500/10 flex items-center justify-center">
-                <Zap className="h-5 w-5 text-amber-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Nuværende strømforbrug</p>
-                <p className="text-2xl font-bold tabular-nums tracking-tight">{totalUsage!.totalKwhPerHour.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">kWh/t</span></p>
-                <p className="text-xs text-muted-foreground">{(totalUsage!.totalKwhPerHour * 1000).toFixed(0)} W — alle enheder</p>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 hover:shadow-md transition-shadow">
-            <div className="flex items-center gap-4">
-              <div className="h-11 w-11 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                <Droplets className="h-5 w-5 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Nuværende vandforbrug</p>
-                <p className="text-2xl font-bold tabular-nums tracking-tight">{totalUsage!.totalWaterLitersPerHour.toFixed(1)} <span className="text-sm font-medium text-muted-foreground">L/t</span></p>
-                <p className="text-xs text-muted-foreground">Alle enheder</p>
-              </div>
-            </div>
-          </div>
-          {elPricing && elPricing.mode !== "fixed" && (
-            <div className="rounded-xl border border-border/60 bg-card shadow-sm p-5 hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-4">
-                <div className="h-11 w-11 rounded-xl bg-emerald-500/10 flex items-center justify-center">
-                  <Zap className="h-5 w-5 text-emerald-500" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Effektiv elpris</p>
-                  <p className="text-2xl font-bold tabular-nums tracking-tight">{elPricing.pricePerKwh.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">kr/kWh</span></p>
-                  <p className="text-xs text-muted-foreground">
-                    {elPricing.spotPrice !== null
-                      ? `Spot: ${elPricing.spotPrice.toFixed(2)} kr/kWh — `
-                      : "Venter på spotpriser (kør cron) — "}
-                    {elPricing.mode === "minimum" ? "Minimumspris" : "Spot + tillæg"}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Grouped Units */}
+      {/* Inventory */}
       {units.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
           <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mb-4">
             <Tent className="h-8 w-8" />
           </div>
           <p className="text-lg font-medium">Ingen enheder endnu</p>
-          <p className="mt-1">
-            Klik &ldquo;Tilføj enhed&rdquo; for at komme i gang
-          </p>
+          <p className="mt-1">Klik &ldquo;Tilføj enhed&rdquo; for at komme i gang</p>
         </div>
       ) : (
         <DashboardUnitsGrid
