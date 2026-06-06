@@ -184,8 +184,9 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
     const Icon = rt ? (ICONS[rt.icon] || Home) : Home;
     const name = rt ? rt.name : "Ukategoriseret";
     const isCollapsed = collapsed[key] ?? false;
-    // Large groups → table (but keep cards in edit mode so drag-reorder still works)
-    const asTable = !editMode && all.length > LIST_THRESHOLD;
+    // Large groups or PITCH groups → table (but keep cards in edit mode so drag-reorder still works)
+    const allPitch = all.length > 0 && all.every((d) => d.unit.type === "PITCH");
+    const asTable = !editMode && (all.length > LIST_THRESHOLD || allPitch);
 
     return (
       <section key={key}>
