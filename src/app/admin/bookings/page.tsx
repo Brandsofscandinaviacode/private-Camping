@@ -1,13 +1,9 @@
 import Link from "next/link";
 import { getAllSessions, getUnpaidCount } from "@/lib/actions";
 import { BookingFilters } from "@/components/admin/booking-filters";
-import {
-  AlertCircle,
-  Calendar,
-  CreditCard,
-  ChevronRight,
-} from "lucide-react";
+import { Calendar, ChevronRight, ArrowRight } from "lucide-react";
 import { unitDisplayName } from "@/lib/utils";
+import { PageShell, PageHeader, Surface, EmptyState, StatusBadge, bookingTone } from "@/components/admin/admin-ui";
 
 export const dynamic = "force-dynamic";
 
@@ -24,60 +20,56 @@ export default async function BookingsPage({
     getUnpaidCount(),
   ]);
 
+  // Left accent colour by status (matches the badge tone)
+  const accent: Record<string, string> = {
+    red: "border-l-red-500",
+    amber: "border-l-amber-500",
+    blue: "border-l-blue-500",
+    emerald: "border-l-transparent",
+    muted: "border-l-transparent",
+  };
+
   return (
-    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Bookinger</h1>
-        <p className="text-muted-foreground mt-1">
-          {sessions.length} bookinger
-          {unpaidCount > 0 && (
-            <span className="text-red-500 ml-2">
-              &middot; {unpaidCount} afventer betaling
-            </span>
-          )}
-        </p>
-      </div>
+    <PageShell width="5xl">
+      <PageHeader
+        title="Bookinger"
+        icon={Calendar}
+        subtitle={
+          <>
+            <b className="text-foreground font-semibold">{sessions.length}</b> bookinger
+            {unpaidCount > 0 && <span className="text-red-600 font-medium"> · {unpaidCount} afventer betaling</span>}
+          </>
+        }
+      />
 
       <BookingFilters activeFilter={activeFilter} unpaidCount={unpaidCount} searchQuery={searchQuery} />
 
       {sessions.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground">
-          <Calendar className="h-10 w-10 mx-auto mb-3 opacity-40" />
-          <p>Ingen bookinger fundet</p>
-        </div>
+        <Surface className="py-4">
+          <EmptyState icon={Calendar} title="Ingen bookinger fundet" hint="Prøv et andet filter eller søgeord" />
+        </Surface>
       ) : (
-        <div className="rounded-xl border border-border/60 bg-card shadow-sm divide-y divide-border/60 overflow-hidden" role="list" aria-label="Bookinger">
+        <Surface className="divide-y divide-border/60 overflow-hidden">
           {sessions.map((s) => {
-            const isPending = s.status === "PENDING";
-            const isActive = s.status === "ACTIVE";
-            const isUnpaid = s.status === "COMPLETED" && s.paymentStatus === "UNPAID";
-            const isPaid = s.paymentStatus === "PAID";
-            const statusLabel = isPending ? "Reserveret" : isActive ? "Aktiv" : isUnpaid ? "Ubetalt" : isPaid ? "Betalt" : "";
-
+            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus);
             return (
-              <Link key={s.id} href={`/admin/bookings/${s.id}`} role="listitem" aria-label={`${s.guestName}${statusLabel ? ` — ${statusLabel}` : ""}`}>
-                <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer ${
-                  isUnpaid ? "border-l-[3px] border-l-red-500" :
-                  isPending ? "border-l-[3px] border-l-amber-500" :
-                  isActive ? "border-l-[3px] border-l-primary" : ""
-                }`}>
+              <Link key={s.id} href={`/admin/bookings/${s.id}`} aria-label={`${s.guestName}${label ? ` — ${label}` : ""}`}>
+                <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer border-l-[3px] ${accent[tone]}`}>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium">{s.guestName}</span>
+                      <span className="font-semibold truncate">{s.guestName}</span>
                       {s.bookingRef && (
-                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                          {s.bookingRef}
-                        </span>
+                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">{s.bookingRef}</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 text-sm text-muted-foreground mt-0.5">
-                      <span>{unitDisplayName(s.unit.type, s.unit.name)}</span>
-                      <span className="opacity-30">&middot;</span>
-                      <span>{new Date(s.checkInTime).toLocaleDateString("da-DK")}</span>
+                      <span className="truncate">{unitDisplayName(s.unit.type, s.unit.name)}</span>
+                      <span className="opacity-30">·</span>
+                      <span className="shrink-0">{new Date(s.checkInTime).toLocaleDateString("da-DK")}</span>
                       {s.checkOutTime && (
                         <>
-                          <span className="opacity-30">&rarr;</span>
-                          <span>{new Date(s.checkOutTime).toLocaleDateString("da-DK")}</span>
+                          <ArrowRight className="h-3 w-3 opacity-40 shrink-0" />
+                          <span className="shrink-0">{new Date(s.checkOutTime).toLocaleDateString("da-DK")}</span>
                         </>
                       )}
                     </div>
@@ -85,42 +77,19 @@ export default async function BookingsPage({
 
                   <div className="flex items-center gap-3 shrink-0">
                     {s.totalCost !== null && (
-                      <span className="text-sm tabular-nums font-medium">
-                        {s.totalCost.toFixed(2)} <span className="text-muted-foreground">DKK</span>
+                      <span className="text-sm tabular-nums font-semibold">
+                        {s.totalCost.toFixed(2)} <span className="text-muted-foreground font-normal">DKK</span>
                       </span>
                     )}
-                    {isPending && (
-                      <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium inline-flex items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                        Reserveret
-                      </span>
-                    )}
-                    {isActive && (
-                      <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium inline-flex items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-                        Aktiv
-                      </span>
-                    )}
-                    {isUnpaid && (
-                      <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium inline-flex items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                        Ubetalt
-                      </span>
-                    )}
-                    {isPaid && (
-                      <span className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-600 font-medium inline-flex items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                        Betalt
-                      </span>
-                    )}
+                    {label && <StatusBadge tone={tone} pulse={pulse}>{label}</StatusBadge>}
                     <ChevronRight className="h-4 w-4 text-muted-foreground/30" />
                   </div>
                 </div>
               </Link>
             );
           })}
-        </div>
+        </Surface>
       )}
-    </div>
+    </PageShell>
   );
 }

@@ -31,7 +31,7 @@ interface SidebarNavProps {
 export function SidebarNav({ unpaidCount }: SidebarNavProps) {
   const pathname = usePathname();
 
-  function isActive(item: typeof navItems[0]) {
+  function isActive(item: (typeof navItems)[0]) {
     if (item.exact) return pathname === item.href;
     return pathname === item.href || pathname.startsWith(item.href + "/");
   }
@@ -40,10 +40,10 @@ export function SidebarNav({ unpaidCount }: SidebarNavProps) {
     <nav className="flex-1 px-3 pt-5" aria-label="Admin navigation">
       {(["Oversigt", "System"] as const).map((section) => (
         <div key={section}>
-          <p className="px-3 mb-2 mt-4 first:mt-0 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/30">
+          <p className="px-3 mb-2 mt-5 first:mt-0 text-[11px] font-semibold uppercase tracking-[0.09em] text-sidebar-foreground/35">
             {section}
           </p>
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {navItems
               .filter((item) => item.section === section)
               .map((item) => {
@@ -53,18 +53,22 @@ export function SidebarNav({ unpaidCount }: SidebarNavProps) {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+                    aria-current={active ? "page" : undefined}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-sm transition-all ${
                       active
-                        ? "bg-sidebar-primary text-white font-medium shadow-md shadow-sidebar-primary/20"
+                        ? "bg-primary text-white font-medium shadow-md shadow-primary/25"
                         : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                     }`}
                   >
-                    <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
+                    <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
                     {item.label}
                     {item.badge && unpaidCount > 0 && (
-                      <span className={`ml-auto inline-flex items-center justify-center h-5 min-w-5 px-1.5 text-[10px] font-bold rounded-full ${
-                        active ? "bg-white/20 text-white" : "bg-red-500 text-white"
-                      }`} aria-label={`${unpaidCount} ubetalte`}>
+                      <span
+                        className={`ml-auto inline-flex items-center justify-center h-5 min-w-5 px-1.5 text-[10px] font-bold rounded-full ${
+                          active ? "bg-white/20 text-white" : "bg-red-500 text-white"
+                        }`}
+                        aria-label={`${unpaidCount} ubetalte`}
+                      >
                         {unpaidCount}
                       </span>
                     )}

@@ -3,30 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  LayoutDashboard,
-  BookOpen,
-  Zap,
-  WashingMachine,
-  Wallet,
-  Settings,
-  LogIn,
-  LogOut,
-  Droplets,
-  Thermometer,
-  CreditCard,
-  Users,
-  QrCode,
-  Bell,
-  ChevronDown,
-  Tent,
-  FileText,
-  Clock,
-  BarChart3,
-  Shield,
-  Wifi,
-  Radio,
+  LayoutDashboard, BookOpen, Zap, WashingMachine, Wallet, Settings, LogIn, LogOut,
+  Users, QrCode, ChevronDown, Tent, BarChart3, Shield, Wifi, Clock,
 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Surface } from "@/components/admin/admin-ui";
 
 interface Section {
   id: string;
@@ -43,15 +23,15 @@ const sections: Section[] = [
     icon: LayoutDashboard,
     title: "Dashboard",
     intro:
-      "Forsiden giver dig et hurtigt overblik over hele campingpladsen. Øverst ser du nøgletal: antal optagne/ledige pladser, samlet elforbrug (kWh) og vandforbrug (liter) i realtid, samt den aktuelle elpris hvis du bruger spotpriser.",
+      "Forsiden giver dig et hurtigt overblik over hele campingpladsen. Øverst ser du nøgletal: belægning, dagens ankomster og afrejser, samlet el- og vandforbrug i realtid, samt den aktuelle elpris hvis du bruger spotpriser.",
     items: [
-      "Nøgletal-kortene øverst viser: optagne pladser, ledige pladser, aktuelt elforbrug (watt), vandforbrug og spotpris.",
-      "Enhederne er grupperet efter type (hytter, fastliggere, campingvogne, pladser).",
-      "Grøn indikator = ledig enhed, orange = optaget med gæst indchecket.",
+      "Nøgletal-kortene øverst viser: belægning, dagens ankomster/afrejser, aktuelt forbrug og spotpris.",
+      "Enhederne er grupperet efter type (hytter, lejligheder, campingvogne, pladser).",
+      "Statusfarver: grøn = ledig, blå = optaget med gæst, gul = reserveret, rød = problem.",
+      "Store grupper (f.eks. pladser) vises som en tabel — søg eller filtrér efter status for at finde en enhed hurtigt.",
       "Klik på en enhed for at se detaljer, styre strøm/varme/vand eller tjekke en gæst ind/ud.",
-      "En rød advarsel vises på dashboardet hvis der er ubetalte bookinger.",
-      "Forbrug-alarmer vises hvis en enhed overskrider sin konfigurerede grænse.",
-      "Brug '+'-knappen til at oprette nye enheder — vælg type og tildel hardware.",
+      "Advarsler samles øverst: ubetalte bookinger (rød) og Home Assistant offline (gul) vises ét sted — ikke på hver enhed.",
+      "Brug 'Tilføj enhed' for at oprette nye enheder — vælg type og tildel hardware.",
     ],
     link: { href: "/admin", label: "Gå til Dashboard" },
   },
@@ -95,9 +75,9 @@ const sections: Section[] = [
     intro:
       "Alle gæsteophold samles under Bookinger. Her kan du filtrere og finde tidligere, aktive og ubetalte bookinger.",
     items: [
-      "Filtrer efter status: alle, aktive, ubetalte eller betalte.",
+      "Filtrer efter status: alle, aktive, reserverede, ubetalte eller betalte.",
       "Klik på en booking for at se detaljer, redigere gæsteinfo eller markere som betalt.",
-      "Ubetalte bookinger vises med rød markering.",
+      "Statusmærker følger samme farver som dashboardet: blå = aktiv, gul = reserveret, rød = ubetalt, grøn = betalt.",
       "Du kan sende opgørelsen til gæsten via email direkte fra bookingsiden.",
     ],
     link: { href: "/admin/bookings", label: "Gå til Bookinger" },
@@ -142,8 +122,7 @@ const sections: Section[] = [
     id: "economy",
     icon: Wallet,
     title: "Økonomi",
-    intro:
-      "Økonomisiden giver dig overblik over indtægter, udestående beløb og forbrugstendenser.",
+    intro: "Økonomisiden giver dig overblik over indtægter, udestående beløb og forbrugstendenser.",
     items: [
       "Se samlet omsætning, ubetalte beløb og antal bookinger.",
       "Forbrugsstatistik over tid (el, vand, vask, bad).",
@@ -155,8 +134,7 @@ const sections: Section[] = [
     id: "guest-portal",
     icon: Users,
     title: "Gæsteportal",
-    intro:
-      "Hver gæst får et unikt link (token) til deres gæsteportal, hvor de kan følge med i deres ophold.",
+    intro: "Hver gæst får et unikt link (token) til deres gæsteportal, hvor de kan følge med i deres ophold.",
     items: [
       "Gæsten ser sit forbrug (el, vand), akkumuleret pris og forventet check-ud dato.",
       "Adgang til services: start vask, book bruser, se ledige maskiner.",
@@ -169,8 +147,7 @@ const sections: Section[] = [
     id: "qr",
     icon: QrCode,
     title: "QR-koder",
-    intro:
-      "QR-koder bruges til at give gæster hurtig adgang til vaskeri og brusere uden at logge ind.",
+    intro: "QR-koder bruges til at give gæster hurtig adgang til vaskeri og brusere uden at logge ind.",
     items: [
       "Under Services → Grupper kan du generere QR-koder til vaskegrupper.",
       "Print og sæt QR-koden op ved maskinen — gæsten scanner, betaler og starter.",
@@ -182,8 +159,7 @@ const sections: Section[] = [
     id: "settings-general",
     icon: Settings,
     title: "Indstillinger",
-    intro:
-      "Under Indstillinger konfigurerer du alt fra priser til hardware-integration. Indstillingerne er opdelt i faner.",
+    intro: "Under Indstillinger konfigurerer du alt fra priser til hardware-integration. Indstillingerne er opdelt i faner.",
     items: [
       "Generelt: Sidens navn, URL, prismodel (fast pris, minimumspris eller spotpris + tillæg), el- og vandpris, prisområde.",
       "Home Assistant: URL og adgangstoken til din HA-installation for at styre relæer og læse målere.",
@@ -200,8 +176,7 @@ const sections: Section[] = [
     id: "hardware",
     icon: Wifi,
     title: "Hardware & Integration",
-    intro:
-      "CampSense understøtter to måder at styre fysisk hardware (relæer, målere): Home Assistant og direkte MQTT (Shelly).",
+    intro: "CampSense understøtter to måder at styre fysisk hardware (relæer, målere): Home Assistant og direkte MQTT (Shelly).",
     items: [
       "Home Assistant (HA): Forbind via REST API. Enheder styres med entity IDs (f.eks. switch.hytte1_el).",
       "MQTT / Shelly: Forbind direkte til Shelly Gen2/3+ enheder via en Mosquitto-broker. Angiv MQTT-prefix og komponent (f.eks. shellyplus1pm-abc123 / switch:0).",
@@ -214,8 +189,7 @@ const sections: Section[] = [
     id: "pricing",
     icon: BarChart3,
     title: "Prismodeller",
-    intro:
-      "Systemet understøtter tre prismodeller for el. Modellen vælges under Indstillinger → Generelt.",
+    intro: "Systemet understøtter tre prismodeller for el. Modellen vælges under Indstillinger → Generelt.",
     items: [
       "Fast pris: Gæsten betaler en fast kr/kWh uanset timepris. Simpelt og forudsigeligt.",
       "Minimumspris: Gæsten betaler mindst din faste pris, men hvis spotprisen er højere, betaler de spotprisen. Beskytter dig mod tab ved høje spotpriser.",
@@ -227,8 +201,7 @@ const sections: Section[] = [
     id: "cron",
     icon: Clock,
     title: "Cron (Automatisk vedligeholdelse)",
-    intro:
-      "Et cron-job kalder /api/cron hvert minut. Det sørger for at alt kører automatisk i baggrunden. Opgaverne er delt i hurtige (hvert kald) og tunge (hvert ~10 min) for at undgå unødig belastning.",
+    intro: "Et cron-job kalder /api/cron hvert minut. Det sørger for at alt kører automatisk i baggrunden. Opgaverne er delt i hurtige (hvert kald) og tunge (hvert ~10 min) for at undgå unødig belastning.",
     items: [
       "Opsætning: Sæt din crontab til at kalde endpointet hvert minut: * * * * * curl -H 'Authorization: Bearer <api_key>' http://din-server:3000/api/cron",
       "Hurtige opgaver (hvert kald): Tjekker om brusere/vaskemaskiner er udløbet og slukker dem øjeblikkeligt.",
@@ -243,8 +216,7 @@ const sections: Section[] = [
     id: "security",
     icon: Shield,
     title: "Adgang & Sikkerhed",
-    intro:
-      "Admin-panelet kræver login. Gæsteportalen og offentlige service-sider kræver et unikt token.",
+    intro: "Admin-panelet kræver login. Gæsteportalen og offentlige service-sider kræver et unikt token.",
     items: [
       "Admin-login: Brugernavn og adgangskode. Skift adgangskode under Indstillinger → System.",
       "Gæste-tokens: Genereres automatisk ved check-ind og er unikke per ophold.",
@@ -258,53 +230,41 @@ export function HelpContent() {
   const [openId, setOpenId] = useState<string | null>("dashboard");
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       {sections.map((s) => {
         const Icon = s.icon;
         const isOpen = openId === s.id;
         return (
-          <Card key={s.id} className="overflow-hidden">
+          <Surface key={s.id} className="overflow-hidden">
             <button
               onClick={() => setOpenId(isOpen ? null : s.id)}
-              className="w-full flex items-center gap-3 p-4 text-left hover:bg-muted/50 transition-colors"
+              className="w-full flex items-center gap-3 p-4 text-left hover:bg-muted/40 transition-colors"
             >
-              <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                <Icon className="h-4.5 w-4.5 text-primary" />
+              <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                <Icon className="h-[18px] w-[18px] text-primary" />
               </div>
               <span className="font-semibold text-sm flex-1">{s.title}</span>
-              <ChevronDown
-                className={`h-4 w-4 text-muted-foreground transition-transform ${
-                  isOpen ? "rotate-180" : ""
-                }`}
-              />
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
             </button>
             {isOpen && (
-              <CardContent className="pt-0 px-4 pb-4">
-                <p className="text-sm text-muted-foreground mb-3 leading-relaxed">
-                  {s.intro}
-                </p>
+              <div className="px-4 pb-4 pt-0">
+                <p className="text-sm text-muted-foreground mb-3 leading-relaxed">{s.intro}</p>
                 <ul className="space-y-1.5">
                   {s.items.map((item, i) => (
-                    <li
-                      key={i}
-                      className="text-sm text-foreground/80 flex gap-2 leading-relaxed"
-                    >
-                      <span className="text-primary/60 mt-1.5 shrink-0">&#8226;</span>
+                    <li key={i} className="text-sm text-foreground/80 flex gap-2 leading-relaxed">
+                      <span className="text-primary/60 mt-1.5 shrink-0">•</span>
                       <span>{item}</span>
                     </li>
                   ))}
                 </ul>
                 {s.link && (
-                  <Link
-                    href={s.link.href}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-primary mt-3 hover:underline"
-                  >
-                    {s.link.label} &rarr;
+                  <Link href={s.link.href} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary mt-3 hover:underline">
+                    {s.link.label} →
                   </Link>
                 )}
-              </CardContent>
+              </div>
             )}
-          </Card>
+          </Surface>
         );
       })}
 

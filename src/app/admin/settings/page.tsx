@@ -6,7 +6,8 @@ import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SystemStatus } from "@/components/admin/system-status";
 import { SettingsTabs } from "@/components/admin/settings-tabs";
 import { ResourceTypesManager } from "@/components/admin/resource-types-manager";
-import { Home } from "lucide-react";
+import { PageShell, PageHeader } from "@/components/admin/admin-ui";
+import { Home, Settings } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -40,14 +41,9 @@ export default async function SettingsPage() {
   const hardwareContent = (
     <div className="space-y-8">
       <ResourceTypesManager initialTypes={resourceTypes.map((rt) => ({
-        id: rt.id,
-        name: rt.name,
-        icon: rt.icon,
-        sortOrder: rt.sortOrder,
-        defaultUnitType: rt.defaultUnitType,
-        externalId: rt.externalId,
-        externalProvider: rt.externalProvider,
-        _count: rt._count,
+        id: rt.id, name: rt.name, icon: rt.icon, sortOrder: rt.sortOrder,
+        defaultUnitType: rt.defaultUnitType, externalId: rt.externalId,
+        externalProvider: rt.externalProvider, _count: rt._count,
       }))} />
 
       <div>
@@ -69,11 +65,7 @@ export default async function SettingsPage() {
                 </div>
                 <div className="space-y-2">
                   {group.units.map((unit) => (
-                    <CabinHardwareForm
-                      key={unit.id}
-                      cabin={{ id: unit.id, name: unit.name, type: unit.type }}
-                      hardware={unit.hardware}
-                    />
+                    <CabinHardwareForm key={unit.id} cabin={{ id: unit.id, name: unit.name, type: unit.type }} hardware={unit.hardware} />
                   ))}
                 </div>
               </div>
@@ -85,11 +77,7 @@ export default async function SettingsPage() {
                 </div>
                 <div className="space-y-2">
                   {uncategorized.map((unit) => (
-                    <CabinHardwareForm
-                      key={unit.id}
-                      cabin={{ id: unit.id, name: unit.name, type: unit.type }}
-                      hardware={unit.hardware}
-                    />
+                    <CabinHardwareForm key={unit.id} cabin={{ id: unit.id, name: unit.name, type: unit.type }} hardware={unit.hardware} />
                   ))}
                 </div>
               </div>
@@ -109,13 +97,12 @@ export default async function SettingsPage() {
   );
 
   return (
-    <div className="p-4 sm:p-6 lg:p-10 max-w-4xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">Indstillinger</h1>
-        <p className="text-muted-foreground mt-1">
-          Konfigurér priser, Home Assistant, notifikationer og hardware.
-        </p>
-      </div>
+    <PageShell width="4xl">
+      <PageHeader
+        title="Indstillinger"
+        icon={Settings}
+        subtitle="Konfigurér priser, Home Assistant, notifikationer og hardware."
+      />
 
       <SettingsTabs>
         {{
@@ -131,6 +118,6 @@ export default async function SettingsPage() {
           system: systemContent,
         }}
       </SettingsTabs>
-    </div>
+    </PageShell>
   );
 }

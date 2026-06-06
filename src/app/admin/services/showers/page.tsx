@@ -1,6 +1,8 @@
 import { getShowers, getGlobalSettings } from "@/lib/actions";
 import { ShowerSettings } from "@/components/admin/shower-settings";
 import { ServicesSubnav } from "@/components/admin/services-subnav";
+import { PageShell, PageHeader } from "@/components/admin/admin-ui";
+import { WashingMachine } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -11,13 +13,13 @@ export default async function AdminShowersPage() {
   ]);
 
   return (
-    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-bold">Services</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Administrer bade, vaskemaskiner, tørretumblere og andre tidsbaserede services.
-        </p>
-      </div>
+    <PageShell width="5xl">
+      <PageHeader
+        title="Services"
+        icon={WashingMachine}
+        iconTint="bg-violet-500/10 text-violet-600"
+        subtitle="Administrer bade, vaskemaskiner, tørretumblere og andre tidsbaserede services."
+      />
       <ServicesSubnav />
       <div className="pt-2">
         <ShowerSettings
@@ -38,6 +40,6 @@ export default async function AdminShowersPage() {
           }))}
         />
       </div>
-    </div>
+    </PageShell>
   );
 }
