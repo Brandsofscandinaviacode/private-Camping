@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
   getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession,
-  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing,
+  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing, getGlobalSettings,
 } from "@/lib/actions";
 import { getDashboardMovements } from "@/lib/dashboard-actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
@@ -12,7 +12,7 @@ import { Tent, AlertCircle, AlertTriangle, WifiOff } from "lucide-react";
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, settings] = await Promise.all([
     getUnits(),
     getResourceTypes(),
     getUnpaidCount(),
@@ -20,7 +20,9 @@ export default async function AdminDashboard() {
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
     getEffectiveElPricing().catch(() => null),
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
+    getGlobalSettings(),
   ]);
+  const haConfigured = !!settings.ha_url;
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
@@ -57,8 +59,9 @@ export default async function AdminDashboard() {
   const vacantCount = units.length - occupiedCount - reservedCount;
 
   // Consolidated HA status — one banner instead of a label on every card.
-  const haTracked = unitData.filter((d) => d.haStates !== null).length;
-  const haOffline = unitData.filter((d) => d.haStates && !d.haStates.haReachable).length;
+  // Only show when HA is actually configured (ha_url is set).
+  const haTracked = haConfigured ? unitData.filter((d) => d.haStates !== null).length : 0;
+  const haOffline = haConfigured ? unitData.filter((d) => d.haStates && !d.haStates.haReachable).length : 0;
   const haAllOffline = haTracked > 0 && haOffline === haTracked;
 
   return (
