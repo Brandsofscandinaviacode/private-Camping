@@ -3907,6 +3907,14 @@ export async function createLaundryPayment(
   const amountToPay = Math.max(0, price - credit);
   const creditUsed = Math.min(guestSession?.laundryCredit ?? 0, price);
 
+  // PREPAID guests pay from balance only — never card. Consistent with
+  // showers: reject when the balance (plus laundry credit) doesn't cover
+  // the price. Guests without a session can still pay by card via the
+  // public QR flow (createPublicLaundryPayment).
+  if (guestSession?.billingMode === "PREPAID" && amountToPay > 0) {
+    return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${credit.toFixed(0)} DKK` };
+  }
+
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + duration);
 
@@ -5468,6 +5476,29 @@ export async function extendShowerPayment(
 
   const settings = await getGlobalSettings();
   const baseUrl = settings.site_url || "http://localhost:3000";
+
+  // PREPAID guests extend from their balance — same rules as the initial
+  // purchase: deduct if it covers the price, otherwise reject. Never card.
+  if (sess.sessionId) {
+    const guestSession = await prisma.session.findUnique({ where: { id: sess.sessionId } });
+    if (guestSession?.billingMode === "PREPAID") {
+      const remaining = guestSession.prepaidAmount ?? 0;
+      // Conditional decrement — closes the race between concurrent extensions
+      const res = await prisma.session.updateMany({
+        where: { id: guestSession.id, prepaidAmount: { gte: price } },
+        data: { prepaidAmount: { decrement: price } },
+      });
+      if (res.count === 0) {
+        return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${remaining.toFixed(0)} DKK` };
+      }
+      await prisma.showerSess.update({
+        where: { id: showerSessionId },
+        data: { pendingMinutes: extra },
+      });
+      await applyShowerExtension(showerSessionId);
+      return { ok: true, message: `Forlænget med ${extra} minutter (trukket fra saldo)` };
+    }
+  }
 
   if (settings.quickpay_enabled !== "true") {
     await prisma.showerSess.update({
