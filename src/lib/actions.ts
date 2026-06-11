@@ -3920,19 +3920,21 @@ export async function createLaundryPayment(
 
   // If guest has enough credit, start immediately (no payment needed)
   if (amountToPay <= 0) {
-    // Deduct laundry credit and/or prepaid balance
+    // Atomic conditional deduct — prevents double-spend from concurrent requests
     if (guestSession) {
-      const newLaundryCredit = Math.max(0, (guestSession.laundryCredit ?? 0) - creditUsed);
-      const newPrepaid = prepaidCreditUsed > 0
-        ? Math.max(0, (guestSession.prepaidAmount ?? 0) - prepaidCreditUsed)
-        : undefined;
-      await prisma.session.update({
-        where: { id: guestSession.id },
+      const res = await prisma.session.updateMany({
+        where: {
+          id: guestSession.id,
+          ...(prepaidCreditUsed > 0 && { prepaidAmount: { gte: prepaidCreditUsed } }),
+        },
         data: {
-          laundryCredit: newLaundryCredit,
-          ...(newPrepaid !== undefined && { prepaidAmount: newPrepaid }),
+          ...(creditUsed > 0 && { laundryCredit: { decrement: creditUsed } }),
+          ...(prepaidCreditUsed > 0 && { prepaidAmount: { decrement: prepaidCreditUsed } }),
         },
       });
+      if (res.count === 0) {
+        return { ok: false, message: `Utilstrækkelig saldo — prøv igen` };
+      }
     }
 
     await prisma.laundrySess.create({
@@ -4761,6 +4763,39 @@ async function createMeteredLaundryPaymentPortal(
 
   const guestSession = await prisma.session.findUnique({ where: { guestPortalToken } });
 
+  // PREPAID guests reserve from balance instead of QuickPay pre-auth.
+  // The reservation amount is refunded (partially) in completeMeteredSession.
+  if (guestSession?.billingMode === "PREPAID") {
+    const reserve = machine.maxReservationDKK;
+    const remaining = guestSession.prepaidAmount ?? 0;
+    const res = await prisma.session.updateMany({
+      where: { id: guestSession.id, prepaidAmount: { gte: reserve } },
+      data: { prepaidAmount: { decrement: reserve } },
+    });
+    if (res.count === 0) {
+      return { ok: false, message: `Utilstrækkelig saldo — behøver ${reserve.toFixed(0)} DKK reservation, har ${remaining.toFixed(0)} DKK` };
+    }
+    const sess = await prisma.laundrySess.create({
+      data: {
+        machineId: machine.id,
+        sessionId: guestSession.id,
+        guestPortalToken,
+        accessToken,
+        endsAt,
+        pricePaid: 0,
+        billingMode: "METERED",
+        pricePerMinute: machine.pricePerMinute,
+        reservedAmount: reserve,
+        status: "ACTIVE",
+        paymentStatus: "PREPAID",
+      },
+    });
+    try {
+      await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
+    } catch (e) { logger.error("laundry", "metered laundry on (prepaid)", e); }
+    return { ok: true, message: `${machine.name} startet — ${reserve.toFixed(0)} DKK reserveret fra saldo`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
+  }
+
   if (settings.quickpay_enabled !== "true") {
     const sess = await prisma.laundrySess.create({
       data: {
@@ -5144,30 +5179,30 @@ export async function createShowerPayment(
     return { ok: true, message: `Bad startet i ${mins} min — ${price.toFixed(0)} DKK på regning`, showerSessionId: sess.id, accessToken: sess.accessToken };
   }
 
-  // PREPAID guests pay from balance (always allowed for services)
-  if (guestSession?.billingMode === "PREPAID" && guestSession.prepaidAmount) {
-    const remaining = guestSession.prepaidAmount;
-    if (remaining >= price) {
-      await prisma.session.update({
-        where: { id: guestSession.id },
-        data: { prepaidAmount: Math.max(0, remaining - price) },
-      });
-      const sess = await prisma.showerSess.create({
-        data: {
-          showerId,
-          sessionId: guestSession.id,
-          endsAt,
-          status: "PENDING",
-          pricePaid: price,
-          minutesPaid: mins,
-          pendingMinutes: mins,
-          paymentStatus: "PAID",
-        },
-      });
-      await activateShowerSession(sess.id);
-      return { ok: true, message: `Bad startet i ${mins} min (trukket fra saldo)`, showerSessionId: sess.id, accessToken: sess.accessToken };
+  // PREPAID guests pay from balance — atomic conditional decrement
+  if (guestSession?.billingMode === "PREPAID") {
+    const remaining = guestSession.prepaidAmount ?? 0;
+    const res = await prisma.session.updateMany({
+      where: { id: guestSession.id, prepaidAmount: { gte: price } },
+      data: { prepaidAmount: { decrement: price } },
+    });
+    if (res.count === 0) {
+      return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${remaining.toFixed(0)} DKK` };
     }
-    return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${remaining.toFixed(0)} DKK` };
+    const sess = await prisma.showerSess.create({
+      data: {
+        showerId,
+        sessionId: guestSession.id,
+        endsAt,
+        status: "PENDING",
+        pricePaid: price,
+        minutesPaid: mins,
+        pendingMinutes: mins,
+        paymentStatus: "PAID",
+      },
+    });
+    await activateShowerSession(sess.id);
+    return { ok: true, message: `Bad startet i ${mins} min (trukket fra saldo)`, showerSessionId: sess.id, accessToken: sess.accessToken };
   }
 
   const pending = await prisma.showerSess.create({
@@ -5729,7 +5764,10 @@ function buildPowerEndpoint(machine: {
 
 async function cancelMeteredSession(sess: {
   id: number;
+  sessionId: number | null;
   paymentId: string | null;
+  paymentStatus: string;
+  reservedAmount: number | null;
   machine: { id: number; name: string; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null; idleTimeoutMinutes: number };
 }) {
   const res = await prisma.laundrySess.updateMany({
@@ -5738,7 +5776,14 @@ async function cancelMeteredSession(sess: {
   });
   if (res.count === 0) return;
 
-  if (sess.paymentId) {
+  // PREPAID: refund the full reservation since machine never ran
+  if (sess.paymentStatus === "PREPAID" && sess.sessionId && sess.reservedAmount) {
+    await prisma.session.updateMany({
+      where: { id: sess.sessionId },
+      data: { prepaidAmount: { increment: sess.reservedAmount } },
+    });
+    logger.info("laundry", `Metered session ${sess.id}: refunded full ${sess.reservedAmount.toFixed(2)} DKK to prepaid balance`);
+  } else if (sess.paymentId) {
     try {
       const { cancelPayment } = await import("./quickpay");
       await cancelPayment(sess.paymentId);
@@ -5758,10 +5803,12 @@ async function cancelMeteredSession(sess: {
 
 async function completeMeteredSession(sess: {
   id: number;
+  sessionId: number | null;
   billedMinutes: number;
   pricePerMinute: number | null;
   reservedAmount: number | null;
   paymentId: string | null;
+  paymentStatus: string;
   meterStartedAt: Date | null;
   idleSince: Date | null;
   lastPowerAt: Date | null;
@@ -5779,8 +5826,18 @@ async function completeMeteredSession(sess: {
   const finalMinutes = sess.billedMinutes;
   const finalCost = Math.min(finalMinutes * rate, sess.reservedAmount ?? Infinity);
 
-  // Capture actual amount or void the pre-auth if 0 DKK
-  if (sess.paymentId) {
+  // PREPAID: refund unused portion of the reservation back to guest balance
+  if (sess.paymentStatus === "PREPAID" && sess.sessionId) {
+    const refund = Math.max(0, (sess.reservedAmount ?? 0) - finalCost);
+    if (refund > 0) {
+      await prisma.session.updateMany({
+        where: { id: sess.sessionId },
+        data: { prepaidAmount: { increment: refund } },
+      });
+      logger.info("laundry", `Metered session ${sess.id}: refunded ${refund.toFixed(2)} DKK to prepaid balance`);
+    }
+  } else if (sess.paymentId) {
+    // QuickPay: capture actual amount or void the pre-auth if 0 DKK
     try {
       if (finalCost > 0) {
         const { capturePayment } = await import("./quickpay");
@@ -5802,6 +5859,7 @@ async function completeMeteredSession(sess: {
       meterEndedAt: now,
       billedMinutes: finalMinutes,
       pricePaid: finalCost,
+      paymentStatus: "PAID",
     },
   });
 

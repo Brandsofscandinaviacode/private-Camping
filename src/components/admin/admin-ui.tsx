@@ -203,6 +203,7 @@ export function StatusBadge({ tone, children, pulse = false }: { tone: BadgeTone
 // Booking status → tone + label (shared by bookings list, economy, booking detail)
 export function bookingTone(status: string, paymentStatus?: string): { tone: BadgeTone; label: string; pulse?: boolean } {
   if (status === "PENDING") return { tone: "amber", label: "Reserveret" };
+  if (status === "ACTIVE" && paymentStatus === "PAID") return { tone: "blue", label: "Aktiv · Betalt", pulse: true };
   if (status === "ACTIVE") return { tone: "blue", label: "Aktiv", pulse: true };
   if (status === "COMPLETED" && paymentStatus === "UNPAID") return { tone: "red", label: "Ubetalt" };
   if (paymentStatus === "PAID") return { tone: "emerald", label: "Betalt" };

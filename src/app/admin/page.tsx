@@ -22,7 +22,7 @@ export default async function AdminDashboard() {
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
     getGlobalSettings(),
   ]);
-  const haConfigured = !!settings.ha_url;
+  const haConfigured = !!settings.ha_url || settings.mqtt_enabled === "true";
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
