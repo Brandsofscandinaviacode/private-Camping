@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "file:/app/data/campsense.db"
+      SESSION_SECRET: "${SESSION_SECRET}"
+      FORCE_HTTPS: "true"
+    volumes:
+      - campsense-data:/app/data
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  campsense-data:

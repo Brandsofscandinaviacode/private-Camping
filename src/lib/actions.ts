@@ -145,29 +145,32 @@ export async function testMqttConnection(cfg?: {
   port: number;
   username: string;
   password: string;
+  tls?: boolean;
 }): Promise<{ ok: boolean; message: string }> {
   await requireAuth();
-  // If no cfg passed, use the currently-saved settings
   let host: string;
   let port: number;
   let username: string;
   let password: string;
+  let tls: boolean;
 
   if (cfg) {
     ({ host, port, username, password } = cfg);
+    tls = cfg.tls ?? false;
   } else {
     const settings = await prisma.globalSetting.findMany({
-      where: { key: { in: ["mqtt_host", "mqtt_port", "mqtt_username", "mqtt_password"] } },
+      where: { key: { in: ["mqtt_host", "mqtt_port", "mqtt_username", "mqtt_password", "mqtt_tls"] } },
     });
     const map = Object.fromEntries(settings.map((s) => [s.key, s.value]));
     host = map.mqtt_host || "localhost";
     port = parseInt(map.mqtt_port || "1883", 10);
     username = map.mqtt_username || "";
     password = map.mqtt_password || "";
+    tls = map.mqtt_tls === "true";
   }
 
   if (!host.trim()) return { ok: false, message: "MQTT host er tom" };
-  return testMqttBroker({ host, port, username, password });
+  return testMqttBroker({ host, port, username, password, tls });
 }
 
 /** Force the live MQTT client to pick up fresh GlobalSetting config. */

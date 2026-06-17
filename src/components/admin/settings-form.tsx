@@ -460,6 +460,7 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
     mqtt_enabled: settings.mqtt_enabled || "false",
     mqtt_host: settings.mqtt_host || "localhost",
     mqtt_port: settings.mqtt_port || "1883",
+    mqtt_tls: settings.mqtt_tls || "false",
     mqtt_username: settings.mqtt_username || "",
     mqtt_password: settings.mqtt_password || "",
   });
@@ -482,6 +483,7 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
         port: parseInt(values.mqtt_port, 10) || 1883,
         username: values.mqtt_username,
         password: values.mqtt_password,
+        tls: values.mqtt_tls === "true",
       });
       setTestResult(result);
     } catch {
@@ -559,6 +561,24 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
                   </p>
                 </div>
               </div>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={values.mqtt_tls === "true"}
+                  onChange={(e) => {
+                    h("mqtt_tls", e.target.checked ? "true" : "false");
+                    if (e.target.checked && values.mqtt_port === "1883") h("mqtt_port", "8883");
+                    if (!e.target.checked && values.mqtt_port === "8883") h("mqtt_port", "1883");
+                  }}
+                  className="mt-0.5 h-4 w-4 accent-primary"
+                />
+                <div>
+                  <p className="text-sm font-medium">TLS / SSL</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Forbind via <code>mqtts://</code> — krævet når brokeren lytter på port 8883 med certifikat
+                  </p>
+                </div>
+              </label>
               <div>
                 <Label className="text-sm text-muted-foreground">Brugernavn</Label>
                 <Input

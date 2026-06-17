@@ -35,12 +35,13 @@ export interface MqttConfig {
   port: number;
   username: string;
   password: string;
+  tls: boolean;
 }
 
 async function loadMqttConfig(): Promise<MqttConfig> {
   const rows = await prisma.globalSetting.findMany({
     where: {
-      key: { in: ["mqtt_enabled", "mqtt_host", "mqtt_port", "mqtt_username", "mqtt_password"] },
+      key: { in: ["mqtt_enabled", "mqtt_host", "mqtt_port", "mqtt_username", "mqtt_password", "mqtt_tls"] },
     },
   });
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
@@ -50,6 +51,7 @@ async function loadMqttConfig(): Promise<MqttConfig> {
     port: parseInt(map.mqtt_port || "1883", 10),
     username: map.mqtt_username || "",
     password: map.mqtt_password || "",
+    tls: map.mqtt_tls === "true",
   };
 }
 
@@ -78,7 +80,7 @@ class MqttClientWrapper {
           return null;
         }
 
-        const configKey = `${cfg.host}:${cfg.port}:${cfg.username}:${cfg.password}`;
+        const configKey = `${cfg.host}:${cfg.port}:${cfg.username}:${cfg.password}:${cfg.tls}`;
         if (this.client && configKey !== this.lastConfigKey) {
           // Config changed — force reconnect with fresh credentials
           await this.teardown();
@@ -86,6 +88,7 @@ class MqttClientWrapper {
         this.lastConfigKey = configKey;
 
         const options: IClientOptions = {
+          protocol: cfg.tls ? "mqtts" : "mqtt",
           host: cfg.host,
           port: cfg.port,
           username: cfg.username || undefined,
@@ -94,6 +97,7 @@ class MqttClientWrapper {
           connectTimeout: 10_000,
           clean: true,
           clientId: `campsense-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
+          ...(cfg.tls && { rejectUnauthorized: true }),
         };
 
         const c = mqtt.connect(options);
@@ -259,9 +263,11 @@ export async function testMqttBroker(cfg: {
   port: number;
   username: string;
   password: string;
+  tls?: boolean;
 }): Promise<{ ok: boolean; message: string }> {
   return new Promise((resolve) => {
     const c = mqtt.connect({
+      protocol: cfg.tls ? "mqtts" : "mqtt",
       host: cfg.host,
       port: cfg.port,
       username: cfg.username || undefined,
@@ -270,6 +276,7 @@ export async function testMqttBroker(cfg: {
       connectTimeout: 5_000,
       clean: true,
       clientId: `campsense-test-${Date.now()}`,
+      ...(cfg.tls && { rejectUnauthorized: true }),
     });
     const done = (ok: boolean, message: string) => {
       try {
