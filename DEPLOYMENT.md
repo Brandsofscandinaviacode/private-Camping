@@ -90,110 +90,141 @@ This installs Docker, Docker Compose, and Coolify. Takes 2-5 minutes.
 
 ---
 
-## Part 3: Mosquitto MQTT Broker with TLS
+## Part 3: Mosquitto MQTT Broker inside Coolify (with TLS)
 
-### 3.1 Install Mosquitto
+The broker runs as a **second Coolify resource**, next to the app. TLS terminates
+at Mosquitto on port 8883 using a Let's Encrypt certificate. Because MQTT is a raw
+TCP service (not HTTP), Coolify's Traefik can't auto-provision the cert — so we
+obtain it once with the host's `certbot` and a renewal hook keeps it fresh.
 
-```bash
-apt install -y mosquitto mosquitto-clients
-systemctl enable mosquitto
-```
+Reference files live in the repo under **`deploy/mosquitto/`**.
 
-### 3.2 Create a user
+### 3.1 Get the TLS certificate (one-time, on the host)
 
-```bash
-mosquitto_passwd -c /etc/mosquitto/passwd campsense
-```
-
-Enter a strong password when prompted. You'll need this password later in the CampSense admin panel.
-
-### 3.3 Get TLS certificates (Let's Encrypt)
-
-Install certbot:
+SSH into the server and install certbot:
 
 ```bash
 apt install -y certbot
 ```
 
-Request a certificate for your MQTT domain:
+Request a certificate for your MQTT domain. Coolify's proxy owns port 80, so stop
+it for the ~30 seconds the challenge needs, then start it again:
 
 ```bash
-certbot certonly --standalone -d mqtt.example.com
+docker stop coolify-proxy
+certbot certonly --standalone -d mqtt.example.com --agree-tos -m you@example.com --non-interactive
+docker start coolify-proxy
 ```
 
-> **Important**: Port 80 must be free for the initial challenge. If Coolify's Traefik is already running on port 80, temporarily stop it: `docker stop $(docker ps -q --filter "name=coolify-proxy")`, run certbot, then start it again.
+> **Zero-downtime alternative**: if your DNS provider has a certbot plugin
+> (e.g. Cloudflare), use a DNS-01 challenge instead and skip the proxy stop:
+> `certbot certonly --dns-cloudflare -d mqtt.example.com`.
 
-Set up auto-renewal that copies certs where Mosquitto can read them:
+### 3.2 Prepare the host directories
+
+The `eclipse-mosquitto` container runs as UID **1883**, so the config, password,
+and certificate files must be readable by that user.
+
+```bash
+mkdir -p /opt/mosquitto/config /opt/mosquitto/certs
+```
+
+Create the broker config (copy of `deploy/mosquitto/mosquitto.conf`):
+
+```bash
+cat > /opt/mosquitto/config/mosquitto.conf << 'EOF'
+allow_anonymous false
+password_file /mosquitto/config/passwd
+
+listener 8883
+certfile /mosquitto/certs/fullchain.pem
+keyfile /mosquitto/certs/privkey.pem
+tls_version tlsv1.2
+
+persistence true
+persistence_location /mosquitto/data/
+
+log_dest stdout
+log_type warning
+log_type error
+log_type notice
+EOF
+```
+
+### 3.3 Create the broker user
+
+Use the Mosquitto image itself to create the password file (no need to install
+anything on the host):
+
+```bash
+docker run --rm -it -v /opt/mosquitto/config:/mosquitto/config \
+  eclipse-mosquitto:2 \
+  mosquitto_passwd -c /mosquitto/config/passwd campsense
+```
+
+Enter a strong password when prompted. **Save it** — you'll need it in the
+CampSense admin panel.
+
+### 3.4 Install the certificate renewal hook
+
+This copies the cert where the container can read it (and restarts the broker on
+every renewal):
 
 ```bash
 cat > /etc/letsencrypt/renewal-hooks/deploy/mosquitto.sh << 'HOOK'
 #!/bin/bash
-cp /etc/letsencrypt/live/mqtt.example.com/fullchain.pem /etc/mosquitto/certs/fullchain.pem
-cp /etc/letsencrypt/live/mqtt.example.com/privkey.pem /etc/mosquitto/certs/privkey.pem
-chown mosquitto:mosquitto /etc/mosquitto/certs/*.pem
-systemctl restart mosquitto
+cp /etc/letsencrypt/live/mqtt.example.com/fullchain.pem /opt/mosquitto/certs/
+cp /etc/letsencrypt/live/mqtt.example.com/privkey.pem   /opt/mosquitto/certs/
+chown -R 1883:1883 /opt/mosquitto/certs /opt/mosquitto/config
+chmod 600 /opt/mosquitto/certs/privkey.pem
+docker restart $(docker ps -q -f name=mosquitto) 2>/dev/null || true
 HOOK
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/mosquitto.sh
 ```
 
-Run the hook once to copy the initial certs:
+Run it once now to place the initial certs and fix ownership:
 
 ```bash
-mkdir -p /etc/mosquitto/certs
 bash /etc/letsencrypt/renewal-hooks/deploy/mosquitto.sh
 ```
 
-### 3.4 Configure Mosquitto
+(The `docker restart` line is a no-op until the container exists — that's fine.)
+
+### 3.5 Create the Coolify resource
+
+1. In Coolify → your project → **New Resource** → **Docker Compose** → **Empty**
+2. Paste the contents of `deploy/mosquitto/docker-compose.yml`:
+
+   ```yaml
+   services:
+     mosquitto:
+       image: eclipse-mosquitto:2
+       restart: unless-stopped
+       ports:
+         - "8883:8883"
+       volumes:
+         - /opt/mosquitto/config:/mosquitto/config:ro
+         - /opt/mosquitto/certs:/mosquitto/certs:ro
+         - mosquitto-data:/mosquitto/data
+   volumes:
+     mosquitto-data:
+   ```
+3. **Deploy.**
+
+> No domain is set on this resource — it's not an HTTP service. The `ports`
+> mapping publishes 8883 directly to the host, bypassing Traefik (correct for
+> raw MQTT). Make sure port **8883/tcp** is open in your Hetzner firewall.
+
+### 3.6 Verify it's listening
+
+On the host:
 
 ```bash
-cat > /etc/mosquitto/conf.d/campsense.conf << 'EOF'
-# Disable anonymous access
-allow_anonymous false
-password_file /etc/mosquitto/passwd
-
-# TLS listener on 8883
-listener 8883
-certfile /etc/mosquitto/certs/fullchain.pem
-keyfile /etc/mosquitto/certs/privkey.pem
-tls_version tlsv1.2
-
-# Persistence
-persistence true
-persistence_location /var/lib/mosquitto/
-
-# Logging
-log_dest syslog
-log_type warning
-log_type error
-EOF
+ss -tlnp | grep 8883        # should show the port bound
+docker logs $(docker ps -q -f name=mosquitto) --tail 20
 ```
 
-> **Optional**: If you also want local (non-TLS) access on 1883 for devices on a private network, add `listener 1883 127.0.0.1` above the TLS listener.
-
-### 3.5 Start Mosquitto
-
-```bash
-systemctl restart mosquitto
-systemctl status mosquitto
-```
-
-### 3.6 Test the connection
-
-From the server itself:
-
-```bash
-mosquitto_sub -h mqtt.example.com -p 8883 \
-  --capath /etc/ssl/certs \
-  -u campsense -P "<your-password>" \
-  -t "test/#" -v &
-
-mosquitto_pub -h mqtt.example.com -p 8883 \
-  --capath /etc/ssl/certs \
-  -u campsense -P "<your-password>" \
-  -t "test/hello" -m "it works"
-```
-
-You should see `test/hello it works`. Kill the background subscriber with `fg` then Ctrl+C.
+You should see `mosquitto version 2.x running` with no certificate errors.
 
 ---
 
@@ -259,9 +290,25 @@ Go to **Indstillinger → MQTT**:
 3. **Port**: `8883`
 4. **TLS / SSL**: check (the port auto-switches to 8883)
 5. **Brugernavn**: `campsense`
-6. **Adgangskode**: the password from step 3.2
+6. **Adgangskode**: the password from step 3.3
 7. Click **Test forbindelse** — should show green "Forbundet til mqtt.example.com:8883"
 8. Click **Gem og genstart klient**
+
+> **Why the public domain and not an internal name?** The TLS certificate is
+> issued for `mqtt.example.com`, so the app (which verifies the cert) must
+> connect using that exact hostname. The same hostname is what your Shelly
+> devices use, so everything is consistent.
+>
+> **If "Test forbindelse" fails from inside Coolify** but works from your
+> laptop, your host may not allow hairpin NAT (a container reaching the
+> server's own public IP). Fix it by adding an `extra_hosts` entry to the
+> **app** service in `docker-compose.yaml` so the domain resolves to the
+> Docker gateway:
+> ```yaml
+>     extra_hosts:
+>       - "mqtt.example.com:host-gateway"
+> ```
+> Redeploy the app after adding it.
 
 ### 5.3 Set up the API key
 
@@ -359,7 +406,7 @@ crontab -e
 
 ### Certificate renewal
 
-Let's Encrypt certs auto-renew via the systemd timer installed by certbot. The deploy hook (step 3.3) copies fresh certs to Mosquitto and restarts it.
+Let's Encrypt certs auto-renew via the systemd timer installed by certbot. The deploy hook (step 3.4) copies fresh certs into `/opt/mosquitto/certs` and restarts the Mosquitto container automatically.
 
 Verify the timer is active:
 
@@ -373,8 +420,8 @@ systemctl status certbot.timer
 # App logs
 docker logs <container-name> --tail 100 -f
 
-# Mosquitto logs
-journalctl -u mosquitto -f
+# Mosquitto logs (it's a Coolify container now)
+docker logs $(docker ps -q -f name=mosquitto) --tail 100 -f
 
 # Cron results (check via the admin UI)
 # Indstillinger → System shows last cron run time and status
