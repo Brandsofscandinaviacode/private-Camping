@@ -10,6 +10,8 @@ services:
       - campsense-data:/app/data
     ports:
       - "3000:3000"
+    depends_on:
+      - mosquitto
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:3000/"]
       interval: 30s
@@ -17,5 +19,15 @@ services:
       retries: 3
       start_period: 30s
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - /opt/mosquitto/config:/mosquitto/config:ro
+      - mosquitto-data:/mosquitto/data
+
 volumes:
   campsense-data:
+  mosquitto-data:
