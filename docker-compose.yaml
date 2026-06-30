@@ -24,9 +24,27 @@ services:
     restart: unless-stopped
     ports:
       - "1883:1883"
+    environment:
+      MQTT_USERNAME: "${MQTT_USERNAME:-campsense}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD}"
     volumes:
-      - /opt/mosquitto/config:/mosquitto/config:ro
       - mosquitto-data:/mosquitto/data
+    # Self-configuring: writes its config + password file from the env vars
+    # above on every start, then launches the broker. No host files needed,
+    # so it works the same on any host (Coolify, plain Docker, etc.).
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ -z "$$MQTT_PASSWORD" ]; then
+          echo "ERROR: MQTT_PASSWORD env var is not set" >&2
+          exit 1
+        fi
+        printf 'allow_anonymous false\npassword_file /mosquitto/config/passwd\nlistener 1883\npersistence true\npersistence_location /mosquitto/data/\nlog_dest stdout\nlog_type warning\nlog_type error\nlog_type notice\n' > /mosquitto/config/mosquitto.conf
+        mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        chown mosquitto:mosquitto /mosquitto/config/mosquitto.conf /mosquitto/config/passwd 2>/dev/null || true
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
 
 volumes:
   campsense-data:
