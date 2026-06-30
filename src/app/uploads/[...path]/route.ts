@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
-// Serve uploaded files — needed because Next's static handler only serves
-// files present in public/ at build time, not ones written there at runtime
+// Serve uploaded files — needed because standalone mode doesn't serve
+// files written to public/ after build time
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ path: string[] }> }

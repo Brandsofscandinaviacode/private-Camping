@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Disable image optimization to save memory on small servers
+  // Standalone output for minimal deployment footprint on Raspberry Pi
+  output: "standalone",
+
+  // Disable image optimization to save memory on RPi
   images: {
     unoptimized: true,
   },

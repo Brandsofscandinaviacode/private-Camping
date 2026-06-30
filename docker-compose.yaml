@@ -10,8 +10,6 @@ services:
       - campsense-data:/app/data
     ports:
       - "3000:3000"
-    depends_on:
-      - mosquitto
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:3000/"]
       interval: 30s
@@ -26,7 +24,9 @@ services:
       - "1883:1883"
     environment:
       MQTT_USERNAME: "${MQTT_USERNAME:-campsense}"
-      MQTT_PASSWORD: "${MQTT_PASSWORD}"
+      # Falls back to an obvious placeholder so the broker always starts.
+      # Set MQTT_PASSWORD in Coolify and redeploy to override it.
+      MQTT_PASSWORD: "${MQTT_PASSWORD:-CHANGE_ME_INSECURE}"
     volumes:
       - mosquitto-data:/mosquitto/data
     # Self-configuring: writes its config + password file from the env vars
@@ -36,14 +36,12 @@ services:
       - sh
       - -c
       - |
-        set -e
-        if [ -z "$$MQTT_PASSWORD" ]; then
-          echo "ERROR: MQTT_PASSWORD env var is not set" >&2
-          exit 1
-        fi
         printf 'allow_anonymous false\npassword_file /mosquitto/config/passwd\nlistener 1883\npersistence true\npersistence_location /mosquitto/data/\nlog_dest stdout\nlog_type warning\nlog_type error\nlog_type notice\n' > /mosquitto/config/mosquitto.conf
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/config/mosquitto.conf /mosquitto/config/passwd 2>/dev/null || true
+        if [ "$$MQTT_PASSWORD" = "CHANGE_ME_INSECURE" ]; then
+          echo "WARNING: MQTT_PASSWORD is unset — using insecure default. Set it in Coolify and redeploy." >&2
+        fi
         exec mosquitto -c /mosquitto/config/mosquitto.conf
 
 volumes:

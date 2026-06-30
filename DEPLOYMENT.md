@@ -84,10 +84,14 @@ you set in the Coolify UI (next part, step 4.2):
 | Variable | Purpose |
 |----------|---------|
 | `MQTT_USERNAME` | Broker login (optional, defaults to `campsense`) |
-| `MQTT_PASSWORD` | Broker password — **required**, pick a strong one and save it |
+| `MQTT_PASSWORD` | Broker password — **strongly recommended**: pick a strong one and save it |
 
 On every start the broker writes its own config and password file from these,
 then launches. Nothing to mount, nothing to renew.
+
+> If you don't set `MQTT_PASSWORD`, the broker still starts (so the deploy
+> never fails) but falls back to an insecure placeholder password and logs a
+> warning. Set a real one before connecting any devices.
 
 ---
 
