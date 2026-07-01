@@ -6,7 +6,7 @@ import { prisma } from "./prisma";
 import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
-import { mqttClient, testMqttBroker } from "./mqtt-client";
+import { mqttClient, testMqttBroker, type MqttDevice } from "./mqtt-client";
 import { requireAuth } from "./auth";
 import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
@@ -181,6 +181,23 @@ export async function reloadMqttClient(): Promise<{ ok: boolean; connected: bool
     return { ok: true, connected: !!c?.connected };
   } catch {
     return { ok: false, connected: false };
+  }
+}
+
+/**
+ * List devices currently visible on the MQTT broker, grouped by topic prefix
+ * (like MQTT Explorer). Powers the "connected devices" panel in settings.
+ */
+export async function listMqttDevices(): Promise<{ ok: boolean; devices: MqttDevice[]; message?: string }> {
+  await requireAuth();
+  try {
+    const devices = await mqttClient.discoverDevices();
+    if (!mqttClient.isConnected()) {
+      return { ok: false, devices: [], message: "MQTT-klienten er ikke forbundet — gem og genstart klienten først" };
+    }
+    return { ok: true, devices };
+  } catch (e) {
+    return { ok: false, devices: [], message: e instanceof Error ? e.message : "Ukendt fejl" };
   }
 }
 

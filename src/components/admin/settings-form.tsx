@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useTransition, useRef } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio } from "lucide-react";
+import { useState, useTransition, useRef, useEffect } from "react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType, syncBookings } from "@/lib/actions";
+import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, listMqttDevices, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType, syncBookings } from "@/lib/actions";
+import type { MqttDevice } from "@/lib/mqtt-client";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -454,6 +455,17 @@ export function HASettings({ settings }: SettingsFormProps) {
   );
 }
 
+// Short relative-time label in Danish, e.g. "12s siden", "3m siden".
+function timeAgoDa(iso: string): string {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s siden`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m siden`;
+  const hrs = Math.round(m / 60);
+  if (hrs < 24) return `${hrs}t siden`;
+  return `${Math.round(hrs / 24)}d siden`;
+}
+
 // ─── MQTT (MOSQUITTO) TAB ───
 export function MQTTSettings({ settings }: SettingsFormProps) {
   const [values, setValues] = useState({
@@ -470,9 +482,50 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
   const [reloading, setReloading] = useState(false);
   const [reloadResult, setReloadResult] = useState<{ ok: boolean; connected: boolean } | null>(null);
 
+  // Connected-device discovery panel
+  const [devices, setDevices] = useState<MqttDevice[]>([]);
+  const [devLoading, setDevLoading] = useState(false);
+  const [devError, setDevError] = useState<string | null>(null);
+  const [devLoaded, setDevLoaded] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
   function h(key: string, value: string) {
     setValues((v) => ({ ...v, [key]: value }));
   }
+
+  async function handleLoadDevices() {
+    setDevLoading(true);
+    setDevError(null);
+    try {
+      const res = await listMqttDevices();
+      if (res.ok) {
+        setDevices(res.devices);
+      } else {
+        setDevices([]);
+        setDevError(res.message || "Kunne ikke hente enheder");
+      }
+    } catch {
+      setDevError("Uventet fejl under hentning af enheder");
+    } finally {
+      setDevLoading(false);
+      setDevLoaded(true);
+    }
+  }
+
+  function toggleExpand(id: string) {
+    setExpanded((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+
+  // Auto-load the device list once when the broker is enabled.
+  useEffect(() => {
+    if (values.mqtt_enabled === "true") handleLoadDevices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleTest() {
     setTesting(true);
@@ -632,6 +685,86 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
       </div>
 
       <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
+
+      {values.mqtt_enabled === "true" && (
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Forbundne enheder</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Enheder der aktuelt publicerer på brokeren, grupperet efter topic-præfiks
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={handleLoadDevices} disabled={devLoading}>
+              {devLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              Opdatér
+            </Button>
+          </div>
+          <div className="p-5">
+            {devError && (
+              <div className="flex items-start gap-2.5 text-sm p-3 rounded-lg bg-red-50 text-red-600">
+                <WifiOff className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{devError}</span>
+              </div>
+            )}
+
+            {devLoading && devices.length === 0 && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Henter enheder…
+              </div>
+            )}
+
+            {!devError && !devLoading && devLoaded && devices.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                Ingen enheder fundet på brokeren endnu. Tjek at dine Shelly-enheder publicerer, og prøv Opdatér.
+              </p>
+            )}
+
+            {!devError && devices.length > 0 && (
+              <ul className="divide-y divide-border -my-1">
+                {devices.map((d) => {
+                  const isOpen = expanded.has(d.id);
+                  return (
+                    <li key={d.id} className="py-2.5">
+                      <button
+                        className="w-full flex items-center gap-3 text-left"
+                        onClick={() => toggleExpand(d.id)}
+                      >
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                            d.online === true ? "bg-green-500" : d.online === false ? "bg-red-500" : "bg-gray-300"
+                          }`}
+                          title={d.online === true ? "Online" : d.online === false ? "Offline" : "Ukendt status"}
+                        />
+                        <span className="font-medium text-sm flex-1 truncate">{d.id}</span>
+                        {d.power != null && (
+                          <span className="text-xs text-amber-600 tabular-nums whitespace-nowrap">{d.power.toFixed(0)} W</span>
+                        )}
+                        <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">{d.topicCount} emner</span>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap hidden sm:inline">{timeAgoDa(d.lastSeen)}</span>
+                        {isOpen ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )}
+                      </button>
+                      {isOpen && (
+                        <ul className="mt-2 ml-5 space-y-0.5">
+                          {d.topics.map((t) => (
+                            <li key={t} className="text-xs text-muted-foreground font-mono truncate">
+                              {t}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">

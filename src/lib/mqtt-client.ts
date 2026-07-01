@@ -38,6 +38,16 @@ export interface MqttConfig {
   tls: boolean;
 }
 
+/** A device discovered on the broker, grouped by its top-level topic prefix. */
+export interface MqttDevice {
+  id: string; // top-level topic segment, e.g. "Camping-S001"
+  topicCount: number; // number of distinct topics seen under this prefix
+  lastSeen: string; // ISO timestamp of the most recent message
+  online: boolean | null; // parsed from {id}/online, null if unknown
+  power: number | null; // summed apower (W) across switch/pm components, best-effort
+  topics: string[]; // the sub-topics seen (sorted)
+}
+
 async function loadMqttConfig(): Promise<MqttConfig> {
   const rows = await prisma.globalSetting.findMany({
     where: {
@@ -195,6 +205,76 @@ class MqttClientWrapper {
       if (c) return c;
     }
     return null;
+  }
+
+  /**
+   * Discover devices on the broker the way MQTT Explorer does: subscribe to the
+   * wildcard `#`, let retained messages populate the cache, then group every
+   * topic by its top-level segment. Shelly status/online topics are retained,
+   * so a device shows up within milliseconds of subscribing.
+   *
+   * Note: `#` does not match `$SYS/...` per the MQTT spec, so broker-internal
+   * topics are excluded automatically.
+   */
+  async discoverDevices(waitMs = 1500): Promise<MqttDevice[]> {
+    const c = await this.ensureConnected();
+    if (!c) return [];
+
+    await this.subscribe("#");
+    // Give retained messages time to arrive (only meaningful on the first call;
+    // afterwards the cache is already warm).
+    if (this.cache.size === 0) {
+      await new Promise((r) => setTimeout(r, waitMs));
+    } else {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    interface Group {
+      topics: Set<string>;
+      lastSeen: Date;
+      online: boolean | null;
+      power: number | null;
+    }
+    const groups = new Map<string, Group>();
+
+    for (const [topic, msg] of this.cache.entries()) {
+      const seg = topic.split("/")[0];
+      if (!seg || seg.startsWith("$")) continue;
+
+      let g = groups.get(seg);
+      if (!g) {
+        g = { topics: new Set(), lastSeen: msg.receivedAt, online: null, power: null };
+        groups.set(seg, g);
+      }
+      g.topics.add(topic);
+      if (msg.receivedAt > g.lastSeen) g.lastSeen = msg.receivedAt;
+
+      // Shelly last-will: {id}/online = "true" | "false"
+      if (topic === `${seg}/online`) {
+        g.online = msg.payload.trim() === "true";
+      }
+
+      // Best-effort live power: apower (W) from switch/pm/em status components
+      if (/\/status\/(switch|pm1?|em1?):/.test(topic)) {
+        try {
+          const j = JSON.parse(msg.payload);
+          if (typeof j.apower === "number") g.power = (g.power ?? 0) + j.apower;
+        } catch {
+          /* not JSON — ignore */
+        }
+      }
+    }
+
+    return [...groups.entries()]
+      .map(([id, g]) => ({
+        id,
+        topicCount: g.topics.size,
+        lastSeen: g.lastSeen.toISOString(),
+        online: g.online,
+        power: g.power,
+        topics: [...g.topics].sort(),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   /** Publish a command. Throws if broker is not connected. */
