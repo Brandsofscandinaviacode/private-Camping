@@ -21,24 +21,48 @@ services:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
-      - "1883:1883"
+      # 1883 is NOT published to the host — the app reaches the broker over the
+      # internal Docker network (hostname "mosquitto"). Only the TLS port is
+      # exposed to the outside world.
+      - "8883:8883"
     environment:
+      # App / internal user (CampSense connects as this over 1883, no TLS)
       MQTT_USERNAME: "${MQTT_USERNAME:-campsense}"
       # Falls back to an obvious placeholder so the broker always starts.
-      # Set MQTT_PASSWORD in Coolify and redeploy to override it.
       MQTT_PASSWORD: "${MQTT_PASSWORD:-CHANGE_ME_INSECURE}"
+      # Optional device / external user (e.g. Shelly, desktop clients over TLS)
+      MQTT_DEVICE_USERNAME: "${MQTT_DEVICE_USERNAME:-}"
+      MQTT_DEVICE_PASSWORD: "${MQTT_DEVICE_PASSWORD:-}"
     volumes:
       - mosquitto-data:/mosquitto/data
-    # Self-configuring: writes its config + password file from the env vars
-    # above on every start, then launches the broker. No host files needed,
-    # so it works the same on any host (Coolify, plain Docker, etc.).
+    # Self-configuring: on start it generates a persistent self-signed TLS cert
+    # (first run only), writes its config + password file from the env vars,
+    # then launches. Listens on 1883 (plain, internal) and 8883 (TLS, external).
     command:
       - sh
       - -c
       - |
-        printf 'allow_anonymous false\npassword_file /mosquitto/config/passwd\nlistener 1883\npersistence true\npersistence_location /mosquitto/data/\nlog_dest stdout\nlog_type warning\nlog_type error\nlog_type notice\n' > /mosquitto/config/mosquitto.conf
+        CERT_DIR=/mosquitto/data/certs
+        mkdir -p "$$CERT_DIR"
+        if [ ! -f "$$CERT_DIR/server.crt" ]; then
+          command -v openssl >/dev/null 2>&1 || apk add --no-cache openssl || true
+          command -v openssl >/dev/null 2>&1 && openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$$CERT_DIR/server.key" -out "$$CERT_DIR/server.crt" \
+            -days 3650 -subj "/CN=campsense-mqtt" || true
+        fi
+        {
+          printf 'allow_anonymous false\npassword_file /mosquitto/config/passwd\npersistence true\npersistence_location /mosquitto/data/\nlog_dest stdout\nlistener 1883\n'
+          if [ -f "$$CERT_DIR/server.crt" ] && [ -f "$$CERT_DIR/server.key" ]; then
+            printf 'listener 8883\ncertfile %s/server.crt\nkeyfile %s/server.key\n' "$$CERT_DIR" "$$CERT_DIR"
+          else
+            echo "WARNING: no TLS cert generated — port 8883 disabled, only 1883 is active" >&2
+          fi
+        } > /mosquitto/config/mosquitto.conf
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
-        chown mosquitto:mosquitto /mosquitto/config/mosquitto.conf /mosquitto/config/passwd 2>/dev/null || true
+        if [ -n "$$MQTT_DEVICE_USERNAME" ] && [ -n "$$MQTT_DEVICE_PASSWORD" ]; then
+          mosquitto_passwd -b /mosquitto/config/passwd "$$MQTT_DEVICE_USERNAME" "$$MQTT_DEVICE_PASSWORD"
+        fi
+        chown -R mosquitto:mosquitto /mosquitto/config "$$CERT_DIR" 2>/dev/null || true
         if [ "$$MQTT_PASSWORD" = "CHANGE_ME_INSECURE" ]; then
           echo "WARNING: MQTT_PASSWORD is unset — using insecure default. Set it in Coolify and redeploy." >&2
         fi

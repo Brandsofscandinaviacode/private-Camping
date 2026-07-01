@@ -39,12 +39,12 @@ Open the required ports (Hetzner Console → Firewalls, or `ufw` on the server):
 | 80 | HTTP (Let's Encrypt + redirect) |
 | 443 | HTTPS (app) |
 | 8000 | Coolify dashboard |
-| 1883 | MQTT (Shelly devices) |
+| 8883 | MQTT over TLS (Shelly devices / external clients) |
 
 ```bash
 ssh root@<server-ip>
 apt update && apt upgrade -y
-ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 8000/tcp && ufw allow 1883/tcp && ufw enable
+ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 8000/tcp && ufw allow 8883/tcp && ufw enable
 ```
 
 ---
@@ -78,16 +78,31 @@ Takes 2-5 minutes.
 
 The MQTT broker (Mosquitto) is included in the same `docker-compose.yaml` as the
 app, so Coolify manages both as one resource. **There is no host setup and no
-SSH** — the broker configures itself on startup from two environment variables
-you set in the Coolify UI (next part, step 4.2):
+SSH** — the broker configures itself on startup from environment variables you
+set in the Coolify UI (next part, step 4.2):
 
 | Variable | Purpose |
 |----------|---------|
-| `MQTT_USERNAME` | Broker login (optional, defaults to `campsense`) |
-| `MQTT_PASSWORD` | Broker password — **strongly recommended**: pick a strong one and save it |
+| `MQTT_USERNAME` | App login — CampSense connects as this internally (optional, defaults to `campsense`) |
+| `MQTT_PASSWORD` | App password — **strongly recommended**: pick a strong one and save it |
+| `MQTT_DEVICE_USERNAME` | Login for external devices/clients over TLS (e.g. `shelly`) — optional |
+| `MQTT_DEVICE_PASSWORD` | Password for that device login — optional |
 
-On every start the broker writes its own config and password file from these,
-then launches. Nothing to mount, nothing to renew.
+On every start the broker:
+
+- writes its config + password file from these variables,
+- generates a **persistent self-signed TLS certificate** the first time (no
+  Let's Encrypt / certbot needed),
+- listens on **1883** (plain, internal — used by the app over the Docker
+  network) and **8883** (TLS — for external Shelly devices / clients).
+
+Nothing to mount, nothing to renew.
+
+> **Two connection paths:**
+> - **App → broker (internal):** host `mosquitto`, port `1883`, no TLS, user `MQTT_USERNAME`.
+> - **Devices/clients → broker (external):** host = your domain/IP, port `8883`,
+>   TLS **on with certificate validation OFF** (the cert is self-signed), user
+>   `MQTT_DEVICE_USERNAME`.
 
 > If you don't set `MQTT_PASSWORD`, the broker still starts (so the deploy
 > never fails) but falls back to an insecure placeholder password and logs a
@@ -113,8 +128,10 @@ In the resource settings → **Environment Variables**, add:
 | Key | Value |
 |-----|-------|
 | `SESSION_SECRET` | *(generate with `openssl rand -base64 32`)* |
-| `MQTT_PASSWORD` | *(a strong password for the broker — save it)* |
+| `MQTT_PASSWORD` | *(a strong password for the app's broker login — save it)* |
 | `MQTT_USERNAME` | `campsense` *(optional; this is the default)* |
+| `MQTT_DEVICE_USERNAME` | *(optional — login for external devices, e.g. `shelly`)* |
+| `MQTT_DEVICE_PASSWORD` | *(optional — password for the device login)* |
 
 ### 4.3 Configure the domain
 
@@ -180,14 +197,17 @@ crontab -e
 
 ### 5.5 Connect Shelly devices
 
-For each Shelly device:
+First set `MQTT_DEVICE_USERNAME` / `MQTT_DEVICE_PASSWORD` in Coolify (e.g.
+`shelly` / your chosen password) and redeploy. Then for each Shelly device:
 
 1. Open the Shelly web UI → **Settings → MQTT**
 2. Enable MQTT
-3. Set **Server** to `<server-ip>:1883` (your Hetzner server's public IP)
-4. Enter the Mosquitto username/password (`MQTT_USERNAME` / `MQTT_PASSWORD`)
-5. Note the **MQTT Prefix** (e.g. `shellyplus1pm-abc123`)
-6. Save and reboot
+3. Set **Server** to `your-domain-or-ip:8883` (e.g. `aastrand.campsense.net:8883`)
+4. Enable **TLS/SSL** and **disable certificate validation** (the broker's cert
+   is self-signed)
+5. Enter the device username/password (`MQTT_DEVICE_USERNAME` / `MQTT_DEVICE_PASSWORD`)
+6. Note the **MQTT Prefix** (e.g. `shellyplus1pm-abc123`)
+7. Save and reboot
 
 In CampSense, under each unit's hardware settings, select **MQTT (Shelly direkte)** and enter the prefix + component.
 
@@ -230,31 +250,30 @@ docker logs <mosquitto-container> --tail 100 -f
 
 ---
 
-## Optional: Add TLS for MQTT
+## Optional: Use a real (validated) TLS certificate
 
-If you want encrypted MQTT connections (e.g. Shelly devices connecting over the
-public internet with TLS on port 8883), you can add TLS later:
+TLS on port 8883 already works out of the box with a **self-signed** cert, which
+means clients must connect with certificate validation **off**. That's fine for
+Shelly devices and most clients. If you'd rather have a properly validated cert
+(so clients can keep validation on):
 
-1. Point a DNS record `mqtt.example.com` at your server.
+1. Point a DNS record (e.g. `mqtt.example.com`) at your server.
 2. Get a cert: `certbot certonly --standalone -d mqtt.example.com` (stop the
    Coolify proxy briefly so port 80 is free).
-3. Mount the certs into the broker — add to the `mosquitto` service in
+3. Mount the cert into the broker — add to the `mosquitto` service volumes in
    `docker-compose.yaml`:
    ```yaml
        volumes:
          - mosquitto-data:/mosquitto/data
          - /etc/letsencrypt/live/mqtt.example.com:/mosquitto/certs:ro
    ```
-4. Extend the broker's inline config (the `printf` line in the `command`) with a
-   second TLS listener, so it ends with:
-   ```
-   ...listener 8883\ncertfile /mosquitto/certs/fullchain.pem\nkeyfile /mosquitto/certs/privkey.pem\n
-   ```
-   and publish the port: add `- "8883:8883"` under the broker's `ports`.
-5. Open port 8883 in the firewall, then point your Shelly devices at
-   `mqtt.example.com:8883` with TLS enabled.
+4. In the broker's inline `command`, point the 8883 listener at the mounted cert
+   instead of the generated one:
+   `certfile /mosquitto/certs/fullchain.pem` and
+   `keyfile /mosquitto/certs/privkey.pem`.
+5. Renew via a certbot deploy-hook that restarts the container.
 
-For most camping sites, password-auth on port 1883 is sufficient.
+For most camping sites the built-in self-signed cert (validation off) is enough.
 
 ---
 
@@ -264,11 +283,12 @@ For most camping sites, password-auth on port 1883 is sufficient.
 |---------|-----------|---------|
 | CampSense | `https://campsense.example.com` | The app |
 | Coolify | `http://<server-ip>:8000` | Deployment dashboard |
-| Mosquitto | `mqtt://mosquitto:1883` (internal) | MQTT broker |
-| Shelly | `mqtt://<server-ip>:1883` (external) | Shelly device connection |
+| Mosquitto (internal) | `mqtt://mosquitto:1883` (no TLS) | App → broker, over Docker network |
+| Mosquitto (external) | `mqtts://<domain-or-ip>:8883` (TLS, self-signed) | Devices/clients → broker |
 | Cron | `GET /api/cron` every 2 min | Background jobs |
 
 | Default credentials | |
 |--------------------|-|
 | CampSense admin | `admin` / `admin123` (change immediately) |
-| MQTT user | `campsense` / *(your chosen password)* |
+| MQTT app user | `campsense` / *(your `MQTT_PASSWORD`)* |
+| MQTT device user | *(your `MQTT_DEVICE_USERNAME` / `MQTT_DEVICE_PASSWORD`)* |
