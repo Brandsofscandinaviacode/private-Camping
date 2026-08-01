@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useTransition, useRef, useEffect } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw, Search, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, listMqttDevices, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType, syncBookings } from "@/lib/actions";
-import type { MqttDevice } from "@/lib/mqtt-client";
+import type { MqttDeviceWithUsage } from "@/lib/actions";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -483,11 +483,14 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
   const [reloadResult, setReloadResult] = useState<{ ok: boolean; connected: boolean } | null>(null);
 
   // Connected-device discovery panel
-  const [devices, setDevices] = useState<MqttDevice[]>([]);
+  const [devices, setDevices] = useState<MqttDeviceWithUsage[]>([]);
   const [devLoading, setDevLoading] = useState(false);
   const [devError, setDevError] = useState<string | null>(null);
   const [devLoaded, setDevLoaded] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [devFilter, setDevFilter] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [copiedPrefix, setCopiedPrefix] = useState<string | null>(null);
 
   function h(key: string, value: string) {
     setValues((v) => ({ ...v, [key]: value }));
@@ -521,11 +524,29 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
     });
   }
 
-  // Auto-load the device list once when the broker is enabled.
+  function copyPrefix(id: string) {
+    navigator.clipboard.writeText(id);
+    setCopiedPrefix(id);
+    setTimeout(() => setCopiedPrefix(null), 1500);
+  }
+
+  // Auto-load once, then poll every 10s while auto-refresh is on.
   useEffect(() => {
-    if (values.mqtt_enabled === "true") handleLoadDevices();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (values.mqtt_enabled !== "true") return;
+    handleLoadDevices();
+    if (!autoRefresh) return;
+    const t = setInterval(handleLoadDevices, 10_000);
+    return () => clearInterval(t);
+  }, [autoRefresh, values.mqtt_enabled]);
+
+  const filteredDevices = devFilter.trim()
+    ? devices.filter(
+        (d) =>
+          d.id.toLowerCase().includes(devFilter.toLowerCase()) ||
+          d.usedBy.some((u) => u.toLowerCase().includes(devFilter.toLowerCase()))
+      )
+    : devices;
+  const onlineCount = devices.filter((d) => d.online === true).length;
 
   async function handleTest() {
     setTesting(true);
@@ -688,19 +709,37 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
 
       {values.mqtt_enabled === "true" && (
         <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-          <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
+          <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="font-semibold">Forbundne enheder</h2>
+              <h2 className="font-semibold flex items-center gap-2">
+                Forbundne enheder
+                {devLoaded && devices.length > 0 && (
+                  <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full tabular-nums">
+                    {onlineCount}/{devices.length} online
+                  </span>
+                )}
+              </h2>
               <p className="text-xs text-muted-foreground mt-1">
-                Enheder der aktuelt publicerer på brokeren, grupperet efter topic-præfiks
+                Alt der publicerer på brokeren lige nu, grupperet efter topic-præfiks
               </p>
             </div>
-            <Button variant="outline" size="sm" onClick={handleLoadDevices} disabled={devLoading}>
-              {devLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-              Opdatér
-            </Button>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                Auto-opdatér
+              </label>
+              <Button variant="outline" size="sm" onClick={handleLoadDevices} disabled={devLoading}>
+                {devLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                Opdatér
+              </Button>
+            </div>
           </div>
-          <div className="p-5">
+          <div className="p-5 space-y-3">
             {devError && (
               <div className="flex items-start gap-2.5 text-sm p-3 rounded-lg bg-red-50 text-red-600">
                 <WifiOff className="h-4 w-4 shrink-0 mt-0.5" />
@@ -708,59 +747,137 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
               </div>
             )}
 
-            {devLoading && devices.length === 0 && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Henter enheder…
+            {devLoading && !devLoaded && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 justify-center">
+                <Loader2 className="h-4 w-4 animate-spin" /> Lytter på brokeren…
               </div>
             )}
 
-            {!devError && !devLoading && devLoaded && devices.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                Ingen enheder fundet på brokeren endnu. Tjek at dine Shelly-enheder publicerer, og prøv Opdatér.
-              </p>
+            {!devError && devLoaded && devices.length === 0 && !devLoading && (
+              <div className="text-center py-6">
+                <Radio className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">
+                  Ingen enheder fundet på brokeren endnu.
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Tjek at dine Shelly-enheder publicerer til denne broker, og prøv Opdatér.
+                </p>
+              </div>
             )}
 
-            {!devError && devices.length > 0 && (
-              <ul className="divide-y divide-border -my-1">
-                {devices.map((d) => {
+            {devices.length > 3 && (
+              <div className="relative">
+                <Search className="h-4 w-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <Input
+                  value={devFilter}
+                  onChange={(e) => setDevFilter(e.target.value)}
+                  placeholder="Søg enhed eller tilknytning…"
+                  className="pl-9 h-9"
+                />
+              </div>
+            )}
+
+            {!devError && filteredDevices.length > 0 && (
+              <ul className="divide-y divide-border">
+                {filteredDevices.map((d) => {
                   const isOpen = expanded.has(d.id);
                   return (
-                    <li key={d.id} className="py-2.5">
-                      <button
-                        className="w-full flex items-center gap-3 text-left"
-                        onClick={() => toggleExpand(d.id)}
-                      >
-                        <span
-                          className={`h-2.5 w-2.5 rounded-full shrink-0 ${
-                            d.online === true ? "bg-green-500" : d.online === false ? "bg-red-500" : "bg-gray-300"
-                          }`}
-                          title={d.online === true ? "Online" : d.online === false ? "Offline" : "Ukendt status"}
-                        />
-                        <span className="font-medium text-sm flex-1 truncate">{d.id}</span>
-                        {d.power != null && (
-                          <span className="text-xs text-amber-600 tabular-nums whitespace-nowrap">{d.power.toFixed(0)} W</span>
-                        )}
-                        <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">{d.topicCount} emner</span>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap hidden sm:inline">{timeAgoDa(d.lastSeen)}</span>
-                        {isOpen ? (
-                          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                        )}
-                      </button>
+                    <li key={d.id} className="py-3 first:pt-1 last:pb-1">
+                      <div className="flex items-center gap-3">
+                        <span className="relative flex h-2.5 w-2.5 shrink-0" title={d.online === true ? "Online" : d.online === false ? "Offline" : "Ukendt status"}>
+                          {d.online === true && (
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
+                          )}
+                          <span
+                            className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
+                              d.online === true ? "bg-green-500" : d.online === false ? "bg-red-500" : "bg-gray-300"
+                            }`}
+                          />
+                        </span>
+
+                        <button className="flex-1 min-w-0 text-left" onClick={() => toggleExpand(d.id)}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-sm truncate">{d.id}</span>
+                            {d.usedBy.length > 0 ? (
+                              d.usedBy.map((u) => (
+                                <span key={u} className="text-[11px] leading-4 bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-px rounded-md whitespace-nowrap">
+                                  {u}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[11px] leading-4 bg-muted text-muted-foreground px-1.5 py-px rounded-md whitespace-nowrap">
+                                Ikke tilknyttet
+                              </span>
+                            )}
+                            {d.outputs.map((o) => (
+                              <span
+                                key={o.component}
+                                className={`text-[11px] leading-4 px-1.5 py-px rounded-md border whitespace-nowrap ${
+                                  o.on
+                                    ? "bg-green-50 text-green-700 border-green-200"
+                                    : "bg-muted text-muted-foreground border-transparent"
+                                }`}
+                              >
+                                {o.component} {o.on ? "TIL" : "FRA"}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground tabular-nums flex-wrap">
+                            {d.power != null && (
+                              <span className="flex items-center gap-1 text-amber-600 font-medium">
+                                <Zap className="h-3 w-3" />
+                                {d.power < 10 ? d.power.toFixed(1) : d.power.toFixed(0)} W
+                              </span>
+                            )}
+                            {d.voltage != null && <span>{d.voltage.toFixed(0)} V</span>}
+                            {d.temperature != null && <span>{d.temperature.toFixed(0)} °C</span>}
+                            {d.energyWh != null && <span>{(d.energyWh / 1000).toFixed(1)} kWh i alt</span>}
+                            {d.rssi != null && <span>{d.rssi} dBm</span>}
+                            {d.ip && <span className="hidden md:inline">{d.ip}</span>}
+                            <span>{d.topicCount} emner · {d.messageCount} beskeder</span>
+                            <span className="hidden sm:inline">{timeAgoDa(d.lastSeen)}</span>
+                          </div>
+                        </button>
+
+                        <button
+                          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+                          title="Kopiér præfiks til hardware-opsætning"
+                          onClick={() => copyPrefix(d.id)}
+                        >
+                          {copiedPrefix === d.id ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                        </button>
+                        <button className="shrink-0" onClick={() => toggleExpand(d.id)}>
+                          {isOpen ? (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </button>
+                      </div>
+
                       {isOpen && (
-                        <ul className="mt-2 ml-5 space-y-0.5">
+                        <div className="mt-2 ml-5 rounded-lg bg-muted/40 border border-border/50 divide-y divide-border/50 overflow-hidden">
                           {d.topics.map((t) => (
-                            <li key={t} className="text-xs text-muted-foreground font-mono truncate">
-                              {t}
-                            </li>
+                            <div key={t.topic} className="px-3 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-mono font-medium truncate">{t.topic}</span>
+                                <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                                  {t.count} beskeder · {timeAgoDa(t.receivedAt)}
+                                </span>
+                              </div>
+                              <pre className="text-[11px] text-muted-foreground font-mono mt-1 whitespace-pre-wrap break-all max-h-24 overflow-y-auto">{t.payload}</pre>
+                            </div>
                           ))}
-                        </ul>
+                        </div>
                       )}
                     </li>
                   );
                 })}
               </ul>
+            )}
+
+            {!devError && devLoaded && devices.length > 0 && filteredDevices.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-3">Ingen enheder matcher søgningen</p>
             )}
           </div>
         </div>

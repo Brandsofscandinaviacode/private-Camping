@@ -38,14 +38,31 @@ export interface MqttConfig {
   tls: boolean;
 }
 
+/** One topic under a discovered device, with its latest value. */
+export interface MqttTopicInfo {
+  topic: string;
+  /** Latest payload, truncated for transport (full payloads stay server-side). */
+  payload: string;
+  receivedAt: string; // ISO
+  /** Messages received on this topic since the client connected. */
+  count: number;
+}
+
 /** A device discovered on the broker, grouped by its top-level topic prefix. */
 export interface MqttDevice {
   id: string; // top-level topic segment, e.g. "Camping-S001"
   topicCount: number; // number of distinct topics seen under this prefix
+  messageCount: number; // total messages received across those topics
   lastSeen: string; // ISO timestamp of the most recent message
   online: boolean | null; // parsed from {id}/online, null if unknown
   power: number | null; // summed apower (W) across switch/pm components, best-effort
-  topics: string[]; // the sub-topics seen (sorted)
+  voltage: number | null; // grid voltage (V), best-effort
+  temperature: number | null; // hottest component temperature (°C), best-effort
+  energyWh: number | null; // summed lifetime energy (Wh), best-effort
+  outputs: { component: string; on: boolean }[]; // relay states, e.g. switch:0 → on
+  rssi: number | null; // wifi signal (dBm) from status/wifi, best-effort
+  ip: string | null; // device IP from status/wifi, best-effort
+  topics: MqttTopicInfo[]; // the sub-topics seen (sorted)
 }
 
 async function loadMqttConfig(): Promise<MqttConfig> {
@@ -68,6 +85,7 @@ async function loadMqttConfig(): Promise<MqttConfig> {
 class MqttClientWrapper {
   private client: MqttClient | null = null;
   private cache = new Map<string, CachedMessage>();
+  private msgCounts = new Map<string, number>();
   private subscribed = new Set<string>();
   private connectPromise: Promise<MqttClient | null> | null = null;
   private reconnecting: Promise<MqttClient | null> | null = null;
@@ -133,6 +151,7 @@ class MqttClientWrapper {
 
         c.on("message", (topic, payload) => {
           this.cache.set(topic, { payload: payload.toString(), receivedAt: new Date() });
+          this.msgCounts.set(topic, (this.msgCounts.get(topic) ?? 0) + 1);
         });
         c.on("error", (err) => {
           logger.error("mqtt", "Connection error", err.message);
@@ -230,10 +249,17 @@ class MqttClientWrapper {
     }
 
     interface Group {
-      topics: Set<string>;
+      topics: Map<string, MqttTopicInfo>;
       lastSeen: Date;
       online: boolean | null;
       power: number | null;
+      voltage: number | null;
+      temperature: number | null;
+      energyWh: number | null;
+      outputs: { component: string; on: boolean }[];
+      rssi: number | null;
+      ip: string | null;
+      messageCount: number;
     }
     const groups = new Map<string, Group>();
 
@@ -243,10 +269,29 @@ class MqttClientWrapper {
 
       let g = groups.get(seg);
       if (!g) {
-        g = { topics: new Set(), lastSeen: msg.receivedAt, online: null, power: null };
+        g = {
+          topics: new Map(),
+          lastSeen: msg.receivedAt,
+          online: null,
+          power: null,
+          voltage: null,
+          temperature: null,
+          energyWh: null,
+          outputs: [],
+          rssi: null,
+          ip: null,
+          messageCount: 0,
+        };
         groups.set(seg, g);
       }
-      g.topics.add(topic);
+      const count = this.msgCounts.get(topic) ?? 1;
+      g.topics.set(topic, {
+        topic,
+        payload: msg.payload.length > 400 ? `${msg.payload.slice(0, 400)}…` : msg.payload,
+        receivedAt: msg.receivedAt.toISOString(),
+        count,
+      });
+      g.messageCount += count;
       if (msg.receivedAt > g.lastSeen) g.lastSeen = msg.receivedAt;
 
       // Shelly last-will: {id}/online = "true" | "false"
@@ -254,13 +299,31 @@ class MqttClientWrapper {
         g.online = msg.payload.trim() === "true";
       }
 
-      // Best-effort live power: apower (W) from switch/pm/em status components
-      if (/\/status\/(switch|pm1?|em1?):/.test(topic)) {
+      // Best-effort telemetry from switch/pm/em status components
+      const compMatch = topic.match(/\/status\/((?:switch|pm1?|em1?):\d+)$/);
+      if (compMatch) {
         try {
           const j = JSON.parse(msg.payload);
           if (typeof j.apower === "number") g.power = (g.power ?? 0) + j.apower;
+          if (typeof j.voltage === "number") g.voltage = j.voltage;
+          const tC = j.temperature?.tC;
+          if (typeof tC === "number") g.temperature = Math.max(g.temperature ?? -Infinity, tC);
+          const wh = j.aenergy?.total;
+          if (typeof wh === "number") g.energyWh = (g.energyWh ?? 0) + wh;
+          if (typeof j.output === "boolean") g.outputs.push({ component: compMatch[1], on: j.output });
         } catch {
           /* not JSON — ignore */
+        }
+      }
+
+      // Wifi diagnostics: {id}/status/wifi → { sta_ip, rssi, ... }
+      if (topic === `${seg}/status/wifi`) {
+        try {
+          const j = JSON.parse(msg.payload);
+          if (typeof j.rssi === "number") g.rssi = j.rssi;
+          if (typeof j.sta_ip === "string") g.ip = j.sta_ip;
+        } catch {
+          /* ignore */
         }
       }
     }
@@ -269,10 +332,17 @@ class MqttClientWrapper {
       .map(([id, g]) => ({
         id,
         topicCount: g.topics.size,
+        messageCount: g.messageCount,
         lastSeen: g.lastSeen.toISOString(),
         online: g.online,
         power: g.power,
-        topics: [...g.topics].sort(),
+        voltage: g.voltage,
+        temperature: g.temperature,
+        energyWh: g.energyWh,
+        outputs: g.outputs.sort((a, b) => a.component.localeCompare(b.component)),
+        rssi: g.rssi,
+        ip: g.ip,
+        topics: [...g.topics.values()].sort((a, b) => a.topic.localeCompare(b.topic)),
       }))
       .sort((a, b) => a.id.localeCompare(b.id));
   }
@@ -320,6 +390,7 @@ class MqttClientWrapper {
     }
     this.subscribed.clear();
     this.cache.clear();
+    this.msgCounts.clear();
   }
 }
 

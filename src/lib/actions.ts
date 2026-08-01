@@ -184,18 +184,59 @@ export async function reloadMqttClient(): Promise<{ ok: boolean; connected: bool
   }
 }
 
+/** An MQTT device enriched with where it is used inside CampSense. */
+export interface MqttDeviceWithUsage extends MqttDevice {
+  /** Human labels for every place this prefix is configured, e.g. "El · Hytte 1". */
+  usedBy: string[];
+}
+
 /**
  * List devices currently visible on the MQTT broker, grouped by topic prefix
- * (like MQTT Explorer). Powers the "connected devices" panel in settings.
+ * (like MQTT Explorer), enriched with which units/showers/machines in
+ * CampSense are configured to use each prefix. Powers the "connected
+ * devices" panel in settings.
  */
-export async function listMqttDevices(): Promise<{ ok: boolean; devices: MqttDevice[]; message?: string }> {
+export async function listMqttDevices(): Promise<{ ok: boolean; devices: MqttDeviceWithUsage[]; message?: string }> {
   await requireAuth();
   try {
     const devices = await mqttClient.discoverDevices();
     if (!mqttClient.isConnected()) {
       return { ok: false, devices: [], message: "MQTT-klienten er ikke forbundet — gem og genstart klienten først" };
     }
-    return { ok: true, devices };
+
+    // Build prefix → usage labels from every place an MQTT prefix can be set.
+    const [units, showers, machines] = await Promise.all([
+      prisma.unitHardware.findMany({
+        where: {
+          OR: [
+            { electricityMqttPrefix: { not: null } },
+            { heatingMqttPrefix: { not: null } },
+            { waterMqttPrefix: { not: null } },
+          ],
+        },
+        include: { unit: { select: { name: true, type: true } } },
+      }),
+      prisma.shower.findMany({ where: { mqttPrefix: { not: null } }, select: { name: true, mqttPrefix: true } }),
+      prisma.laundryMachine.findMany({ where: { mqttPrefix: { not: null } }, select: { name: true, mqttPrefix: true } }),
+    ]);
+
+    const usage = new Map<string, string[]>();
+    const addUsage = (prefix: string | null | undefined, label: string) => {
+      if (!prefix) return;
+      const list = usage.get(prefix) ?? [];
+      list.push(label);
+      usage.set(prefix, list);
+    };
+    for (const hw of units) {
+      const name = unitDisplayName(hw.unit.type, hw.unit.name);
+      addUsage(hw.electricityMqttPrefix, `El · ${name}`);
+      addUsage(hw.heatingMqttPrefix, `Varme · ${name}`);
+      addUsage(hw.waterMqttPrefix, `Vand · ${name}`);
+    }
+    for (const s of showers) addUsage(s.mqttPrefix, s.name);
+    for (const m of machines) addUsage(m.mqttPrefix, m.name);
+
+    return { ok: true, devices: devices.map((d) => ({ ...d, usedBy: usage.get(d.id) ?? [] })) };
   } catch (e) {
     return { ok: false, devices: [], message: e instanceof Error ? e.message : "Ukendt fejl" };
   }
