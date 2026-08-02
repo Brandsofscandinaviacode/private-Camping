@@ -1234,11 +1234,14 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
     twilio_auth_token: settings.twilio_auth_token || "",
     twilio_phone_number: settings.twilio_phone_number || "",
     notifications_email_enabled: settings.notifications_email_enabled || "false",
+    email_provider: settings.email_provider || "smtp",
     smtp_host: settings.smtp_host || "",
     smtp_port: settings.smtp_port || "587",
     smtp_user: settings.smtp_user || "",
     smtp_pass: settings.smtp_pass || "",
     smtp_from: settings.smtp_from || "",
+    resend_api_key: settings.resend_api_key || "",
+    resend_from: settings.resend_from || "",
     // Templates
     template_checkin_sms: settings.template_checkin_sms || "Hej {{navn}}! Velkommen til {{enhed}}. Se dit forbrug her: {{link}}",
     template_checkin_email_subject: settings.template_checkin_email_subject || "Velkommen til {{enhed}} — CampSense",
@@ -1323,7 +1326,7 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
 
       {/* Email */}
       <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Email (SMTP)</h2></div>
+        <div className="px-5 py-4 border-b border-border"><h2 className="font-semibold">Email</h2></div>
         <div className="p-5 space-y-4">
           <label className="flex items-start gap-3 cursor-pointer">
             <input type="checkbox" checked={values.notifications_email_enabled === "true"} onChange={(e) => h("notifications_email_enabled", e.target.checked ? "true" : "false")} className="mt-0.5 h-4 w-4 accent-primary" />
@@ -1334,28 +1337,79 @@ export function NotificationSettings({ settings }: SettingsFormProps) {
           </label>
           {values.notifications_email_enabled === "true" && (
             <div className="space-y-3 pt-1">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-sm text-muted-foreground">SMTP Host</Label>
-                  <Input value={values.smtp_host} onChange={(e) => h("smtp_host", e.target.value)} placeholder="smtp.gmail.com" className="mt-1" />
+              {/* Provider picker */}
+              <div>
+                <Label className="text-sm text-muted-foreground">Udbyder</Label>
+                <div className="grid grid-cols-2 gap-2 mt-1.5">
+                  {([
+                    { id: "smtp", name: "SMTP", desc: "Gmail, eget domæne m.fl." },
+                    { id: "resend", name: "Resend", desc: "API-nøgle, ingen SMTP" },
+                  ] as const).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => h("email_provider", p.id)}
+                      className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                        values.email_provider === p.id
+                          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className={`h-3.5 w-3.5 rounded-full border-[4px] shrink-0 ${
+                          values.email_provider === p.id ? "border-primary" : "border-muted-foreground/30"
+                        }`} />
+                        <span className="text-sm font-medium">{p.name}</span>
+                      </span>
+                      <span className="block text-xs text-muted-foreground mt-0.5 pl-[1.375rem]">{p.desc}</span>
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <Label className="text-sm text-muted-foreground">Port</Label>
-                  <Input type="number" value={values.smtp_port} onChange={(e) => h("smtp_port", e.target.value)} className="mt-1" />
-                </div>
               </div>
-              <div>
-                <Label className="text-sm text-muted-foreground">Brugernavn</Label>
-                <Input value={values.smtp_user} onChange={(e) => h("smtp_user", e.target.value)} placeholder="din@email.dk" className="mt-1" />
-              </div>
-              <div>
-                <Label className="text-sm text-muted-foreground">Adgangskode</Label>
-                <Input type="password" value={values.smtp_pass} onChange={(e) => h("smtp_pass", e.target.value)} className="mt-1" />
-              </div>
-              <div>
-                <Label className="text-sm text-muted-foreground">Afsender-adresse (valgfri)</Label>
-                <Input value={values.smtp_from} onChange={(e) => h("smtp_from", e.target.value)} placeholder="noreply@camping.dk" className="mt-1" />
-              </div>
+
+              {values.email_provider === "resend" ? (
+                <>
+                  <div>
+                    <Label className="text-sm text-muted-foreground">Resend API-nøgle</Label>
+                    <Input type="password" value={values.resend_api_key} onChange={(e) => h("resend_api_key", e.target.value)} placeholder="re_..." className="mt-1" />
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      Oprettes på <a href="https://resend.com/api-keys" target="_blank" rel="noreferrer" className="underline">resend.com/api-keys</a>
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-sm text-muted-foreground">Afsender-adresse</Label>
+                    <Input value={values.resend_from} onChange={(e) => h("resend_from", e.target.value)} placeholder="noreply@ditdomæne.dk" className="mt-1" />
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      Domænet skal være verificeret i Resend. Til test kan du bruge <code className="font-mono">onboarding@resend.dev</code>
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-sm text-muted-foreground">SMTP Host</Label>
+                      <Input value={values.smtp_host} onChange={(e) => h("smtp_host", e.target.value)} placeholder="smtp.gmail.com" className="mt-1" />
+                    </div>
+                    <div>
+                      <Label className="text-sm text-muted-foreground">Port</Label>
+                      <Input type="number" value={values.smtp_port} onChange={(e) => h("smtp_port", e.target.value)} className="mt-1" />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm text-muted-foreground">Brugernavn</Label>
+                    <Input value={values.smtp_user} onChange={(e) => h("smtp_user", e.target.value)} placeholder="din@email.dk" className="mt-1" />
+                  </div>
+                  <div>
+                    <Label className="text-sm text-muted-foreground">Adgangskode</Label>
+                    <Input type="password" value={values.smtp_pass} onChange={(e) => h("smtp_pass", e.target.value)} className="mt-1" />
+                  </div>
+                  <div>
+                    <Label className="text-sm text-muted-foreground">Afsender-adresse (valgfri)</Label>
+                    <Input value={values.smtp_from} onChange={(e) => h("smtp_from", e.target.value)} placeholder="noreply@camping.dk" className="mt-1" />
+                  </div>
+                </>
+              )}
               <div className="pt-2 border-t border-border mt-3">
                 <p className="text-sm font-medium mb-2">Test email</p>
                 <div className="flex gap-2">

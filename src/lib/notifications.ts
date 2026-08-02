@@ -40,14 +40,21 @@ export async function sendSMS(to: string, body: string): Promise<{ ok: boolean; 
 }
 
 // ──────────────────────────────────────────────
-// Email via SMTP (nodemailer)
+// Email — two interchangeable providers, picked with the `email_provider`
+// setting: "smtp" (nodemailer, the default) or "resend" (HTTP API).
 // ──────────────────────────────────────────────
-export async function sendEmail(
+
+/** Wrap message HTML in the shared CampSense layout. */
+function wrapEmailHtml(html: string): string {
+  return `<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">${html}<p style="color: #888; font-size: 13px; margin-top: 32px;">Drevet af CampSense</p></div>`;
+}
+
+async function sendViaSmtp(
+  s: Record<string, string>,
   to: string,
   subject: string,
   html: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const s = await getSettings();
   const host = s.smtp_host;
   const port = parseInt(s.smtp_port || "587", 10);
   const user = s.smtp_user;
@@ -58,24 +65,78 @@ export async function sendEmail(
     return { ok: false, error: "SMTP er ikke konfigureret" };
   }
 
-  try {
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      auth: { user, pass },
-    });
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
 
-    await transporter.sendMail({
+  await transporter.sendMail({
+    from: `CampSense <${fromAddr}>`,
+    to,
+    subject,
+    html: wrapEmailHtml(html),
+  });
+  return { ok: true };
+}
+
+async function sendViaResend(
+  s: Record<string, string>,
+  to: string,
+  subject: string,
+  html: string
+): Promise<{ ok: boolean; error?: string }> {
+  const apiKey = s.resend_api_key;
+  const fromAddr = s.resend_from;
+
+  if (!apiKey) return { ok: false, error: "Resend API-nøgle mangler" };
+  if (!fromAddr) return { ok: false, error: "Resend afsender-adresse mangler" };
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
       from: `CampSense <${fromAddr}>`,
-      to,
+      to: [to],
       subject,
-      html: `<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">${html}<p style="color: #888; font-size: 13px; margin-top: 32px;">Drevet af CampSense</p></div>`,
-    });
-    return { ok: true };
+      html: wrapEmailHtml(html),
+    }),
+  });
+
+  if (!res.ok) {
+    // Resend returns { name, message } on error; fall back to the status text.
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.message) detail = body.message;
+    } catch {
+      /* non-JSON error body — keep the status */
+    }
+    return { ok: false, error: detail };
+  }
+
+  return { ok: true };
+}
+
+export async function sendEmail(
+  to: string,
+  subject: string,
+  html: string
+): Promise<{ ok: boolean; error?: string }> {
+  const s = await getSettings();
+  const provider = s.email_provider === "resend" ? "resend" : "smtp";
+
+  try {
+    return provider === "resend"
+      ? await sendViaResend(s, to, subject, html)
+      : await sendViaSmtp(s, to, subject, html);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    logger.error("email", "Sending fejl", msg);
+    logger.error("email", `Sending fejl (${provider})`, msg);
     return { ok: false, error: msg };
   }
 }
