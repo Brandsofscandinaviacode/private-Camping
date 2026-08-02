@@ -6516,6 +6516,97 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
   return { created, updated, skipped };
 }
 
+/**
+ * Automatic booking sync, driven by the cron job.
+ *
+ * Runs `syncBookings` at most once per configured interval. Enabled with the
+ * `booking_auto_sync` setting; the cadence comes from
+ * `booking_sync_interval_minutes` (default 30, min 5).
+ *
+ * Uses the same atomic check-and-set lock as the cron's heavy tasks so two
+ * overlapping cron invocations can't sync at the same time. Outcome is stored
+ * in `_booking_last_sync` / `_booking_last_sync_status` for display in the
+ * admin UI.
+ *
+ * Must be called inside `runWithApiAuth` — `syncBookings` requires auth.
+ */
+export async function autoSyncBookings(): Promise<{
+  ran: boolean;
+  reason?: string;
+  created?: number;
+  updated?: number;
+  skipped?: number;
+  error?: string;
+}> {
+  const settings = await getGlobalSettings();
+
+  if (settings.booking_auto_sync !== "true") return { ran: false, reason: "disabled" };
+  if (!settings.booking_provider || settings.booking_provider === "none") {
+    return { ran: false, reason: "no provider" };
+  }
+
+  const intervalMin = Math.max(5, parseInt(settings.booking_sync_interval_minutes || "30", 10) || 30);
+  const intervalMs = intervalMin * 60_000;
+
+  const lastRunRaw = settings._booking_last_sync_attempt || "";
+  const lastRun = lastRunRaw ? new Date(lastRunRaw).getTime() : 0;
+  if (Date.now() - lastRun < intervalMs) return { ran: false, reason: "not due" };
+
+  // Atomic claim: only one cron invocation may proceed past this point.
+  const lockValue = new Date().toISOString();
+  try {
+    if (lastRunRaw) {
+      const locked = await prisma.globalSetting.updateMany({
+        where: { key: "_booking_last_sync_attempt", value: lastRunRaw },
+        data: { value: lockValue },
+      });
+      if (locked.count === 0) return { ran: false, reason: "locked" };
+    } else {
+      await prisma.globalSetting.upsert({
+        where: { key: "_booking_last_sync_attempt" },
+        create: { key: "_booking_last_sync_attempt", value: lockValue },
+        update: { value: lockValue },
+      });
+    }
+  } catch {
+    return { ran: false, reason: "lock failed" };
+  }
+
+  const productType = (settings.booking_sync_product_type || "all") as "all" | "tourist" | "seasonal";
+
+  try {
+    const r = await syncBookings(productType);
+    const status = r.error
+      ? `fejl: ${r.error}`
+      : `ok: ${r.created} nye, ${r.updated} opdateret${r.skipped.length ? `, ${r.skipped.length} sprunget over` : ""}`;
+
+    await updateMultipleSettings([
+      { key: "_booking_last_sync", value: new Date().toISOString() },
+      { key: "_booking_last_sync_status", value: status },
+    ]);
+
+    if (r.error) {
+      logger.error("danplanner", "Auto-sync failed", r.error);
+      return { ran: true, error: r.error };
+    }
+
+    logger.info("danplanner", "Auto-sync completed", {
+      created: r.created,
+      updated: r.updated,
+      skipped: r.skipped.length,
+    });
+    return { ran: true, created: r.created, updated: r.updated, skipped: r.skipped.length };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await updateMultipleSettings([
+      { key: "_booking_last_sync", value: new Date().toISOString() },
+      { key: "_booking_last_sync_status", value: `fejl: ${msg}` },
+    ]);
+    logger.error("danplanner", "Auto-sync threw", msg);
+    return { ran: true, error: msg };
+  }
+}
+
 // ──────────────────────────────────────────────
 // SITE MAP
 // ──────────────────────────────────────────────

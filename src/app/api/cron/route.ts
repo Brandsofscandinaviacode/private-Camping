@@ -9,9 +9,11 @@ import {
   checkOverdueInvoices,
   checkPrepaidBalances,
   tickAllSessionConsumption,
+  autoSyncBookings,
 } from "@/lib/actions";
 import { refreshSpotPriceCache, cleanOldSpotPrices } from "@/lib/energi-data-service";
 import { authenticateAPI } from "@/lib/api-auth";
+import { runWithApiAuth } from "@/lib/auth-context";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 
@@ -38,6 +40,18 @@ export async function GET(req: NextRequest) {
     // ── Fast tasks (every call) ──────────────────────────────
     const laundryResult = await checkLaundryMachines();
     const showerResult = await checkShowerSessions();
+
+    // ── Booking auto-sync ────────────────────────────────────
+    // Called on every tick but self-throttling: it honours its own
+    // `booking_sync_interval_minutes` setting, so the admin-chosen cadence is
+    // respected exactly rather than being rounded to the heavy-task interval.
+    // Runs with API auth because syncBookings() calls requireAuth().
+    let bookingSync: Awaited<ReturnType<typeof autoSyncBookings>> = { ran: false };
+    try {
+      bookingSync = await runWithApiAuth(() => autoSyncBookings());
+    } catch (e) {
+      logger.error("cron", "Booking auto-sync failed", e instanceof Error ? e.message : e);
+    }
 
     // ── Should we run heavy tasks? ───────────────────────────
     // Atomic check-and-set: only one cron invocation runs heavy tasks at a time.
@@ -125,6 +139,7 @@ export async function GET(req: NextRequest) {
       ranHeavyTasks: runHeavy,
       laundry: laundryResult,
       showers: showerResult,
+      bookingSync,
       ...(runHeavy
         ? {
             logged: true,

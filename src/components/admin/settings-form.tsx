@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, useRef, useEffect } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw, Search, Zap } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw, Search, Zap, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1858,8 +1858,15 @@ export function BookingSettings({ settings, resourceTypes: localResourceTypes = 
     danplanner_url: settings.danplanner_url || "https://admin.danplanner.dk",
     danplanner_username: settings.danplanner_username || "",
     danplanner_password: settings.danplanner_password || "",
+    booking_auto_sync: settings.booking_auto_sync || "false",
+    booking_sync_interval_minutes: settings.booking_sync_interval_minutes || "30",
+    booking_sync_product_type: settings.booking_sync_product_type || "all",
   });
   const { isPending, saved, handleSave } = useSave(values);
+
+  // Last automatic sync (written by the cron job)
+  const lastAutoSync = settings._booking_last_sync || "";
+  const lastAutoSyncStatus = settings._booking_last_sync_status || "";
 
   // Local mapping state: Danplanner type ID → local ResourceType ID
   const initialMapping: Record<string, number> = {};
@@ -2245,6 +2252,93 @@ export function BookingSettings({ settings, resourceTypes: localResourceTypes = 
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {isDanplanner && (
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="font-semibold">Automatisk synkronisering</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Hent nye og ændrede bookinger fra Danplanner automatisk — uden at trykke på knappen.
+            </p>
+          </div>
+          <div className="p-5 space-y-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={values.booking_auto_sync === "true"}
+                onChange={(e) => h("booking_auto_sync", e.target.checked ? "true" : "false")}
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <div>
+                <p className="text-sm font-medium">Aktivér automatisk synkronisering</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Cron-jobbet henter bookinger i det valgte interval og opretter/opdaterer gæster automatisk
+                </p>
+              </div>
+            </label>
+
+            {values.booking_auto_sync === "true" && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <Label>Interval</Label>
+                    <select
+                      value={values.booking_sync_interval_minutes}
+                      onChange={(e) => h("booking_sync_interval_minutes", e.target.value)}
+                      className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="5">Hvert 5. minut</option>
+                      <option value="15">Hvert 15. minut</option>
+                      <option value="30">Hver 30. minut</option>
+                      <option value="60">Hver time</option>
+                      <option value="180">Hver 3. time</option>
+                      <option value="360">Hver 6. time</option>
+                      <option value="720">Hver 12. time</option>
+                      <option value="1440">En gang i døgnet</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label>Booking-type</Label>
+                    <select
+                      value={values.booking_sync_product_type}
+                      onChange={(e) => h("booking_sync_product_type", e.target.value)}
+                      className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="all">Alle</option>
+                      <option value="tourist">Turist</option>
+                      <option value="seasonal">Sæson</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="rounded-lg bg-muted/50 p-3 text-xs space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-muted-foreground">
+                      {lastAutoSync ? (
+                        <>Sidste automatiske kørsel: <strong className="text-foreground">{timeAgoDa(lastAutoSync)}</strong></>
+                      ) : (
+                        "Endnu ingen automatisk kørsel"
+                      )}
+                    </span>
+                  </div>
+                  {lastAutoSyncStatus && (
+                    <p className={`pl-[1.375rem] ${lastAutoSyncStatus.startsWith("fejl") ? "text-red-600" : "text-muted-foreground"}`}>
+                      {lastAutoSyncStatus}
+                    </p>
+                  )}
+                  <p className="text-muted-foreground/80 pt-1">
+                    Kræver at cron-jobbet kører (<code className="font-mono">/api/cron</code> hvert 2. minut).
+                    Se Indstillinger → System.
+                  </p>
+                </div>
+              </>
+            )}
+
+            <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
           </div>
         </div>
       )}
