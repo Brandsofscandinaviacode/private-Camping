@@ -6456,12 +6456,27 @@ export async function verifyBooking2FA(code: string) {
   return { success: result.success, error: result.error };
 }
 
+/**
+ * Store a Danplanner session that the provider refreshed on its own after the
+ * old one expired, so the next call reuses it instead of logging in again.
+ * Not a server action itself — passed as a callback into getBookingProvider.
+ */
+async function persistRefreshedBookingSession(cookies: string): Promise<void> {
+  await prisma.globalSetting.upsert({
+    where: { key: "danplanner_cookies" },
+    create: { key: "danplanner_cookies", value: cookies },
+    update: { value: cookies },
+  });
+  logger.info("danplanner", "Persisted refreshed session cookies");
+}
+
 export async function testBookingConnection() {
   await requireAuth();
   const settings = await getGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
+    persistRefreshedBookingSession,
   );
   if (!provider) return { ok: false, error: "Ingen booking-udbyder konfigureret" };
   return provider.testConnection();
@@ -6473,6 +6488,7 @@ export async function fetchBookingResourceTypes() {
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
+    persistRefreshedBookingSession,
   );
   if (!provider) return [];
   return provider.getResourceTypes();
@@ -6484,6 +6500,7 @@ export async function fetchBookingResources(typeId: string) {
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
+    persistRefreshedBookingSession,
   );
   if (!provider) return [];
   return provider.getResources(typeId);
@@ -6497,6 +6514,7 @@ export async function syncBookingResources() {
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
+    persistRefreshedBookingSession,
   );
   if (!provider) return { synced: 0, error: "Ingen booking-udbyder konfigureret" };
 
@@ -6567,6 +6585,7 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
+    persistRefreshedBookingSession,
   );
   if (!provider) return { created: 0, updated: 0, skipped: [] as Array<{ booking: string; reason: string }>, error: "Ingen booking-udbyder konfigureret" };
 

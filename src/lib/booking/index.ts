@@ -9,6 +9,8 @@ export type BookingProviderType = "danplanner" | "none";
 export function getBookingProvider(
   provider: BookingProviderType,
   settings: Record<string, string>,
+  /** Persist a session refreshed by an automatic re-login. */
+  onSessionRefreshed?: (cookies: string) => void | Promise<void>,
 ): BookingProvider | null {
   switch (provider) {
     case "danplanner":
@@ -17,6 +19,7 @@ export function getBookingProvider(
         username: settings.danplanner_username || "",
         password: settings.danplanner_password || "",
         sessionCookies: settings.danplanner_cookies || "",
+        onSessionRefreshed,
       });
     case "none":
     default:

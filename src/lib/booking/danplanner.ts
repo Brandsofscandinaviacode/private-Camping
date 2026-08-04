@@ -6,6 +6,12 @@ interface DanplannerConfig {
   username: string;
   password: string;
   sessionCookies?: string;
+  /**
+   * Called when the provider silently re-authenticates, so the caller can
+   * persist the fresh session. Without it the new cookies are used for the
+   * current request only and the next call has to log in again.
+   */
+  onSessionRefreshed?: (cookies: string) => void | Promise<void>;
 }
 
 function extractCookies(headers: Headers): string[] {
@@ -481,19 +487,62 @@ function parseBookings(html: string): BookingEntry[] {
 }
 
 export function createDanplannerProvider(config: DanplannerConfig): BookingProvider {
-  const cookies = config.sessionCookies || "";
+  // Mutable: refreshed in place when the session expires and we log back in.
+  let cookies = config.sessionCookies || "";
 
-  async function authedFetch(path: string): Promise<Response> {
-    if (!cookies) throw new Error("Ikke forbundet til Danplanner. Log ind først.");
+  /**
+   * Log in again with the stored credentials after the session expires.
+   *
+   * Danplanner's 2FA approves the *IP*, not the session, so once an admin has
+   * verified this server a plain re-login succeeds. If it does come back
+   * needing 2FA we surface that instead of retrying forever.
+   */
+  async function reauthenticate(): Promise<boolean> {
+    if (!config.username || !config.password) {
+      logger.warn("danplanner", "Session expired but no stored credentials to re-login with");
+      return false;
+    }
+    logger.info("danplanner", "Session expired — attempting automatic re-login");
+    const result = await danplannerLogin(config);
+    if (result.success && result.sessionToken) {
+      cookies = result.sessionToken;
+      try {
+        await config.onSessionRefreshed?.(cookies);
+      } catch (e) {
+        logger.error("danplanner", "Could not persist refreshed session", e instanceof Error ? e.message : e);
+      }
+      logger.info("danplanner", "Automatic re-login succeeded");
+      return true;
+    }
+    logger.error("danplanner", "Automatic re-login failed", {
+      needs2FA: result.needs2FA,
+      error: result.error,
+    });
+    return false;
+  }
+
+  /** True when a response means "your session is gone", not a real failure. */
+  function isSessionExpired(status: number, location: string, html?: string): boolean {
+    if (status === 401 || status === 403) return true;
+    if (status >= 300 && status < 400 && /login/i.test(location)) return true;
+    if (html && (isLoginPage(html) || isApprovePage(html))) return true;
+    return false;
+  }
+
+  async function authedFetch(path: string, isRetry = false): Promise<Response> {
+    if (!cookies) {
+      // No session at all — try to establish one before giving up.
+      if (!isRetry && (await reauthenticate())) return authedFetch(path, true);
+      throw new Error("Ikke forbundet til Danplanner. Log ind først.");
+    }
     const res = await fetch(`${config.baseUrl}${path}`, {
       headers: { Cookie: cookies },
       redirect: "manual",
     });
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get("location") || "";
-      if (loc.includes("login") || loc.includes("Login")) {
-        throw new Error("Session udløbet. Log ind igen.");
-      }
+    const loc = res.headers.get("location") || "";
+    if (isSessionExpired(res.status, loc)) {
+      if (!isRetry && (await reauthenticate())) return authedFetch(path, true);
+      throw new Error("Session udløbet — automatisk login mislykkedes. Log ind igen under Indstillinger → Booking.");
     }
     return res;
   }
@@ -536,10 +585,10 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
     },
 
     async getBookings(productType = "all") {
-      if (!cookies) throw new Error("Ikke forbundet til Danplanner. Log ind først.");
-
       const productTypeMap: Record<string, string> = { all: "0", tourist: "1", seasonal: "2" };
       const productTypeValue = productTypeMap[productType] || "0";
+
+      const attempt = async (isRetry: boolean): Promise<BookingEntry[]> => {
 
       // First GET dashboard to obtain a fresh antiforgery token (some Danplanner
       // AJAX endpoints validate the token even though the cookie alone is sent
@@ -600,6 +649,14 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
         }
       }
 
+      // Session gone (401/403, redirect to login, or a login/approve page
+      // served with 200) — re-authenticate once, then run the whole flow
+      // again so the antiforgery token is fetched with the new cookies too.
+      if (isSessionExpired(res.status, res.headers.get("location") || "", html)) {
+        if (!isRetry && (await reauthenticate())) return attempt(true);
+        throw new Error("Session udløbet — automatisk login mislykkedes. Log ind igen under Indstillinger → Booking.");
+      }
+
       if (res.status >= 400) {
         logger.error("danplanner", "GetGuests failed", {
           status: res.status,
@@ -608,13 +665,16 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
         throw new Error(`GetGuests fejlede (status ${res.status})`);
       }
 
-      if (isLoginPage(html) || isApprovePage(html)) {
-        throw new Error("Session udløbet. Log ind igen.");
-      }
-
       const bookings = parseBookings(html);
       logger.info("danplanner", "Parsed bookings", { count: bookings.length });
       return bookings;
+      }
+
+      // No session yet — establish one before the first attempt.
+      if (!cookies && !(await reauthenticate())) {
+        throw new Error("Ikke forbundet til Danplanner. Log ind først.");
+      }
+      return attempt(false);
     },
   };
 }
