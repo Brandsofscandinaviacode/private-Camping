@@ -202,17 +202,38 @@ export function SystemStatus() {
           </div>
 
           {!status.cronLastRun && (
-            <div className="mt-2 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground space-y-1.5">
-              <p className="font-medium">Opsætning af cron:</p>
-              <p>Sæt først en API-nøgle nedenfor under &quot;REST API&quot;, og kør så på din Raspberry Pi:</p>
-              <code className="block bg-background p-2 rounded text-xs font-mono">
-                crontab -e
-              </code>
-              <p>Tilføj denne linje (udskift <code className="bg-background px-1 rounded">DIN_API_NØGLE</code>):</p>
+            <div className="mt-2 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground space-y-2">
+              <p className="font-medium text-foreground">Opsætning af baggrundsjob</p>
+              <p>
+                Baggrundsjobbet logger forbrug, afslutter bade/vask, henter bookinger og
+                opdaterer spotpris-afregning. Sæt først en API-nøgle nedenfor under
+                &quot;REST API&quot;.
+              </p>
+
+              <p className="font-medium text-foreground pt-1">Coolify (anbefalet)</p>
+              <p>
+                Gå til din CampSense-ressource → <strong>Scheduled Tasks</strong> → tilføj en
+                opgave:
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                <li>Navn: <code className="bg-background px-1 rounded">cron</code></li>
+                <li>Frequency: <code className="bg-background px-1 rounded">*/2 * * * *</code></li>
+                <li>Container: <code className="bg-background px-1 rounded">app</code></li>
+                <li>Command:</li>
+              </ul>
               <code className="block bg-background p-2 rounded text-xs font-mono break-all">
-                */10 * * * * curl -s -H &quot;Authorization: Bearer DIN_API_NØGLE&quot; http://localhost:3000/api/cron &gt; /dev/null
+                curl -s -H &quot;Authorization: Bearer DIN_API_NØGLE&quot; http://localhost:3000/api/cron
               </code>
-              <p>Kør mindst hvert 10. minut — dette logger forbrug og opdaterer tidsvægtet spotpris-afregning.</p>
+
+              <p className="font-medium text-foreground pt-1">Alternativ: crontab på serveren</p>
+              <code className="block bg-background p-2 rounded text-xs font-mono break-all">
+                */2 * * * * curl -s -H &quot;Authorization: Bearer DIN_API_NØGLE&quot; https://dit-domæne.dk/api/cron &gt; /dev/null
+              </code>
+
+              <p className="pt-1">
+                Kør mindst hvert 10. minut. Hvert 2. minut anbefales — så stopper bade og
+                vaskemaskiner præcist til tiden.
+              </p>
             </div>
           )}
         </div>
