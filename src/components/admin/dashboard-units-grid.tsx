@@ -7,14 +7,11 @@ import {
   ChevronDown, LayoutGrid, List, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { UnitCard, UnitCardCompact, UnitRow, STATUS, statusKey, type UnitStatusKey } from "@/components/admin/cabin-card";
+import { UnitCard, UnitRow, STATUS, statusKey, type UnitStatusKey } from "@/components/admin/cabin-card";
 import { reorderUnits, moveUnitToResourceType } from "@/lib/actions";
 
 type LucideIcon = typeof Home;
 const ICONS: Record<string, LucideIcon> = { Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor };
-
-// Groups larger than this render as a dense table instead of a card wall.
-const LIST_THRESHOLD = 20;
 
 interface UnitData {
   unit: {
@@ -33,7 +30,7 @@ interface UnitData {
 interface ResourceTypeInfo { id: number; name: string; icon: string }
 interface Props { unitData: UnitData[]; resourceTypes: ResourceTypeInfo[] }
 
-type ViewMode = "normal" | "compact";
+type ViewMode = "list" | "cards";
 type Filter = "all" | UnitStatusKey;
 
 function usePersistedState<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
@@ -54,7 +51,8 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
   const [, startTransition] = useTransition();
   const [pending, setPending] = useState(false);
 
-  const [viewMode, setViewMode] = usePersistedState<ViewMode>("dashboard-view", "normal");
+  // New storage key: the old one held "normal"/"compact", which no longer map.
+  const [viewMode, setViewMode] = usePersistedState<ViewMode>("dashboard-view-mode", "list");
   const [collapsed, setCollapsed] = usePersistedState<Record<string, boolean>>("dashboard-collapsed", {});
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -135,21 +133,6 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
   }
 
   function renderCards(items: UnitData[]) {
-    if (viewMode === "compact") {
-      return (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5">
-          {items.map((d) => editMode ? (
-            <DraggableUnitCard key={d.unit.id} data={d} editMode resourceTypes={resourceTypes}
-              isDragging={dragId === d.unit.id} isDragOver={dragOverId === d.unit.id}
-              onDragStart={() => handleDragStart(d.unit.id)} onDragEnd={handleDragEnd}
-              onDragOver={(e) => handleDragOver(e, d.unit.id)} onDrop={() => handleDrop(d.unit.id)}
-              onMove={(rt) => handleMoveUnit(d.unit.id, rt)} isMoving={movingUnitId === d.unit.id} compact />
-          ) : (
-            <UnitCardCompact key={d.unit.id} unit={d.unit} activeGuestName={d.activeGuestName} pendingGuestName={d.pendingGuestName} />
-          ))}
-        </div>
-      );
-    }
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
         {items.map((d) => (
@@ -184,9 +167,9 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
     const Icon = rt ? (ICONS[rt.icon] || Home) : Home;
     const name = rt ? rt.name : "Ukategoriseret";
     const isCollapsed = collapsed[key] ?? false;
-    // Large groups or PITCH groups → table (but keep cards in edit mode so drag-reorder still works)
-    const allPitch = all.length > 0 && all.every((d) => d.unit.type === "PITCH");
-    const asTable = !editMode && (all.length > LIST_THRESHOLD || allPitch);
+    // Every group renders the same way — the view toggle decides, not the unit
+    // type. Edit mode always falls back to cards so drag-reorder still works.
+    const asTable = !editMode && viewMode === "list";
 
     return (
       <section key={key}>
@@ -234,13 +217,13 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
         <div className="flex-1" />
         {pending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         <div className="flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
-          <button type="button" onClick={() => setViewMode("normal")} title="Kort"
-            className={`px-2.5 py-1.5 rounded-md transition ${viewMode === "normal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-            <LayoutGrid className="h-3.5 w-3.5" />
-          </button>
-          <button type="button" onClick={() => setViewMode("compact")} title="Kompakt"
-            className={`px-2.5 py-1.5 rounded-md transition ${viewMode === "compact" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+          <button type="button" onClick={() => setViewMode("list")} title="Liste"
+            className={`px-2.5 py-1.5 rounded-md transition ${viewMode === "list" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
             <List className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={() => setViewMode("cards")} title="Kort"
+            className={`px-2.5 py-1.5 rounded-md transition ${viewMode === "cards" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+            <LayoutGrid className="h-3.5 w-3.5" />
           </button>
         </div>
         <Button variant={editMode ? "default" : "outline"} size="sm" onClick={() => setEditMode(!editMode)}>
@@ -268,10 +251,10 @@ interface DraggableProps {
   data: UnitData; editMode: boolean; isDragging: boolean; isDragOver: boolean;
   resourceTypes: ResourceTypeInfo[];
   onDragStart: () => void; onDragEnd: () => void; onDragOver: (e: React.DragEvent) => void; onDrop: () => void;
-  onMove: (newResourceTypeId: number | null) => void; isMoving: boolean; compact?: boolean;
+  onMove: (newResourceTypeId: number | null) => void; isMoving: boolean;
 }
 
-function DraggableUnitCard({ data, editMode, isDragging, isDragOver, resourceTypes, onDragStart, onDragEnd, onDragOver, onDrop, onMove, isMoving, compact }: DraggableProps) {
+function DraggableUnitCard({ data, editMode, isDragging, isDragOver, resourceTypes, onDragStart, onDragEnd, onDragOver, onDrop, onMove, isMoving }: DraggableProps) {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
   const { unit, haStates, activeGuestName, pendingGuestName, activeCheckOut, pendingCheckIn } = data;
 
@@ -301,13 +284,9 @@ function DraggableUnitCard({ data, editMode, isDragging, isDragOver, resourceTyp
       {editMode ? (
         <div onClick={(e) => e.preventDefault()}>
           <div style={{ pointerEvents: "none" }}>
-            {compact
-              ? <UnitCardCompact unit={unit} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} />
-              : <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} />}
+            <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} />
           </div>
         </div>
-      ) : compact ? (
-        <UnitCardCompact unit={unit} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} />
       ) : (
         <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} />
       )}

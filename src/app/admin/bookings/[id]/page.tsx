@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Zap, Droplets, Flame, Calendar, Mail, Hash, Phone, Receipt, FileText } from "lucide-react";
+import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, Receipt, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { getSessionById, getPricing } from "@/lib/actions";
@@ -51,7 +51,7 @@ export default async function BookingDetailPage({
     ? Math.max(0, session.endWaterLiters - session.startWaterLiters) : null;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-4xl">
+    <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-7xl">
       <Breadcrumbs
         items={[
           { label: "Bookinger", href: "/admin/bookings" },
@@ -99,61 +99,55 @@ export default async function BookingDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ═══ Booking (details + edit) ═══ */}
-        <div className="space-y-5">
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-            <div className="px-5 py-4 border-b border-border">
-              <h2 className="font-semibold">Booking detaljer</h2>
-            </div>
-            <div className="p-5 space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Hash className="h-4 w-4" />
-                  Booking nr.
+      {/* ═══ TOP: booking details + statement actions ═══ */}
+      <div className="space-y-5">
+        <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-semibold">Booking detaljer</h2>
+            <CopyButton text={`/guest/${session.guestPortalToken}`} label="Kopiér gæstelink" />
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-5 text-sm">
+              {/* Kontakt */}
+              <div className="space-y-2.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Kontakt</p>
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="truncate">{session.guestEmail || "—"}</span>
                 </div>
-                <span>{session.bookingRef || "—"}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Mail className="h-4 w-4" />
-                  Email
+                <div className="flex items-center gap-2">
+                  <Phone className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span>{session.guestPhone || "—"}</span>
                 </div>
-                <span>{session.guestEmail || "—"}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Phone className="h-4 w-4" />
-                  Telefon
+                <div className="flex items-center gap-2">
+                  <Hash className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="truncate">{session.bookingRef || "—"}</span>
                 </div>
-                <span>{session.guestPhone || "—"}</span>
               </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Calendar className="h-4 w-4" />
-                  Check-in
+
+              {/* Ophold */}
+              <div className="space-y-2.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Ophold</p>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">Check-in</span>
+                  <span className="text-right">{new Date(session.checkInTime).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
                 </div>
-                <span>{new Date(session.checkInTime).toLocaleString("da-DK")}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Calendar className="h-4 w-4" />
-                  Check-out
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">Check-out</span>
+                  <span className="text-right">{session.checkOutTime ? new Date(session.checkOutTime).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</span>
                 </div>
-                <span>{session.checkOutTime ? new Date(session.checkOutTime).toLocaleString("da-DK") : "—"}</span>
-              </div>
-              {session.expectedCheckOut && (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Calendar className="h-4 w-4" />
-                    Forventet checkout
+                {session.expectedCheckOut && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Forventet</span>
+                    <span className="text-right">{new Date(session.expectedCheckOut).toLocaleDateString("da-DK", { day: "numeric", month: "short", year: "numeric" })}</span>
                   </div>
-                  <span>{new Date(session.expectedCheckOut).toLocaleDateString("da-DK")}</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Afregning</span>
-                <span>
+                )}
+              </div>
+
+              {/* Afregning */}
+              <div className="space-y-2.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Afregning</p>
+                <div>
                   {session.billingMode === "PREPAID" ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
                       Forudbetalt {session.prepaidAmount ? `(${session.prepaidAmount.toFixed(2)} DKK)` : ""}
@@ -161,25 +155,69 @@ export default async function BookingDetailPage({
                   ) : (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Bagudbetalt</span>
                   )}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Gæsteportal</span>
-                <CopyButton text={`/guest/${session.guestPortalToken}`} label="Kopiér link" />
-              </div>
-              {session.notes && (
-                <>
-                  <Separator />
-                  <div>
-                    <span className="text-muted-foreground text-xs">Bemærkninger</span>
-                    <p className="mt-1">{session.notes}</p>
+                </div>
+                {session.totalCost != null && (
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    <span className="text-muted-foreground">Slutopgørelse</span>
+                    <span className="font-semibold tabular-nums">{session.totalCost.toFixed(2)} DKK</span>
                   </div>
-                </>
+                )}
+              </div>
+            </div>
+
+            {session.notes && (
+              <>
+                <Separator className="my-4" />
+                <div className="text-sm">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Bemærkninger</p>
+                  <p>{session.notes}</p>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Statement / checkout actions live with the booking they act on */}
+          <div className="px-5 py-4 border-t border-border bg-muted/30 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <FileText className="h-4 w-4 text-primary shrink-0" />
+              <p className="text-xs text-muted-foreground">
+                {isPendingSession
+                  ? "Importeret booking — vælg afregningsform og aktivér."
+                  : isActive && !session.unit.isLongTerm
+                    ? "Checker ud, aflæser målere og opretter afsluttende faktura."
+                    : "Udskriftsvenlig opgørelse med forbrug og skyldigt beløb."}
+              </p>
+            </div>
+            <div className="shrink-0">
+              {isPendingSession ? (
+                <BookingActivateButton
+                  sessionId={session.id}
+                  guestName={session.guestName}
+                  unitName={session.unit.name}
+                  initialEmail={session.guestEmail}
+                  initialPhone={session.guestPhone}
+                  initialBookingRef={session.bookingRef}
+                  initialExpectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : null}
+                />
+              ) : isActive && !session.unit.isLongTerm ? (
+                <BookingCheckoutButton
+                  sessionId={session.id}
+                  guestName={session.guestName}
+                  unitName={session.unit.name}
+                />
+              ) : (
+                <Link href={`/admin/bookings/${session.id}/statement`}>
+                  <Button variant="outline" size="sm">
+                    <FileText className="h-4 w-4 mr-2" />
+                    Vis opgørelse
+                  </Button>
+                </Link>
               )}
             </div>
           </div>
+        </div>
 
-          <SessionEditForm
+        <SessionEditForm
             sessionId={session.id}
             guestName={session.guestName}
             guestEmail={session.guestEmail || ""}
@@ -201,10 +239,12 @@ export default async function BookingDetailPage({
             hasWaterMeter={!!session.unit.hardware?.hasWater}
             isActive={isActive}
           />
-        </div>
+      </div>
 
-        {/* ═══ Forbrug (live + fordeling + trend) ═══ */}
-        <div className="space-y-5">
+      {/* ═══ Forbrug (venstre) + Økonomi (højre) ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* Left: consumption */}
+        <div className="lg:col-span-2 space-y-5">
           {isActive && (
             <LiveConsumption
               sessionId={session.id}
@@ -223,151 +263,14 @@ export default async function BookingDetailPage({
           )}
 
           {!isPendingSession && (<>
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-border">
-              <h2 className="font-semibold">Forbrugsfordeling</h2>
+              <h2 className="font-semibold">Forbrug og køb</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Alt gæsten har brugt under opholdet — opdateres løbende, uafhængigt af fakturering
+              </p>
             </div>
-            <div className="p-5 space-y-4">
-              {/* Electricity — main meter */}
-              <div className="rounded-lg bg-muted/50 p-4">
-                <div className="flex items-center gap-2.5 mb-3">
-                  <div className="h-8 w-8 rounded-lg bg-yellow-50 flex items-center justify-center">
-                    <Zap className="h-4 w-4 text-yellow-500" />
-                  </div>
-                  <span className="font-medium">{hasHeatingMeter ? "Elektricitet (hovedmåler)" : "Elektricitet"}</span>
-                </div>
-                {session.startKwh != null ? (
-                  <div className="space-y-1.5 text-sm">
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>Start</span>
-                      <span>{session.startKwh.toFixed(2)} kWh</span>
-                    </div>
-                    {session.endKwh != null && (
-                      <>
-                        <div className="flex justify-between text-muted-foreground">
-                          <span>Slut</span>
-                          <span>{session.endKwh.toFixed(2)} kWh</span>
-                        </div>
-                        <Separator />
-                        <div className="flex justify-between font-medium">
-                          <span>{usedKwhMain?.toFixed(2)} kWh</span>
-                        </div>
-                      </>
-                    )}
-                    {session.endKwh == null && (
-                      <p className="text-xs text-muted-foreground">Måling aktiv</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Ingen elmåler</p>
-                )}
-              </div>
-
-              {/* Heating — separate meter */}
-              {hasHeatingMeter && (
-                <div className="rounded-lg bg-muted/50 p-4">
-                  <div className="flex items-center gap-2.5 mb-3">
-                    <div className="h-8 w-8 rounded-lg bg-orange-50 flex items-center justify-center">
-                      <Flame className="h-4 w-4 text-orange-500" />
-                    </div>
-                    <span className="font-medium">Varme</span>
-                  </div>
-                  {session.startHeatingKwh != null ? (
-                    <div className="space-y-1.5 text-sm">
-                      <div className="flex justify-between text-muted-foreground">
-                        <span>Start</span>
-                        <span>{session.startHeatingKwh.toFixed(2)} kWh</span>
-                      </div>
-                      {session.endHeatingKwh != null && (
-                        <>
-                          <div className="flex justify-between text-muted-foreground">
-                            <span>Slut</span>
-                            <span>{session.endHeatingKwh.toFixed(2)} kWh</span>
-                          </div>
-                          <Separator />
-                          <div className="flex justify-between font-medium">
-                            <span>{usedKwhHeating?.toFixed(2)} kWh</span>
-                          </div>
-                        </>
-                      )}
-                      {session.endHeatingKwh == null && (
-                        <p className="text-xs text-muted-foreground">Måling aktiv</p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Ingen varmemåler</p>
-                  )}
-                </div>
-              )}
-
-              {/* Combined electricity total */}
-              {usedKwh != null && session.totalElectricityCost != null && (
-                <div className="rounded-lg bg-muted/50 p-4">
-                  <div className="flex items-center gap-2.5 mb-3">
-                    <div className="h-8 w-8 rounded-lg bg-yellow-100 flex items-center justify-center">
-                      <Zap className="h-4 w-4 text-yellow-600" />
-                    </div>
-                    <span className="font-medium">Samlet el-forbrug</span>
-                  </div>
-                  <div className="space-y-1.5 text-sm">
-                    <div className="flex justify-between font-medium">
-                      <span>{usedKwh.toFixed(2)} kWh</span>
-                      <span>{session.totalElectricityCost.toFixed(2)} DKK</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {pricing.pricePerKwh.toFixed(2)} DKK/kWh
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Water */}
-              <div className="rounded-lg bg-muted/50 p-4">
-                <div className="flex items-center gap-2.5 mb-3">
-                  <div className="h-8 w-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                    <Droplets className="h-4 w-4 text-blue-500" />
-                  </div>
-                  <span className="font-medium">Vand</span>
-                </div>
-                {session.startWaterLiters != null ? (
-                  <div className="space-y-1.5 text-sm">
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>Start</span>
-                      <span>{session.startWaterLiters.toFixed(0)} L</span>
-                    </div>
-                    {session.endWaterLiters != null && (
-                      <>
-                        <div className="flex justify-between text-muted-foreground">
-                          <span>Slut</span>
-                          <span>{session.endWaterLiters.toFixed(0)} L</span>
-                        </div>
-                        <Separator />
-                        <div className="flex justify-between font-medium">
-                          <span>{usedWater?.toFixed(0)} L</span>
-                          <span>{session.totalWaterCost?.toFixed(2)} DKK</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {pricing.pricePerLiterWater.toFixed(2)} DKK/L
-                        </p>
-                      </>
-                    )}
-                    {session.endWaterLiters == null && (
-                      <p className="text-xs text-muted-foreground">Måling aktiv</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Ingen vandmåler</p>
-                )}
-              </div>
-
-              {/* Total */}
-              {session.totalCost != null && (
-                <div className="flex items-center justify-between p-4 rounded-lg bg-primary/5 border border-primary/10">
-                  <span className="text-lg font-semibold">Total</span>
-                  <span className="text-xl font-bold tabular-nums">{session.totalCost.toFixed(2)} <span className="text-sm text-muted-foreground">DKK</span></span>
-                </div>
-              )}
-            </div>
+            <SessionCharges sessionId={session.id} />
           </div>
 
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
@@ -379,22 +282,109 @@ export default async function BookingDetailPage({
             </div>
           </div>
 
+          {/* Meter readings — compact table instead of one card per meter */}
           <div className="rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-border">
-              <h2 className="font-semibold">Forbrug og køb</h2>
-              <p className="text-xs text-muted-foreground mt-1">
-                Alt gæsten har brugt under opholdet — opdateres løbende, uafhængigt af fakturering
-              </p>
+              <h2 className="font-semibold">Målerstande</h2>
+              <p className="text-xs text-muted-foreground mt-1">Start- og slutaflæsning for dette ophold</p>
             </div>
-            <SessionCharges sessionId={session.id} />
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-muted-foreground border-b border-border">
+                    <th className="text-left font-medium px-5 py-2">Måler</th>
+                    <th className="text-right font-medium px-3 py-2">Start</th>
+                    <th className="text-right font-medium px-3 py-2">Slut</th>
+                    <th className="text-right font-medium px-3 py-2">Forbrug</th>
+                    <th className="text-right font-medium px-5 py-2">Beløb</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  <tr>
+                    <td className="px-5 py-2.5">
+                      <span className="flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-yellow-500 shrink-0" />
+                        {hasHeatingMeter ? "El (hoved)" : "El"}
+                      </span>
+                    </td>
+                    {session.startKwh != null ? (
+                      <>
+                        <td className="text-right px-3 py-2.5 tabular-nums text-muted-foreground">{session.startKwh.toFixed(2)}</td>
+                        <td className="text-right px-3 py-2.5 tabular-nums text-muted-foreground">
+                          {session.endKwh != null ? session.endKwh.toFixed(2) : <span className="text-xs">måler aktiv</span>}
+                        </td>
+                        <td className="text-right px-3 py-2.5 tabular-nums font-medium">{usedKwhMain != null ? `${usedKwhMain.toFixed(2)} kWh` : "—"}</td>
+                        <td className="text-right px-5 py-2.5 tabular-nums">—</td>
+                      </>
+                    ) : (
+                      <td className="px-3 py-2.5 text-muted-foreground text-xs" colSpan={4}>Ingen elmåler</td>
+                    )}
+                  </tr>
+
+                  {hasHeatingMeter && (
+                    <tr>
+                      <td className="px-5 py-2.5">
+                        <span className="flex items-center gap-2">
+                          <Flame className="h-4 w-4 text-orange-500 shrink-0" />
+                          Varme
+                        </span>
+                      </td>
+                      {session.startHeatingKwh != null ? (
+                        <>
+                          <td className="text-right px-3 py-2.5 tabular-nums text-muted-foreground">{session.startHeatingKwh.toFixed(2)}</td>
+                          <td className="text-right px-3 py-2.5 tabular-nums text-muted-foreground">
+                            {session.endHeatingKwh != null ? session.endHeatingKwh.toFixed(2) : <span className="text-xs">måler aktiv</span>}
+                          </td>
+                          <td className="text-right px-3 py-2.5 tabular-nums font-medium">{usedKwhHeating != null ? `${usedKwhHeating.toFixed(2)} kWh` : "—"}</td>
+                          <td className="text-right px-5 py-2.5 tabular-nums">—</td>
+                        </>
+                      ) : (
+                        <td className="px-3 py-2.5 text-muted-foreground text-xs" colSpan={4}>Ingen varmemåler</td>
+                      )}
+                    </tr>
+                  )}
+
+                  {usedKwh != null && session.totalElectricityCost != null && (
+                    <tr className="bg-muted/30">
+                      <td className="px-5 py-2.5 font-medium">El i alt</td>
+                      <td className="px-3 py-2.5" colSpan={2} />
+                      <td className="text-right px-3 py-2.5 tabular-nums font-medium">{usedKwh.toFixed(2)} kWh</td>
+                      <td className="text-right px-5 py-2.5 tabular-nums font-medium">{session.totalElectricityCost.toFixed(2)} DKK</td>
+                    </tr>
+                  )}
+
+                  <tr>
+                    <td className="px-5 py-2.5">
+                      <span className="flex items-center gap-2">
+                        <Droplets className="h-4 w-4 text-blue-500 shrink-0" />
+                        Vand
+                      </span>
+                    </td>
+                    {session.startWaterLiters != null ? (
+                      <>
+                        <td className="text-right px-3 py-2.5 tabular-nums text-muted-foreground">{session.startWaterLiters.toFixed(0)}</td>
+                        <td className="text-right px-3 py-2.5 tabular-nums text-muted-foreground">
+                          {session.endWaterLiters != null ? session.endWaterLiters.toFixed(0) : <span className="text-xs">måler aktiv</span>}
+                        </td>
+                        <td className="text-right px-3 py-2.5 tabular-nums font-medium">{usedWater != null ? `${usedWater.toFixed(0)} L` : "—"}</td>
+                        <td className="text-right px-5 py-2.5 tabular-nums">{session.totalWaterCost != null ? `${session.totalWaterCost.toFixed(2)} DKK` : "—"}</td>
+                      </>
+                    ) : (
+                      <td className="px-3 py-2.5 text-muted-foreground text-xs" colSpan={4}>Ingen vandmåler</td>
+                    )}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="px-5 py-3 border-t border-border text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
+              <span>El: {pricing.pricePerKwh.toFixed(2)} DKK/kWh</span>
+              <span>Vand: {pricing.pricePerLiterWater.toFixed(2)} DKK/L</span>
+            </div>
           </div>
           </>)}
         </div>
-      </div>
 
-      {/* ═══ Betaling + Vask ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Skyldigt beløb + Betaling */}
+        {/* Right: saldo, vaskekredit, betaling */}
         <div className="space-y-5">
           {session.billingMode === "PREPAID" && (
             <PrepaidBalance
@@ -457,57 +447,6 @@ export default async function BookingDetailPage({
             );
           })()}
 
-          {/* Check-out / statement actions */}
-          <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-            <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-              <FileText className="h-4 w-4 text-primary" />
-              <h2 className="font-semibold">Opgørelse</h2>
-            </div>
-            <div className="p-5 space-y-3">
-              {isPendingSession ? (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    Denne booking er importeret og afventer check-in.
-                    Vælg afregningsform og aktivér bookingen.
-                  </p>
-                  <BookingActivateButton
-                    sessionId={session.id}
-                    guestName={session.guestName}
-                    unitName={session.unit.name}
-                    initialEmail={session.guestEmail}
-                    initialPhone={session.guestPhone}
-                    initialBookingRef={session.bookingRef}
-                    initialExpectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : null}
-                  />
-                </>
-              ) : isActive && !session.unit.isLongTerm ? (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    Checker gæsten ud, aflæser målere, opretter afsluttende faktura
-                    hvis der er nyt forbrug, og åbner en udskrivbar opgørelse.
-                  </p>
-                  <BookingCheckoutButton
-                    sessionId={session.id}
-                    guestName={session.guestName}
-                    unitName={session.unit.name}
-                  />
-                </>
-              ) : (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    Udskriftsvenlig opgørelse med forbrug pr. periode og skyldigt beløb.
-                  </p>
-                  <Link href={`/admin/bookings/${session.id}/statement`}>
-                    <Button variant="outline" className="w-full">
-                      <FileText className="h-4 w-4 mr-2" />
-                      Vis opgørelse
-                    </Button>
-                  </Link>
-                </>
-              )}
-            </div>
-          </div>
-
           {session.billingMode !== "PREPAID" && (
             <SessionActions
               sessionId={session.id}
@@ -516,10 +455,7 @@ export default async function BookingDetailPage({
               paidAt={session.paidAt?.toISOString() ?? null}
             />
           )}
-        </div>
 
-        {/* Right: Vask */}
-        <div className="space-y-5">
           {isActive && (
             <LaundryCreditSection
               sessionId={session.id}

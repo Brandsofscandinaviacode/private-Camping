@@ -1,18 +1,18 @@
 import Link from "next/link";
 import {
   getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession,
-  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing, getGlobalSettings,
+  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing,
 } from "@/lib/actions";
 import { getDashboardMovements } from "@/lib/dashboard-actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
 import { DashboardKpis } from "@/components/admin/dashboard-kpis";
-import { Tent, AlertCircle, AlertTriangle, WifiOff } from "lucide-react";
+import { Tent, AlertCircle, AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, settings] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements] = await Promise.all([
     getUnits(),
     getResourceTypes(),
     getUnpaidCount(),
@@ -20,9 +20,7 @@ export default async function AdminDashboard() {
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
     getEffectiveElPricing().catch(() => null),
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
-    getGlobalSettings(),
   ]);
-  const haConfigured = !!settings.ha_url || settings.mqtt_enabled === "true";
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
@@ -58,12 +56,6 @@ export default async function AdminDashboard() {
   const reservedCount = unitData.filter((d) => d.unit.status !== "OCCUPIED" && !!d.pendingGuestName).length;
   const vacantCount = units.length - occupiedCount - reservedCount;
 
-  // Consolidated HA status — one banner instead of a label on every card.
-  // Only show when HA is actually configured (ha_url is set).
-  const haTracked = haConfigured ? unitData.filter((d) => d.haStates !== null).length : 0;
-  const haOffline = haConfigured ? unitData.filter((d) => d.haStates && !d.haStates.haReachable).length : 0;
-  const haAllOffline = haTracked > 0 && haOffline === haTracked;
-
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-7xl">
       {/* Header */}
@@ -92,7 +84,7 @@ export default async function AdminDashboard() {
       />
 
       {/* Consolidated alerts */}
-      {(unpaidCount > 0 || haOffline > 0 || alarmResult.alerts.length > 0) && (
+      {(unpaidCount > 0 || alarmResult.alerts.length > 0) && (
         <div className="space-y-2.5">
           {unpaidCount > 0 && (
             <Link href="/admin/bookings?filter=unpaid">
@@ -104,23 +96,6 @@ export default async function AdminDashboard() {
                   <span className="font-bold">{unpaidCount}</span> {unpaidCount === 1 ? "booking" : "bookinger"} afventer betaling
                 </p>
                 <span className="text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-3 py-1.5">Se bookinger</span>
-              </div>
-            </Link>
-          )}
-
-          {haOffline > 0 && (
-            <Link href="/admin/settings">
-              <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
-                <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                  <WifiOff className="h-[18px] w-[18px] text-amber-600" />
-                </div>
-                <p className="text-sm text-amber-800 flex-1">
-                  <span className="font-bold">Home Assistant er offline.</span>{" "}
-                  {haAllOffline
-                    ? "Live styring og forbrugsmålinger er utilgængelige for alle enheder."
-                    : `Live data mangler for ${haOffline} af ${haTracked} enheder.`}
-                </p>
-                <span className="text-xs font-semibold text-amber-700 border border-amber-300 rounded-lg px-3 py-1.5">Genopret forbindelse</span>
               </div>
             </Link>
           )}

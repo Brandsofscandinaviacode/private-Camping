@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Save, Send, Loader2 } from "lucide-react";
+import { Save, Send, Loader2, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,6 +56,9 @@ export function SessionEditForm({
   const [saved, setSaved] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendMsg, setResendMsg] = useState("");
+  // Collapsed by default — editing is a secondary action, and the full form
+  // dominated the page when always open.
+  const [expanded, setExpanded] = useState(false);
   const [values, setValues] = useState({
     guestName: initialName,
     guestEmail: initialEmail,
@@ -116,19 +119,37 @@ export function SessionEditForm({
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-        <h2 className="font-semibold">Redigér booking</h2>
+      <div className="px-5 py-4 flex items-center justify-between gap-3">
+        <button
+          className="flex items-center gap-2 text-left flex-1 min-w-0"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+        >
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+          )}
+          <Pencil className="h-4 w-4 text-muted-foreground shrink-0" />
+          <h2 className="font-semibold truncate">Redigér booking</h2>
+          {!expanded && (
+            <span className="text-xs text-muted-foreground hidden sm:inline">
+              Gæsteinfo, målerstande og priser
+            </span>
+          )}
+        </button>
         <Button variant="outline" size="sm" onClick={handleResend} disabled={resending}>
           {resending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-          {resending ? "Sender..." : "Gensend SMS/email"}
+          {resending ? "Sender..." : "Gensend"}
         </Button>
       </div>
       {resendMsg && (
-        <div className={`mx-5 mt-3 text-sm p-2 rounded-lg ${resendMsg === "Sendt!" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+        <div className={`mx-5 mb-3 text-sm p-2 rounded-lg ${resendMsg === "Sendt!" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
           {resendMsg}
         </div>
       )}
-      <div className="p-5 space-y-4">
+      {expanded && (
+      <div className="p-5 pt-0 space-y-4 border-t border-border mt-1">
         <div>
           <Label className="text-sm text-muted-foreground">Gæstenavn</Label>
           <Input
@@ -309,6 +330,7 @@ export function SessionEditForm({
           {isPending ? "Gemmer..." : saved ? "Gemt!" : "Gem ændringer"}
         </Button>
       </div>
+      )}
     </div>
   );
 }
