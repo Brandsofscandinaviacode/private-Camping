@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, useRef, useEffect } from "react";
-import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw, Search, Zap, Clock } from "lucide-react";
+import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw, Search, Zap, Clock, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,7 +44,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
   const [invoiceTestLoading, setInvoiceTestLoading] = useState(false);
   const [invoiceTestResult, setInvoiceTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [values, setValues] = useState({
-    site_url: settings.site_url || "http://localhost:3000",
+    site_url: settings.site_url || "",
     price_per_kwh: settings.price_per_kwh || "2.50",
     price_per_liter_water: settings.price_per_liter_water || "0.05",
     currency: settings.currency || "DKK",
@@ -85,8 +85,24 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
         </div>
         <div className="p-5">
           <Label htmlFor="site_url" className="text-sm text-muted-foreground">URL til CampSense</Label>
-          <Input id="site_url" value={values.site_url} onChange={(e) => h("site_url", e.target.value)} placeholder="http://192.168.1.100:3000" className="mt-1" />
-          <p className="text-xs text-muted-foreground mt-1.5">Bruges til links i SMS og email-notifikationer</p>
+          <Input id="site_url" value={values.site_url} onChange={(e) => h("site_url", e.target.value)} placeholder="https://campsense.dit-domæne.dk" className="mt-1" />
+          <p className="text-xs text-muted-foreground mt-1.5">
+            Den adresse dine gæster bruger. Indgår i links i SMS, email og QR-koder.
+          </p>
+          {(!values.site_url.trim() || /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(values.site_url.trim())) && (
+            <div className="mt-3 flex items-start gap-2.5 text-sm p-3 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
+              <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Gæstelinks virker ikke uden for serveren</p>
+                <p className="text-xs mt-0.5">
+                  {values.site_url.trim()
+                    ? "Adressen peger på localhost, som kun virker på serveren selv."
+                    : "Uden en adresse falder links tilbage til localhost."}
+                  {" "}Gæster der modtager et link kan ikke åbne det. Indtast den offentlige adresse ovenfor.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

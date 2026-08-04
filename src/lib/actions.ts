@@ -10,6 +10,7 @@ import { mqttClient, testMqttBroker, type MqttDevice } from "./mqtt-client";
 import { requireAuth } from "./auth";
 import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
+import { getBaseUrl } from "./base-url";
 import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
@@ -802,7 +803,7 @@ async function sendCheckInNotificationAsync(
   try {
     const { sendCheckInNotification } = await import("./notifications");
     const settings = await getGlobalSettings();
-    const baseUrl = settings.site_url || "http://localhost:3000";
+    const baseUrl = getBaseUrl(settings);
     const portalUrl = `${baseUrl}/guest/${portalToken}`;
     await sendCheckInNotification(guestName, guestPhone, guestEmail, portalUrl, unitName || "");
   } catch (e) {
@@ -2397,7 +2398,7 @@ export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): 
   }
 
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
   const portalUrl = portalToken ? `${baseUrl}/guest/${portalToken}` : baseUrl;
 
 
@@ -2718,7 +2719,7 @@ export async function resendGuestNotification(sessionId: number) {
 
   const { sendCheckInNotification } = await import("./notifications");
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
   const portalUrl = `${baseUrl}/guest/${session.guestPortalToken}`;
 
   await sendCheckInNotification(
@@ -3462,7 +3463,7 @@ export async function createSessionPayment(sessionId: number, portalToken: strin
   if (amount <= 0) throw new Error("Intet beløb at betale");
 
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
 
   const { createPaymentLink, generateOrderId } = await import("./quickpay");
   const orderId = generateOrderId("S", sessionId);
@@ -3495,7 +3496,7 @@ export async function createInvoicePayment(invoiceId: number) {
   if (invoice.totalAmount <= 0) throw new Error("Intet beløb at betale");
 
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
   let portalToken: string | null = invoice.unit.longTermPortalToken;
 
   // For short-term invoices the unit has no longTermPortalToken — fall back
@@ -4075,7 +4076,7 @@ export async function createLaundryPayment(
   // ── METERED billing mode — delegate to metered flow ──
   if (machine.billingMode === "METERED") {
     const settings = await getGlobalSettings();
-    const baseUrl = settings.site_url || "http://localhost:3000";
+    const baseUrl = getBaseUrl(settings);
     const returnPath = `/guest/${guestPortalToken}`;
     return createMeteredLaundryPaymentPortal(machine, guestPortalToken, returnPath, baseUrl, settings);
   }
@@ -4215,7 +4216,7 @@ export async function createLaundryPayment(
 
   // Create QuickPay payment for remaining amount
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
 
   if (settings.quickpay_enabled !== "true") {
     // No payment configured — start directly
@@ -4330,7 +4331,7 @@ export async function createPrepaidTopUp(
     return { ok: false, message: "Online betaling er ikke aktiveret" };
   }
 
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
 
   try {
     const { createPaymentLink, generateOrderId } = await import("./quickpay");
@@ -4792,7 +4793,7 @@ export async function createPublicLaundryPayment(
   }
 
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
   const returnPath = returnToken.startsWith("machine:")
     ? `/laundry/machine/${returnToken.slice("machine:".length)}`
     : `/laundry/${returnToken}`;
@@ -5358,7 +5359,7 @@ export async function createShowerPayment(
   const endsAt = new Date(Date.now() + mins * 60 * 1000);
 
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
 
   // POSTPAID ON_ACCOUNT: start immediately, bill at checkout/invoice
   const servicesOnAccount =
@@ -5713,7 +5714,7 @@ export async function extendShowerPayment(
   const price = +(extra * sess.shower.pricePerMinute).toFixed(2);
 
   const settings = await getGlobalSettings();
-  const baseUrl = settings.site_url || "http://localhost:3000";
+  const baseUrl = getBaseUrl(settings);
 
   // PREPAID guests extend from their balance — same rules as the initial
   // purchase: deduct if it covers the price, otherwise reject. Never card.

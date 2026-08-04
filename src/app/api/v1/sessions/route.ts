@@ -3,6 +3,7 @@ import { authenticateAPI } from "@/lib/api-auth";
 import { runWithApiAuth } from "@/lib/auth-context";
 import { checkIn, checkOut, getActiveSession } from "@/lib/actions";
 import { prisma } from "@/lib/prisma";
+import { getBaseUrl } from "@/lib/base-url";
 
 // GET /api/v1/sessions?unit_id=1&status=active — List sessions
 export async function GET(req: NextRequest) {
@@ -146,7 +147,7 @@ export async function POST(req: NextRequest) {
 
     const settings = await prisma.globalSetting.findMany();
     const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
-    const baseUrl = settingsMap.site_url || "http://localhost:3000";
+    const baseUrl = getBaseUrl(settingsMap);
 
     return NextResponse.json({
       session_id: result.session.id,
