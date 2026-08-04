@@ -10,17 +10,11 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { getConsumptionLogs } from "@/lib/actions";
+import { getConsumptionChartData } from "@/lib/actions";
 
 interface ConsumptionChartProps {
   unitId: number;
   days?: number;
-}
-
-interface LogEntry {
-  recordedAt: Date;
-  electricityKwh: number | null;
-  waterLiters: number | null;
 }
 
 export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
@@ -28,12 +22,18 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
     { time: string; el: number | null; vand: number | null }[]
   >([]);
   const [loading, setLoading] = useState(true);
+  const [hasMeters, setHasMeters] = useState(true);
+  const [firstLoggedAt, setFirstLoggedAt] = useState<Date | null>(null);
   const [selectedDays, setSelectedDays] = useState(days);
 
   useEffect(() => {
     setLoading(true);
-    getConsumptionLogs(unitId, selectedDays)
-      .then((logs: LogEntry[]) => {
+    getConsumptionChartData(unitId, selectedDays)
+      .then((res) => {
+        setHasMeters(res.hasMeters);
+        setFirstLoggedAt(res.firstLoggedAt ? new Date(res.firstLoggedAt) : null);
+
+        const logs = res.logs;
         if (logs.length < 2) {
           setData([]);
           setLoading(false);
@@ -75,10 +75,21 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
   }
 
   if (data.length < 2) {
+    // Distinguish the three reasons a chart can be empty so the message is
+    // actionable rather than just "no data".
+    let message: string;
+    if (!hasMeters) {
+      message = "Denne enhed har ingen el- eller vandmåler tilknyttet.";
+    } else if (!firstLoggedAt) {
+      message = "Måleraflæsninger er ikke startet endnu — grafen vises inden for en time.";
+    } else {
+      message = "Der er kun én måling indtil videre — grafen vises efter næste aflæsning.";
+    }
+
     return (
-      <div className="h-48 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-        <p>Ikke nok data til graf endnu.</p>
-        <p className="text-xs">Forbrug logges via cron (hvert 15. min). Kør <code className="bg-muted px-1 rounded">/api/cron</code> for at starte dataindsamling.</p>
+      <div className="h-48 flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+        <p>Ingen forbrugsgraf endnu</p>
+        <p className="text-xs">{message}</p>
       </div>
     );
   }

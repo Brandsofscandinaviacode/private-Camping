@@ -2473,6 +2473,117 @@ export async function getSessionById(sessionId: number) {
   });
 }
 
+/** One line on the guest's running account. */
+export interface SessionCharge {
+  id: string;
+  kind: "LAUNDRY" | "SHOWER";
+  label: string;
+  detail: string | null;
+  occurredAt: Date;
+  amount: number;
+  paymentStatus: string;
+  pending: boolean;
+}
+
+/**
+ * Everything the guest has spent during this stay, as it happens — laundry and
+ * shower purchases plus the running electricity/water accumulators.
+ *
+ * Invoices only appear when one is generated, so without this the admin can't
+ * see e.g. a wash that was just charged. Metered laundry still running is
+ * reported at its reserved amount and flagged as pending, since the final
+ * price isn't known until the machine stops.
+ */
+export async function getSessionCharges(sessionId: number): Promise<{
+  charges: SessionCharge[];
+  electricity: { kwh: number; cost: number };
+  water: { liters: number; cost: number };
+  servicesTotal: number;
+  total: number;
+}> {
+  await requireAuth();
+
+  const [session, laundry, showers] = await Promise.all([
+    prisma.session.findUnique({
+      where: { id: sessionId },
+      select: {
+        accumulatedElCost: true,
+        accumulatedElKwh: true,
+        accumulatedWaterCost: true,
+        accumulatedWaterLiters: true,
+      },
+    }),
+    prisma.laundrySess.findMany({
+      where: { sessionId, status: { not: "CANCELLED" } },
+      include: { machine: { select: { name: true } } },
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.showerSess.findMany({
+      where: { sessionId, status: { not: "CANCELLED" } },
+      include: { shower: { select: { name: true } } },
+      orderBy: { startedAt: "desc" },
+    }),
+  ]);
+
+  const charges: SessionCharge[] = [];
+
+  for (const l of laundry) {
+    // A metered wash in progress has no final price yet — show what's reserved.
+    const running = l.billingMode === "METERED" && l.status === "ACTIVE";
+    const amount = running ? (l.reservedAmount ?? 0) : l.pricePaid;
+    const detail =
+      l.billingMode === "METERED"
+        ? running
+          ? `Måler kører · ${l.billedMinutes.toFixed(0)} min indtil nu`
+          : `${l.billedMinutes.toFixed(0)} min forbrugt`
+        : l.programName || (l.durationMinutes ? `${l.durationMinutes} min` : null);
+
+    charges.push({
+      id: `laundry-${l.id}`,
+      kind: "LAUNDRY",
+      label: l.machine.name,
+      detail,
+      occurredAt: l.startedAt,
+      amount,
+      paymentStatus: l.paymentStatus,
+      pending: running,
+    });
+  }
+
+  for (const s of showers) {
+    charges.push({
+      id: `shower-${s.id}`,
+      kind: "SHOWER",
+      label: s.shower.name,
+      detail: s.minutesPaid ? `${s.minutesPaid} min` : null,
+      occurredAt: s.startedAt,
+      amount: s.pricePaid,
+      paymentStatus: s.paymentStatus,
+      pending: s.status === "ACTIVE" || s.status === "PAUSED",
+    });
+  }
+
+  charges.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+
+  const electricity = {
+    kwh: session?.accumulatedElKwh ?? 0,
+    cost: session?.accumulatedElCost ?? 0,
+  };
+  const water = {
+    liters: session?.accumulatedWaterLiters ?? 0,
+    cost: session?.accumulatedWaterCost ?? 0,
+  };
+  const servicesTotal = charges.reduce((sum, c) => sum + c.amount, 0);
+
+  return {
+    charges,
+    electricity,
+    water,
+    servicesTotal,
+    total: servicesTotal + electricity.cost + water.cost,
+  };
+}
+
 export async function markSessionPaid(sessionId: number, paymentId?: string) {
   await requireAuth();
   await prisma.session.update({
@@ -2699,6 +2810,37 @@ export async function getConsumptionLogs(unitId: number, days: number = 7) {
     where: { unitId, recordedAt: { gte: since } },
     orderBy: { recordedAt: "asc" },
   });
+}
+
+/**
+ * Consumption logs plus the context the chart needs to explain an empty state:
+ * whether the unit has any meter configured at all, and when logging started.
+ * Without this the chart can't tell "no meters wired up" (never going to show
+ * data) apart from "meters fine, still collecting" (data on the way).
+ */
+export async function getConsumptionChartData(unitId: number, days: number = 7) {
+  await requireAuth();
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+
+  const [logs, hw, firstLog] = await Promise.all([
+    prisma.consumptionLog.findMany({
+      where: { unitId, recordedAt: { gte: since } },
+      orderBy: { recordedAt: "asc" },
+    }),
+    prisma.unitHardware.findUnique({ where: { unitId } }),
+    prisma.consumptionLog.findFirst({
+      where: { unitId },
+      orderBy: { recordedAt: "asc" },
+      select: { recordedAt: true },
+    }),
+  ]);
+
+  return {
+    logs,
+    hasMeters: hardware.hasElectricityMeter(hw) || hardware.hasWaterMeter(hw),
+    firstLoggedAt: firstLog?.recordedAt ?? null,
+  };
 }
 
 // ──────────────────────────────────────────────

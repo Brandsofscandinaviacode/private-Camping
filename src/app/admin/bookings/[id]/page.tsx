@@ -9,6 +9,7 @@ import { SessionActions } from "@/components/admin/session-actions";
 import { SessionEditForm } from "@/components/admin/session-edit-form";
 import { LaundryCreditSection } from "@/components/admin/laundry-credit";
 import { ConsumptionChart } from "@/components/admin/consumption-chart";
+import { SessionCharges } from "@/components/admin/session-charges";
 import { LiveConsumption } from "@/components/admin/live-consumption";
 import { CreateInvoiceButton } from "@/components/admin/create-invoice-button";
 import { InvoiceRow } from "@/components/admin/invoice-row";
@@ -376,6 +377,16 @@ export default async function BookingDetailPage({
             <div className="p-5">
               <ConsumptionChart unitId={session.unit.id} />
             </div>
+          </div>
+
+          <div className="rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="font-semibold">Forbrug og køb</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Alt gæsten har brugt under opholdet — opdateres løbende, uafhængigt af fakturering
+              </p>
+            </div>
+            <SessionCharges sessionId={session.id} />
           </div>
           </>)}
         </div>
