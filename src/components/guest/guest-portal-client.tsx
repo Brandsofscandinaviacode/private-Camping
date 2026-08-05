@@ -213,6 +213,37 @@ export function GuestPortalClient({
     return () => { mounted = false; clearInterval(interval); };
   }, [sessionId, isActive]);
 
+  // Laundry state lives here, not in ServicesSection, so the "running now"
+  // banner and the machine list count down from the same data. When only the
+  // list polled, the banner kept showing the minutes from initial page load.
+  const [machines, setMachines] = useState(laundryMachines);
+  useEffect(() => { setMachines(laundryMachines); }, [laundryMachines]);
+  useEffect(() => {
+    let mounted = true;
+    const refresh = async () => {
+      try {
+        const updated = await getGuestLaundryMachines();
+        if (mounted) setMachines(updated);
+      } catch { /* keep last known state */ }
+    };
+    const interval = setInterval(refresh, 30000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, []);
+
+  // Tick the countdown locally between refreshes, derived from endsAt, so the
+  // remaining time stays right even if a refresh is slow or fails.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMachines((prev) => prev.map((m) => {
+        if (!m.endsAt) return m;
+        const remaining = Math.max(0, Math.round((new Date(m.endsAt).getTime() - Date.now()) / 60000));
+        if (remaining === m.minutesLeft) return m;
+        return { ...m, minutesLeft: remaining, available: remaining === 0 };
+      }));
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [tempMsg, setTempMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   function handleSetTemp() {
@@ -677,7 +708,7 @@ export function GuestPortalClient({
 
         {/* ═══ Active services banner ═══ */}
         {isActive && (() => {
-          const activeMachines = laundryMachines.filter((m) => !m.available && m.minutesLeft > 0);
+          const activeMachines = machines.filter((m) => !m.available && m.minutesLeft > 0);
           if (activeMachines.length === 0) return null;
           const endsInLabel = locale === "en" ? "Ends in" : locale === "de" ? "Fertig in" : "Færdig om";
           return (
@@ -718,7 +749,7 @@ export function GuestPortalClient({
               {hasServiceItems && (
                 <GuestServicesSection
                   showers={showers}
-                  machines={laundryMachines}
+                  machines={machines}
                   token={token}
                   locale={locale}
                   credit={laundryCredit}
@@ -935,23 +966,12 @@ function GuestServicesSection({
   onAccount?: boolean;
 }) {
   const [showers, setShowers] = useState(initialShowers);
-  const [machines, setMachines] = useState(initialMachines);
+  const machines = initialMachines;
   const [selectedType, setSelectedType] = useState<ServiceType | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [pickingProgramFor, setPickingProgramFor] = useState<number | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-
-  // Refresh availability periodically
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const updated = await getGuestLaundryMachines();
-        setMachines(updated);
-      } catch { /* ignore */ }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Keep initial showers fresh when server re-renders
   useEffect(() => { setShowers(initialShowers); }, [initialShowers]);
