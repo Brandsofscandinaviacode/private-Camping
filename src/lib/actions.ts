@@ -1018,13 +1018,33 @@ export interface SessionStatement {
     type: string;
   };
   periods: StatementPeriod[];
+  /** Laundry/shower purchases during the stay — billed outside the meter periods. */
+  services: Array<{
+    label: string;
+    detail: string | null;
+    occurredAt: Date;
+    amount: number;
+    paid: boolean;
+  }>;
   totals: {
     electricityCost: number;
     waterCost: number;
+    servicesCost: number;
+    /** Meters + services — everything the guest consumed. */
     totalCost: number;
     totalPaid: number;
     owed: number;            // total - paid, clamped; amounts < 1 DKK are treated as 0
   };
+  /**
+   * Present only for PREPAID stays. Such a guest owes nothing — consumption is
+   * drawn from the amount paid up front — so the statement shows a balance
+   * instead of an amount due.
+   */
+  prepaid: {
+    deposited: number;
+    used: number;
+    remaining: number;
+  } | null;
   generatedAt: Date;
   currency: string;
 }
@@ -1194,11 +1214,63 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
     }
   }
 
+  // Laundry and shower purchases are billed per use, outside the meter
+  // periods. Leaving them out made the statement total disagree with what the
+  // guest actually spent.
+  const [laundrySessions, showerSessions] = await Promise.all([
+    prisma.laundrySess.findMany({
+      where: { sessionId, status: { not: "CANCELLED" } },
+      include: { machine: { select: { name: true } } },
+      orderBy: { startedAt: "asc" },
+    }),
+    prisma.showerSess.findMany({
+      where: { sessionId, status: { not: "CANCELLED" } },
+      include: { shower: { select: { name: true } } },
+      orderBy: { startedAt: "asc" },
+    }),
+  ]);
+
+  const services = [
+    ...laundrySessions.map((l) => ({
+      label: l.machine.name,
+      detail: l.programName || (l.durationMinutes ? `${l.durationMinutes} min` : null),
+      occurredAt: l.startedAt,
+      amount: l.billingMode === "METERED" && l.status === "ACTIVE" ? (l.reservedAmount ?? 0) : l.pricePaid,
+      paid: l.paymentStatus === "PAID" || l.paymentStatus === "PREPAID",
+    })),
+    ...showerSessions.map((s) => ({
+      label: s.shower.name,
+      detail: s.minutesPaid ? `${s.minutesPaid} min` : null,
+      occurredAt: s.startedAt,
+      amount: s.pricePaid,
+      paid: s.paymentStatus === "PAID" || s.paymentStatus === "PREPAID",
+    })),
+  ].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+
+  const servicesCost = services.reduce((s, x) => s + x.amount, 0);
+  const servicesPaid = services.reduce((s, x) => s + (x.paid ? x.amount : 0), 0);
+
   const totalElectricity = periods.reduce((s, p) => s + p.electricityCost, 0);
   const totalWater = periods.reduce((s, p) => s + p.waterCost, 0);
-  const totalCost = periods.reduce((s, p) => s + p.totalAmount, 0);
-  const totalPaid = periods.reduce((s, p) => s + p.paidAmount, 0);
-  const rawOwed = totalCost - totalPaid;
+  const totalCost = periods.reduce((s, p) => s + p.totalAmount, 0) + servicesCost;
+  const totalPaid = periods.reduce((s, p) => s + p.paidAmount, 0) + servicesPaid;
+
+  // PREPAID guests draw consumption from money already deposited, so they owe
+  // nothing — reporting an "amount due" for them was simply wrong.
+  const isPrepaid = session.billingMode === "PREPAID";
+  const deposited = session.prepaidAmount ?? 0;
+  const prepaidUsed = session.accumulatedElCost + session.accumulatedWaterCost + servicesCost;
+  const prepaid = isPrepaid
+    ? {
+        deposited,
+        used: prepaidUsed,
+        remaining: Math.max(0, deposited - prepaidUsed),
+      }
+    : null;
+
+  const rawOwed = isPrepaid
+    ? Math.max(0, prepaidUsed - deposited)   // only if they overspent the deposit
+    : totalCost - totalPaid;
   // Amounts under 1 DKK are considered rounding noise and ignored
   const owed = rawOwed < 1 ? 0 : rawOwed;
 
@@ -1220,13 +1292,16 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
       type: session.unit.type,
     },
     periods,
+    services,
     totals: {
       electricityCost: totalElectricity,
       waterCost: totalWater,
+      servicesCost,
       totalCost,
       totalPaid,
       owed,
     },
+    prepaid,
     generatedAt: new Date(),
     currency: pricing.currency,
   };

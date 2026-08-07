@@ -25,7 +25,7 @@ export default async function BookingStatementPage({
   const statement = await getSessionStatement(sessionId);
   if (!statement) notFound();
 
-  const { session, unit, periods, totals, generatedAt } = statement;
+  const { session, unit, periods, services, totals, prepaid, generatedAt } = statement;
   const hasOwed = totals.owed > 0;
 
   return (
@@ -155,6 +155,36 @@ export default async function BookingStatementPage({
             )}
           </div>
 
+          {/* Services (laundry / showers) */}
+          {services.length > 0 && (
+            <div>
+              <h2 className="text-base font-semibold mb-3">Services</h2>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600">
+                    <th className="px-3 py-2 font-medium">Dato</th>
+                    <th className="px-3 py-2 font-medium">Ydelse</th>
+                    <th className="px-3 py-2 font-medium text-right">Beløb</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {services.map((sv, i) => (
+                    <tr key={i} className="border-b border-gray-200 last:border-0">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {sv.occurredAt.toLocaleDateString("da-DK", { day: "numeric", month: "short" })}
+                      </td>
+                      <td className="px-3 py-2">
+                        {sv.label}
+                        {sv.detail && <span className="text-gray-500"> · {sv.detail}</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">{fmtDKK(sv.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Totals */}
           <div className="border-t border-gray-300 pt-4 space-y-2 text-sm">
             <div className="flex justify-between">
@@ -165,30 +195,70 @@ export default async function BookingStatementPage({
               <span className="text-gray-600">Vand i alt</span>
               <span className="tabular-nums">{fmtDKK(totals.waterCost)}</span>
             </div>
+            {totals.servicesCost > 0 && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Services i alt</span>
+                <span className="tabular-nums">{fmtDKK(totals.servicesCost)}</span>
+              </div>
+            )}
             <div className="flex justify-between pt-2 border-t border-gray-200">
               <span className="font-semibold">Samlet forbrug</span>
               <span className="font-semibold tabular-nums">{fmtDKK(totals.totalCost)}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Betalt undervejs</span>
-              <span className="tabular-nums">-{fmtDKK(totals.totalPaid)}</span>
-            </div>
-            <div
-              className={`flex justify-between pt-2 border-t border-gray-300 text-lg ${
-                hasOwed ? "text-red-700" : "text-green-700"
-              }`}
-            >
-              <span className="font-bold">
-                {hasOwed ? "Skyldigt beløb" : "Intet skyldigt beløb"}
-              </span>
-              <span className="font-bold tabular-nums">
-                {hasOwed ? fmtDKK(totals.owed) : fmtDKK(0)}
-              </span>
-            </div>
-            {!hasOwed && totals.totalCost - totals.totalPaid > 0 && (
-              <p className="text-[11px] text-gray-500 text-right">
-                Rest under 1 DKK ignoreres.
-              </p>
+
+            {prepaid ? (
+              <>
+                {/* Prepaid stays settle against the deposit, so there is no
+                    amount due — show the balance instead. */}
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Forudbetalt</span>
+                  <span className="tabular-nums">{fmtDKK(prepaid.deposited)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Forbrugt af forudbetaling</span>
+                  <span className="tabular-nums">-{fmtDKK(prepaid.used)}</span>
+                </div>
+                {hasOwed ? (
+                  <div className="flex justify-between pt-2 border-t border-gray-300 text-lg text-red-700">
+                    <span className="font-bold">Skyldigt beløb</span>
+                    <span className="font-bold tabular-nums">{fmtDKK(totals.owed)}</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between pt-2 border-t border-gray-300 text-lg text-green-700">
+                    <span className="font-bold">Resterende saldo</span>
+                    <span className="font-bold tabular-nums">{fmtDKK(prepaid.remaining)}</span>
+                  </div>
+                )}
+                <p className="text-[11px] text-gray-500 text-right">
+                  {hasOwed
+                    ? "Forbruget overstiger den forudbetalte saldo."
+                    : "Forbrug er trukket fra forudbetalingen — intet at betale."}
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Betalt undervejs</span>
+                  <span className="tabular-nums">-{fmtDKK(totals.totalPaid)}</span>
+                </div>
+                <div
+                  className={`flex justify-between pt-2 border-t border-gray-300 text-lg ${
+                    hasOwed ? "text-red-700" : "text-green-700"
+                  }`}
+                >
+                  <span className="font-bold">
+                    {hasOwed ? "Skyldigt beløb" : "Intet skyldigt beløb"}
+                  </span>
+                  <span className="font-bold tabular-nums">
+                    {hasOwed ? fmtDKK(totals.owed) : fmtDKK(0)}
+                  </span>
+                </div>
+                {!hasOwed && totals.totalCost - totals.totalPaid > 0 && (
+                  <p className="text-[11px] text-gray-500 text-right">
+                    Rest under 1 DKK ignoreres.
+                  </p>
+                )}
+              </>
             )}
           </div>
 

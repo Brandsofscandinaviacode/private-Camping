@@ -156,9 +156,12 @@ export default async function BookingDetailPage({
                     <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Bagudbetalt</span>
                   )}
                 </div>
+                {/* Meter settlement only — services are listed separately in
+                    "Forbrug og køb", so labelling this a final total made the
+                    two figures look contradictory. */}
                 {session.totalCost != null && (
                   <div className="flex items-center justify-between gap-2 pt-0.5">
-                    <span className="text-muted-foreground">Slutopgørelse</span>
+                    <span className="text-muted-foreground">El og vand ved checkout</span>
                     <span className="font-semibold tabular-nums">{session.totalCost.toFixed(2)} DKK</span>
                   </div>
                 )}
