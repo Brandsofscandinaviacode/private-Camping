@@ -22,7 +22,6 @@ import {
   ChevronRight,
   CalendarClock,
   Wind,
-  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -951,9 +950,7 @@ export function GuestPortalClient({
   );
 }
 
-// ── Services Section (drill-down: type → location → items) ──
-type ServiceType = "shower" | "washer" | "dryer";
-const NO_LOCATION_KEY = "__nolocation__";
+// ── Services Section — flat groups: Bad, then Vask (washers + dryers) ──
 
 function GuestServicesSection({
   showers: initialShowers,
@@ -972,8 +969,6 @@ function GuestServicesSection({
 }) {
   const [showers, setShowers] = useState(initialShowers);
   const machines = initialMachines;
-  const [selectedType, setSelectedType] = useState<ServiceType | null>(null);
-  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [pickingProgramFor, setPickingProgramFor] = useState<number | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -982,9 +977,8 @@ function GuestServicesSection({
   useEffect(() => { setShowers(initialShowers); }, [initialShowers]);
 
   const labels = {
-    chooseType: locale === "en" ? "Choose service" : locale === "de" ? "Service wählen" : "Vælg service",
-    chooseLocation: locale === "en" ? "Choose location" : locale === "de" ? "Ort wählen" : "Vælg lokation",
     back: locale === "en" ? "Back" : locale === "de" ? "Zurück" : "Tilbage",
+    laundry: locale === "en" ? "Laundry" : locale === "de" ? "Wäsche" : "Vask",
     shower: locale === "en" ? "Shower" : locale === "de" ? "Dusche" : "Bad",
     washer: locale === "en" ? "Washer" : locale === "de" ? "Waschmaschine" : "Vaskemaskine",
     dryer: locale === "en" ? "Dryer" : locale === "de" ? "Trockner" : "Tørretumbler",
@@ -1003,65 +997,6 @@ function GuestServicesSection({
   };
   const creditLabel = locale === "en" ? "Credit" : locale === "de" ? "Guthaben" : "Kredit";
   const freeLabel = locale === "en" ? "Free" : locale === "de" ? "Gratis" : "Gratis";
-
-  const washers = machines.filter((m) => m.kind === "WASHER");
-  const dryers = machines.filter((m) => m.kind === "DRYER");
-
-  function getAvailableCount(type: ServiceType): number {
-    if (type === "shower") return showers.filter((s) => s.available).length;
-    if (type === "washer") return washers.filter((m) => m.available).length;
-    return dryers.filter((m) => m.available).length;
-  }
-
-  const typeCards: { type: ServiceType; count: number; availableCount: number; icon: React.ReactNode; label: string; accent: string }[] = [
-    showers.length > 0 && {
-      type: "shower" as ServiceType,
-      count: showers.length,
-      availableCount: getAvailableCount("shower"),
-      icon: <Droplets className="h-5 w-5" />,
-      label: labels.shower,
-      accent: "text-sky-500",
-    },
-    washers.length > 0 && {
-      type: "washer" as ServiceType,
-      count: washers.length,
-      availableCount: getAvailableCount("washer"),
-      icon: <WashingMachine className="h-5 w-5" />,
-      label: labels.washer,
-      accent: "text-blue-500",
-    },
-    dryers.length > 0 && {
-      type: "dryer" as ServiceType,
-      count: dryers.length,
-      availableCount: getAvailableCount("dryer"),
-      icon: <Wind className="h-5 w-5" />,
-      label: labels.dryer,
-      accent: "text-purple-500",
-    },
-  ].filter(Boolean) as { type: ServiceType; count: number; availableCount: number; icon: React.ReactNode; label: string; accent: string }[];
-
-  function getLocationsFor(type: ServiceType): { key: string; label: string; count: number }[] {
-    const items: { location: string | null }[] =
-      type === "shower" ? showers : type === "washer" ? washers : dryers;
-    const byLocation: Record<string, { label: string; count: number }> = {};
-    for (const it of items) {
-      const key = it.location?.trim() || NO_LOCATION_KEY;
-      const label = it.location?.trim() || labels.noLocation;
-      if (byLocation[key]) byLocation[key].count += 1;
-      else byLocation[key] = { label, count: 1 };
-    }
-    return Object.entries(byLocation)
-      .map(([key, v]) => ({ key, label: v.label, count: v.count }))
-      .sort((a, b) => a.label.localeCompare(b.label, "da-DK"));
-  }
-
-  function getItemsFor(type: ServiceType, locKey: string) {
-    if (type === "shower") {
-      return showers.filter((s) => (s.location?.trim() || NO_LOCATION_KEY) === locKey);
-    }
-    const pool = type === "washer" ? washers : dryers;
-    return pool.filter((m) => (m.location?.trim() || NO_LOCATION_KEY) === locKey);
-  }
 
   async function handleStartMachine(machineId: number, programId?: number) {
     setStartingId(`m-${machineId}`);
@@ -1097,212 +1032,152 @@ function GuestServicesSection({
     return labels.start;
   }
 
-  // ── Step 1: Type selection ──
-  if (!selectedType) {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <WashingMachine className="h-4 w-4 text-blue-500" />
-            {labels.chooseType}
-          </div>
-          {credit > 0 && (
-            <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
-              {creditLabel}: {credit.toFixed(0)} DKK
-            </span>
-          )}
-        </div>
-        <div className="grid grid-cols-1 gap-2">
-          {typeCards.map((tc) => (
-            <button
-              key={tc.type}
-              onClick={() => setSelectedType(tc.type)}
-              className="flex items-center gap-3 px-3 py-3 rounded-lg border border-border/60 hover:border-primary/40 hover:bg-muted/30 transition-colors text-left"
-            >
-              <span className={tc.accent}>{tc.icon}</span>
-              <span className="flex-1">
-                <span className="text-sm font-medium block">{tc.label}</span>
-                <span className="text-xs text-muted-foreground">
-                  {tc.count} {labels.items}
-                </span>
-              </span>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                tc.availableCount > 0
-                  ? "bg-green-50 text-green-600"
-                  : "bg-orange-50 text-orange-600"
-              }`}>
-                {tc.availableCount}/{tc.count} {tc.availableCount === 1 ? labels.available : labels.availablePlural}
-              </span>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  // Flat view — no "Vælg service" chooser and no location step. Two clearly
+  // separated groups (Bad and Vask); location is a detail on each row.
+  const pill = (avail: number, total: number) => (
+    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+      avail > 0 ? "bg-green-50 text-green-600" : "bg-orange-50 text-orange-600"
+    }`}>
+      {avail}/{total} {avail === 1 ? labels.available : labels.availablePlural}
+    </span>
+  );
 
-  const typeLabel =
-    selectedType === "shower" ? labels.shower : selectedType === "washer" ? labels.washer : labels.dryer;
-
-  // ── Step 2: Location selection ──
-  if (!selectedLocation) {
-    const locations = getLocationsFor(selectedType);
-    // Skip this step if there's only one location
-    if (locations.length === 1) {
-      // Defer to avoid setState during render
-      queueMicrotask(() => setSelectedLocation(locations[0].key));
-    }
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setSelectedType(null)}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <ChevronLeft className="h-3.5 w-3.5" />
-            {labels.back}
-          </button>
-          <span className="text-sm font-medium">{typeLabel}</span>
-          <span className="w-12" />
-        </div>
-        <p className="text-xs text-muted-foreground">{labels.chooseLocation}</p>
-        <div className="grid grid-cols-1 gap-2">
-          {locations.map((loc) => (
-            <button
-              key={loc.key}
-              onClick={() => setSelectedLocation(loc.key)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border/60 hover:border-primary/40 hover:bg-muted/30 transition-colors text-left"
-            >
-              <MapPin className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1 text-sm">{loc.label}</span>
-              <span className="text-xs text-muted-foreground">{loc.count}</span>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Step 3: Items list ──
-  const items = getItemsFor(selectedType, selectedLocation);
-  const locationLabel = selectedLocation === NO_LOCATION_KEY
-    ? labels.noLocation
-    : items[0]?.location?.trim() || selectedLocation;
-  const hasMultipleLocations = getLocationsFor(selectedType).length > 1;
+  const allMachines = [...machines.filter((m) => m.kind === "WASHER"), ...machines.filter((m) => m.kind === "DRYER")];
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <button
-          onClick={() => {
-            if (hasMultipleLocations) {
-              setSelectedLocation(null);
-            } else {
-              setSelectedLocation(null);
-              setSelectedType(null);
-            }
-          }}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ChevronLeft className="h-3.5 w-3.5" />
-          {labels.back}
-        </button>
-        <span className="text-sm font-medium">
-          {typeLabel} · {locationLabel}
-        </span>
-        <span className="w-12" />
-      </div>
-      <div className="space-y-1.5">
-        {selectedType === "shower"
-          ? (items as GuestPortalClientProps["showers"]).map((s) => (
-              <div key={s.id} className="flex items-center justify-between py-2.5 px-2 rounded-lg border-b last:border-0">
+    <div className="space-y-4">
+      {credit > 0 && (
+        <div className="flex justify-end">
+          <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+            {creditLabel}: {credit.toFixed(0)} DKK
+          </span>
+        </div>
+      )}
+
+      {/* ── Bad ── */}
+      {showers.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Droplets className="h-4 w-4 text-sky-500" />
+              {labels.shower}
+            </div>
+            {pill(showers.filter((x) => x.available).length, showers.length)}
+          </div>
+          {showers.map((s) => (
+            <div key={s.id} className="flex items-center justify-between py-2.5 px-2 rounded-lg border-b last:border-0">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">
+                  {s.name}
+                  {s.location && <span className="font-normal text-muted-foreground"> · {s.location}</span>}
+                </p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {s.available ? (
+                    <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
+                  ) : (
+                    <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
+                      {labels.inUse} · {s.minutesLeft} {labels.minutesLeft}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-muted-foreground">{s.pricePerMinute.toFixed(2)} DKK {labels.perMinute}</span>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                disabled={!s.available || startingId !== null}
+                onClick={() => handleStartShower(s.id)}
+              >
+                {startingId === `s-${s.id}` ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  labels.choose
+                )}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showers.length > 0 && allMachines.length > 0 && <Separator />}
+
+      {/* ── Vask (vaskemaskiner + tørretumblere) ── */}
+      {allMachines.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <WashingMachine className="h-4 w-4 text-blue-500" />
+              {labels.laundry}
+            </div>
+            {pill(allMachines.filter((x) => x.available).length, allMachines.length)}
+          </div>
+          {allMachines.map((m) => (
+            <div key={m.id} className="py-2.5 px-2 border-b last:border-0">
+              <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm font-medium">{s.name}</p>
+                  <p className="text-sm font-medium flex items-center gap-1.5">
+                    {m.kind === "DRYER"
+                      ? <Wind className="h-3.5 w-3.5 text-purple-500 shrink-0" />
+                      : <WashingMachine className="h-3.5 w-3.5 text-blue-500 shrink-0" />}
+                    {m.name}
+                    {m.location && <span className="font-normal text-muted-foreground"> · {m.location}</span>}
+                  </p>
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    {s.available ? (
+                    {m.available ? (
                       <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
                     ) : (
                       <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
-                        {labels.inUse} · {s.minutesLeft} {labels.minutesLeft}
+                        {labels.inUse} · {m.minutesLeft} {labels.minutesLeft}
                       </span>
                     )}
-                    <span className="text-[11px] text-muted-foreground">{s.pricePerMinute.toFixed(2)} DKK {labels.perMinute}</span>
+                    {m.programs.length === 0 && (
+                      <span className="text-[11px] text-muted-foreground">{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}</span>
+                    )}
                   </div>
                 </div>
                 <Button
                   size="sm"
-                  disabled={!s.available || startingId !== null}
-                  onClick={() => handleStartShower(s.id)}
+                  disabled={!m.available || startingId !== null}
+                  onClick={() => {
+                    if (m.programs.length > 0) {
+                      setPickingProgramFor(pickingProgramFor === m.id ? null : m.id);
+                    } else {
+                      handleStartMachine(m.id);
+                    }
+                  }}
                 >
-                  {startingId === `s-${s.id}` ? (
+                  {startingId === `m-${m.id}` ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : m.programs.length > 0 ? (
+                    pickingProgramFor === m.id ? labels.back : labels.choose
                   ) : (
-                    labels.choose
+                    machineButtonLabel(m)
                   )}
                 </Button>
               </div>
-            ))
-          : (items as GuestPortalClientProps["laundryMachines"]).map((m) => (
-              <div key={m.id} className="py-2.5 px-2 border-b last:border-0">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">{m.name}</p>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {m.available ? (
-                        <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700">{labels.available}</span>
-                      ) : (
-                        <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
-                          {labels.inUse} · {m.minutesLeft} {labels.minutesLeft}
-                        </span>
-                      )}
-                      {m.programs.length === 0 && (
-                        <span className="text-[11px] text-muted-foreground">{m.durationMinutes} min · {m.pricePerUse.toFixed(0)} DKK {labels.perUse}</span>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    disabled={!m.available || startingId !== null}
-                    onClick={() => {
-                      if (m.programs.length > 0) {
-                        setPickingProgramFor(pickingProgramFor === m.id ? null : m.id);
-                      } else {
-                        handleStartMachine(m.id);
-                      }
-                    }}
-                  >
-                    {startingId === `m-${m.id}` ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : m.programs.length > 0 ? (
-                      pickingProgramFor === m.id ? labels.back : labels.choose
-                    ) : (
-                      machineButtonLabel(m)
-                    )}
-                  </Button>
+              {m.programs.length > 0 && pickingProgramFor === m.id && m.available && (
+                <div className="mt-2 space-y-1.5">
+                  {m.programs.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={startingId !== null}
+                      onClick={() => handleStartMachine(m.id, p.id)}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left disabled:opacity-50"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{p.name}</p>
+                        <p className="text-[11px] text-muted-foreground">{p.durationMinutes} min</p>
+                      </div>
+                      <span className="text-sm font-semibold shrink-0">{p.pricePerUse.toFixed(0)} DKK</span>
+                    </button>
+                  ))}
                 </div>
-                {m.programs.length > 0 && pickingProgramFor === m.id && m.available && (
-                  <div className="mt-2 space-y-1.5">
-                    {m.programs.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        disabled={startingId !== null}
-                        onClick={() => handleStartMachine(m.id, p.id)}
-                        className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left disabled:opacity-50"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">{p.name}</p>
-                          <p className="text-[11px] text-muted-foreground">{p.durationMinutes} min</p>
-                        </div>
-                        <span className="text-sm font-semibold shrink-0">{p.pricePerUse.toFixed(0)} DKK</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-      </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {message && (
         <div className={`text-sm p-2 rounded-lg ${message.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
           {message.text}
