@@ -19,6 +19,7 @@ import { PrepaidBalance } from "@/components/admin/prepaid-balance";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 
 import { unitDisplayName } from "@/lib/utils";
+import { resolvePrepaidDeposited } from "@/lib/prepaid";
 
 export const dynamic = "force-dynamic";
 
@@ -393,6 +394,7 @@ export default async function BookingDetailPage({
             <PrepaidBalance
               sessionId={session.id}
               prepaidAmount={session.prepaidAmount ?? 0}
+              prepaidDeposited={await resolvePrepaidDeposited(session)}
               accumulatedCost={(session.accumulatedElCost ?? 0) + (session.accumulatedWaterCost ?? 0)}
               isActive={isActive}
             />

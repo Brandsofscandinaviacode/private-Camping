@@ -202,7 +202,15 @@ model Session {
 
   // Billing mode: POSTPAID = pay at checkout, PREPAID = paid upfront in DKK
   billingMode    String  @default("POSTPAID")  // "PREPAID" or "POSTPAID"
-  prepaidAmount  Float?  // DKK amount paid upfront (for PREPAID mode)
+  // prepaidAmount is the LIVE service balance: laundry/shower/metered
+  // purchases decrement it atomically, refunds and top-ups increment it.
+  // El/water is NOT deducted here — it accrues in accumulatedElCost/
+  // accumulatedWaterCost and is subtracted at display time.
+  prepaidAmount  Float?  // DKK service balance (for PREPAID mode)
+  // Total ever deposited (initial amount + top-ups). Never reduced by
+  // spending — this is what "Forudbetalt" displays. Null on sessions
+  // created before the field existed; resolvePrepaidDeposited() falls back.
+  prepaidDeposited Float?
 
   // Baseline readings captured from HA
   startKwh         Float?

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getSessionByToken, getUnitByPortalToken, getActiveSession, getGlobalSettings, getGuestLaundryMachines, getGuestShowers } from "@/lib/actions";
 import { prisma } from "@/lib/prisma";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
+import { resolvePrepaidDeposited } from "@/lib/prepaid";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,9 @@ export default async function GuestPortalPage({
         })
       : [];
 
+    const prepaidDeposited =
+      session.billingMode === "PREPAID" ? await resolvePrepaidDeposited(session) : null;
+
     return (
       <GuestPortalClient
         token={token}
@@ -79,6 +83,7 @@ export default async function GuestPortalPage({
         paymentStatus={session.paymentStatus}
         billingMode={(session.billingMode as "PREPAID" | "POSTPAID") || "POSTPAID"}
         prepaidAmount={session.prepaidAmount}
+        prepaidDeposited={prepaidDeposited}
         isLongTerm={isFastligger}
         invoices={invoices.map((inv) => ({
           id: inv.id,
@@ -156,6 +161,7 @@ export default async function GuestPortalPage({
         }))}
         billingMode="POSTPAID"
         prepaidAmount={null}
+        prepaidDeposited={null}
         quickpayEnabled={quickpayEnabled}
         unitType={unit.type}
         practicalInfo={practicalInfo}

@@ -11,6 +11,7 @@ import { requireAuth } from "./auth";
 import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
 import { getBaseUrl } from "./base-url";
+import { resolvePrepaidDeposited } from "./prepaid";
 import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
@@ -770,7 +771,7 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
 
   const guestPortalToken = uuidv4();
   const session = await prisma.session.create({
-    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startHeatingKwh, startWaterLiters, status: "ACTIVE" },
+    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, prepaidDeposited: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startHeatingKwh, startWaterLiters, status: "ACTIVE" },
   });
 
   // Update unit status; for long-term units also store tenant info for invoicing/portal
@@ -1256,21 +1257,26 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
   const totalPaid = periods.reduce((s, p) => s + p.paidAmount, 0) + servicesPaid;
 
   // PREPAID guests draw consumption from money already deposited, so they owe
-  // nothing — reporting an "amount due" for them was simply wrong.
+  // nothing — reporting an "amount due" for them was simply wrong. The live
+  // balance (prepaidAmount) already carries every service draw, so only
+  // el/water accumulators remain to subtract; deriving "used" from
+  // deposited − remaining also keeps card-paid services out of the balance.
   const isPrepaid = session.billingMode === "PREPAID";
-  const deposited = session.prepaidAmount ?? 0;
-  const prepaidUsed = session.accumulatedElCost + session.accumulatedWaterCost + servicesCost;
-  const prepaid = isPrepaid
-    ? {
-        deposited,
-        used: prepaidUsed,
-        remaining: Math.max(0, deposited - prepaidUsed),
-      }
-    : null;
-
-  const rawOwed = isPrepaid
-    ? Math.max(0, prepaidUsed - deposited)   // only if they overspent the deposit
-    : totalCost - totalPaid;
+  let prepaid: { deposited: number; used: number; remaining: number } | null = null;
+  let rawOwed: number;
+  if (isPrepaid) {
+    const deposited = await resolvePrepaidDeposited(session);
+    const remainingRaw =
+      (session.prepaidAmount ?? 0) - session.accumulatedElCost - session.accumulatedWaterCost;
+    prepaid = {
+      deposited,
+      used: deposited - remainingRaw,
+      remaining: Math.max(0, remainingRaw),
+    };
+    rawOwed = Math.max(0, -remainingRaw); // only if they overspent the deposit
+  } else {
+    rawOwed = totalCost - totalPaid;
+  }
   // Amounts under 1 DKK are considered rounding noise and ignored
   const owed = rawOwed < 1 ? 0 : rawOwed;
 
@@ -1994,6 +2000,7 @@ export async function activateBookingSession(
       status: "ACTIVE",
       billingMode,
       prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null,
+      prepaidDeposited: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null,
       guestName: finalGuestName,
       guestEmail: finalGuestEmail,
       guestPhone: finalGuestPhone,
@@ -2684,9 +2691,18 @@ export async function markSessionUnpaid(sessionId: number) {
 export async function adjustPrepaidAmount(sessionId: number, newAmount: number) {
   await requireAuth();
   if (newAmount < 0) throw new Error("Beløb kan ikke være negativt");
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { id: true, prepaidAmount: true, prepaidDeposited: true },
+  });
+  if (!session) throw new Error("Booking ikke fundet");
+  // The admin sets the BALANCE; shift the deposited total by the same delta so
+  // "Forudbetalt" reflects the extra money without absorbing prior spending.
+  const delta = newAmount - (session.prepaidAmount ?? 0);
+  const deposited = Math.max(0, (await resolvePrepaidDeposited(session)) + delta);
   await prisma.session.update({
     where: { id: sessionId },
-    data: { prepaidAmount: newAmount },
+    data: { prepaidAmount: newAmount, prepaidDeposited: deposited },
   });
   revalidatePath(`/admin/bookings/${sessionId}`);
   revalidatePath("/admin/bookings");

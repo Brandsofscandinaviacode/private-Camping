@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { verifyCallbackChecksum, isPaymentAccepted } from "@/lib/quickpay";
 import { activateLaundrySession, activateShowerSession, applyShowerExtension } from "@/lib/actions";
 import { logger } from "@/lib/logger";
+import { resolvePrepaidDeposited } from "@/lib/prepaid";
 
 function getCallbackAmount(body: Record<string, unknown>): number | null {
   const ops = body.operations;
@@ -151,11 +152,16 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Deposited total must grow too — but `increment` on a NULL column
+        // stays NULL in SQLite, so resolve the legacy fallback and set it
+        // absolutely.
+        const depositedBefore = await resolvePrepaidDeposited(topupSession);
         await prisma.$transaction([
           prisma.session.update({
             where: { id: topupSession.id },
             data: {
               prepaidAmount: { increment: topupAmount },
+              prepaidDeposited: depositedBefore + topupAmount,
               notes: (topupSession.notes || "").replace(
                 `TOPUP:${quickpayId}:${match![1]}`,
                 `TOPUP_DONE:${quickpayId}:${match![1]}`,

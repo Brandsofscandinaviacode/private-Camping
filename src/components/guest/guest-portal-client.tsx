@@ -78,6 +78,7 @@ interface GuestPortalClientProps {
   paymentStatus: string;
   billingMode: "PREPAID" | "POSTPAID";
   prepaidAmount: number | null;
+  prepaidDeposited: number | null;
   isLongTerm: boolean;
   invoices: InvoiceData[];
   quickpayEnabled: boolean;
@@ -156,6 +157,7 @@ export function GuestPortalClient({
   paymentStatus,
   billingMode,
   prepaidAmount,
+  prepaidDeposited,
   isLongTerm,
   invoices,
   quickpayEnabled,
@@ -620,8 +622,16 @@ export function GuestPortalClient({
                       </>
                     )}
 
-                    {/* Prepaid balance — compact inline */}
-                    {billingMode === "PREPAID" && prepaidAmount != null && (
+                    {/* Prepaid balance — compact inline.
+                        "Forudbetalt" is the total deposited (never shrinks);
+                        prepaidAmount is the live balance the services draw
+                        from, so remaining = balance − live el/water. */}
+                    {billingMode === "PREPAID" && prepaidAmount != null && (() => {
+                      const deposited = prepaidDeposited ?? prepaidAmount;
+                      const liveCost = consumption?.totalLiveCost ?? 0;
+                      const remaining = prepaidAmount - liveCost;
+                      const usedFraction = deposited > 0 ? (deposited - remaining) / deposited : 0;
+                      return (
                       <>
                         <Separator />
                         <div className="flex items-center justify-between">
@@ -631,31 +641,31 @@ export function GuestPortalClient({
                               {locale === "en" ? "Prepaid" : locale === "de" ? "Vorauszahlung" : "Forudbetalt"}
                             </span>
                           </div>
-                          <span className="font-semibold">{formatDKK(prepaidAmount)}</span>
+                          <span className="font-semibold">{formatDKK(deposited)}</span>
                         </div>
-                        {consumption?.totalLiveCost != null && (
-                          <>
-                            <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  (consumption.totalLiveCost / prepaidAmount) > 0.9 ? "bg-red-500" :
-                                  (consumption.totalLiveCost / prepaidAmount) > 0.7 ? "bg-yellow-500" : "bg-green-500"
-                                }`}
-                                style={{ width: `${Math.min(100, (consumption.totalLiveCost / prepaidAmount) * 100)}%` }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-muted-foreground">
-                                {locale === "en" ? "Remaining" : locale === "de" ? "Verbleibend" : "Resterende"}
-                              </span>
-                              <span className={`font-bold ${prepaidAmount - consumption.totalLiveCost < 0 ? "text-red-600" : "text-green-600"}`}>
-                                {formatDKK(prepaidAmount - consumption.totalLiveCost)}
-                              </span>
-                            </div>
-                          </>
+                        <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              usedFraction > 0.9 ? "bg-red-500" :
+                              usedFraction > 0.7 ? "bg-yellow-500" : "bg-green-500"
+                            }`}
+                            style={{ width: `${Math.min(100, Math.max(0, usedFraction * 100))}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">
+                            {locale === "en" ? "Remaining" : locale === "de" ? "Verbleibend" : "Resterende"}
+                          </span>
+                          <span className={`font-bold ${remaining < 0 ? "text-red-600" : "text-green-600"}`}>
+                            {formatDKK(remaining)}
+                          </span>
+                        </div>
+                        {isActive && sessionId && quickpayEnabled && (
+                          <TopUpSection sessionId={sessionId} token={token} locale={locale} />
                         )}
                       </>
-                    )}
+                      );
+                    })()}
                   </>
                 )}
               </CardContent>
@@ -699,11 +709,6 @@ export function GuestPortalClient({
               )}
             </CardContent>
           </Card>
-        )}
-
-        {/* ═══ Prepaid Top-up ═══ */}
-        {isActive && billingMode === "PREPAID" && sessionId && quickpayEnabled && (
-          <TopUpSection sessionId={sessionId} token={token} locale={locale} />
         )}
 
         {/* ═══ Active services banner ═══ */}
@@ -1320,6 +1325,7 @@ function TopUpSection({
   const [amount, setAmount] = useState("100");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const presets = [50, 100, 200, 500];
 
@@ -1343,13 +1349,21 @@ function TopUpSection({
   }
 
   const labels = {
-    title: locale === "en" ? "Buy extra power" : locale === "de" ? "Extra Strom kaufen" : "Køb ekstra strøm",
+    title: locale === "en" ? "Top up balance" : locale === "de" ? "Guthaben aufladen" : "Fyld saldo op",
     buy: locale === "en" ? "Buy" : locale === "de" ? "Kaufen" : "Køb",
   };
 
+  if (!expanded) {
+    return (
+      <Button variant="outline" size="sm" className="w-full" onClick={() => setExpanded(true)}>
+        <Wallet className="h-4 w-4 mr-2 text-green-600" />
+        {labels.title}
+      </Button>
+    );
+  }
+
   return (
-    <Card>
-      <CardContent className="py-3 space-y-2">
+    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Wallet className="h-4 w-4 text-green-500" />
           {labels.title}
@@ -1386,8 +1400,7 @@ function TopUpSection({
           </Button>
         </div>
         {error && <p className="text-xs text-red-600">{error}</p>}
-      </CardContent>
-    </Card>
+    </div>
   );
 }
 

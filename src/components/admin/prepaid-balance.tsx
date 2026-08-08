@@ -8,20 +8,28 @@ import { adjustPrepaidAmount } from "@/lib/actions";
 
 interface PrepaidBalanceProps {
   sessionId: number;
+  /** Live service balance (prepaidAmount in DB) — laundry/shower draws already deducted. */
   prepaidAmount: number;
+  /** Total ever deposited (initial + top-ups) — what "Indbetalt" should show. */
+  prepaidDeposited: number;
+  /** Accumulated el+water cost, deducted from the balance at display time. */
   accumulatedCost: number;
   isActive: boolean;
 }
 
-export function PrepaidBalance({ sessionId, prepaidAmount, accumulatedCost, isActive }: PrepaidBalanceProps) {
+export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, accumulatedCost, isActive }: PrepaidBalanceProps) {
   const [isPending, startTransition] = useTransition();
   const [showAdd, setShowAdd] = useState(false);
   const [addAmount, setAddAmount] = useState("");
   const [saved, setSaved] = useState(false);
 
-  const remaining = Math.max(0, prepaidAmount - accumulatedCost);
-  const isOverdrawn = accumulatedCost > prepaidAmount;
-  const overdrawnAmount = isOverdrawn ? accumulatedCost - prepaidAmount : 0;
+  const remainingRaw = prepaidAmount - accumulatedCost;
+  const remaining = Math.max(0, remainingRaw);
+  const isOverdrawn = remainingRaw < 0;
+  const overdrawnAmount = isOverdrawn ? -remainingRaw : 0;
+  // Used = everything drawn from the deposit: services (already off the
+  // balance) plus accumulated el/water.
+  const used = prepaidDeposited - remainingRaw;
 
   function handleAdd() {
     const extra = parseFloat(addAmount);
@@ -45,18 +53,18 @@ export function PrepaidBalance({ sessionId, prepaidAmount, accumulatedCost, isAc
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-lg bg-muted/50 p-3">
             <p className="text-xs text-muted-foreground">Indbetalt</p>
-            <p className="text-lg font-bold tabular-nums">{prepaidAmount.toFixed(2)} <span className="text-sm text-muted-foreground font-normal">DKK</span></p>
+            <p className="text-lg font-bold tabular-nums">{prepaidDeposited.toFixed(2)} <span className="text-sm text-muted-foreground font-normal">DKK</span></p>
           </div>
           <div className="rounded-lg bg-muted/50 p-3">
             <p className="text-xs text-muted-foreground">Forbrugt</p>
-            <p className="text-lg font-bold tabular-nums">{accumulatedCost.toFixed(2)} <span className="text-sm text-muted-foreground font-normal">DKK</span></p>
+            <p className="text-lg font-bold tabular-nums">{used.toFixed(2)} <span className="text-sm text-muted-foreground font-normal">DKK</span></p>
           </div>
         </div>
 
         <div className={`flex items-center justify-between p-4 rounded-lg border ${
           isOverdrawn
             ? "bg-red-50 border-red-200"
-            : remaining < prepaidAmount * 0.2
+            : remaining < prepaidDeposited * 0.2
               ? "bg-amber-50 border-amber-200"
               : "bg-green-50 border-green-200"
         }`}>
@@ -64,7 +72,7 @@ export function PrepaidBalance({ sessionId, prepaidAmount, accumulatedCost, isAc
             <p className="text-xs text-muted-foreground">{isOverdrawn ? "Overtræk" : "Resterende"}</p>
           </div>
           <span className={`text-2xl font-bold tabular-nums ${
-            isOverdrawn ? "text-red-600" : remaining < prepaidAmount * 0.2 ? "text-amber-600" : "text-green-600"
+            isOverdrawn ? "text-red-600" : remaining < prepaidDeposited * 0.2 ? "text-amber-600" : "text-green-600"
           }`}>
             {isOverdrawn ? `-${overdrawnAmount.toFixed(2)}` : remaining.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">DKK</span>
           </span>
