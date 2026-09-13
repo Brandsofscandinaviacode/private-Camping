@@ -217,11 +217,11 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
         <div className="flex-1" />
         {pending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         <div className="flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
-          <button type="button" onClick={() => setViewMode("list")} title="Liste"
+          <button type="button" onClick={() => setViewMode("list")} title="Liste" aria-label="Vis som liste" aria-pressed={viewMode === "list"}
             className={`px-2.5 py-1.5 rounded-md transition ${viewMode === "list" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
             <List className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => setViewMode("cards")} title="Kort"
+          <button type="button" onClick={() => setViewMode("cards")} title="Kort" aria-label="Vis som kort" aria-pressed={viewMode === "cards"}
             className={`px-2.5 py-1.5 rounded-md transition ${viewMode === "cards" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
             <LayoutGrid className="h-3.5 w-3.5" />
           </button>

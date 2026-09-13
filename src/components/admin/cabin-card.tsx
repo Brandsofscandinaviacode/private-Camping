@@ -119,8 +119,8 @@ export function UnitCard(props: UnitCardProps) {
   const s = STATUS[st];
   const TypeIcon = typeIcons[unit.type] || Home;
   const displayGuest = activeGuestName || pendingGuestName || unit.longTermGuestName;
-  // One optional live signal — only when HA is actually reachable. The global
-  // "HA offline" banner on the dashboard replaces the old per-card error label.
+  // One optional live signal — only when the hardware backend is reachable.
+  // When it isn't, the card simply shows no live figure (no per-card error).
   const showLive = !!haStates?.haReachable && st === "occ" && haStates?.powerOn !== null;
 
   return (

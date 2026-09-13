@@ -29,6 +29,7 @@ export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
   const [isPending, startTransition] = useTransition();
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [markError, setMarkError] = useState<string | null>(null);
 
   const isPaid = invoice.status === "PAID";
   const usedKwh = (invoice.endKwh != null && invoice.startKwh != null)
@@ -144,11 +145,15 @@ export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
                   size="sm"
                   className="w-full"
                   disabled={isPending}
-                  onClick={() => startTransition(async () => { await markInvoicePaid(invoice.id); })}
+                  onClick={() => startTransition(async () => {
+                    try { setMarkError(null); await markInvoicePaid(invoice.id); }
+                    catch (e) { setMarkError(e instanceof Error ? e.message : "Kunne ikke markere som betalt"); }
+                  })}
                 >
                   <Check className="h-4 w-4 mr-2" />
                   {isPending ? "Markerer..." : "Markér som betalt"}
                 </Button>
+                {markError && <p className="text-xs p-2 rounded-lg bg-red-50 text-red-600">{markError}</p>}
                 <Button
                   size="sm"
                   variant="outline"

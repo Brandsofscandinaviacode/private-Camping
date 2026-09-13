@@ -16,6 +16,27 @@ interface KpiProps {
     departures: number;
     nextCheckIn: { time: string; unitName: string } | null;
   };
+  /** Weekly kWh totals (oldest first) for the sparkline under "Forbrug nu". */
+  history?: { period: string; el: number; water: number }[];
+}
+
+// Tiny inline bar sparkline — the last 8 weeks of electricity, latest in amber.
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 0.01);
+  const w = 8, gap = 3, h = 28;
+  return (
+    <svg width={values.length * (w + gap)} height={h} className="mt-3 block" role="img" aria-label="Elforbrug de seneste uger">
+      {values.map((v, i) => {
+        const bh = Math.max(2, (v / max) * h);
+        const last = i === values.length - 1;
+        return (
+          <rect key={i} x={i * (w + gap)} y={h - bh} width={w} height={bh} rx={2}
+            className={last ? "fill-amber-500" : "fill-muted-foreground/30"} />
+        );
+      })}
+    </svg>
+  );
 }
 
 function Card({ children }: { children: React.ReactNode }) {
@@ -37,7 +58,7 @@ function Label({ icon: Icon, tint, children }: { icon: typeof Users; tint: strin
   );
 }
 
-export function DashboardKpis({ total, occupied, reserved, vacant, totalUsage, elPricing, movements }: KpiProps) {
+export function DashboardKpis({ total, occupied, reserved, vacant, totalUsage, elPricing, movements, history = [] }: KpiProps) {
   const pct = total > 0 ? Math.round((occupied / total) * 100) : 0;
   const occW = total > 0 ? (occupied / total) * 100 : 0;
   const resW = total > 0 ? (reserved / total) * 100 : 0;
@@ -93,17 +114,22 @@ export function DashboardKpis({ total, occupied, reserved, vacant, totalUsage, e
       <Card>
         <Label icon={Zap} tint="bg-amber-500/10 text-amber-600">Forbrug nu</Label>
         <p className="text-[30px] font-bold tracking-tight tabular-nums mt-3 leading-none">
-          {totalUsage ? (totalUsage.totalKwhPerHour * 1000).toFixed(0) : "0"}
+          {totalUsage ? (totalUsage.totalKwhPerHour * 1000).toFixed(0) : "—"}
           <span className="text-sm font-medium text-muted-foreground ml-0.5">W</span>
         </p>
-        <div className="flex items-center gap-4 mt-3 text-[12.5px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
-            <Zap className="h-3.5 w-3.5 text-amber-500" />{totalUsage ? kr(totalUsage.totalKwhPerHour) : "0,00"} kWh/t
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <Droplets className="h-3.5 w-3.5 text-blue-500" />{totalUsage ? one(totalUsage.totalWaterLitersPerHour) : "0,0"} L/t
-          </span>
-        </div>
+        {totalUsage ? (
+          <div className="flex items-center gap-4 mt-3 text-[12.5px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <Zap className="h-3.5 w-3.5 text-amber-500" />{kr(totalUsage.totalKwhPerHour)} kWh/t
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Droplets className="h-3.5 w-3.5 text-blue-500" />{one(totalUsage.totalWaterLitersPerHour)} L/t
+            </span>
+          </div>
+        ) : (
+          <p className="mt-3 text-[12.5px] text-muted-foreground">Ingen forbindelse til målerne lige nu</p>
+        )}
+        <Sparkline values={history.slice(-8).map((h) => h.el)} />
       </Card>
 
       {/* Elpris nu */}

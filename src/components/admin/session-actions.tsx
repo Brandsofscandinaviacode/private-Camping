@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { CreditCard, Undo2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { markSessionPaid, markSessionUnpaid } from "@/lib/actions";
@@ -14,6 +14,7 @@ interface SessionActionsProps {
 
 export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: SessionActionsProps) {
   const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-sm">
@@ -33,7 +34,7 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
         {paidAt && (
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Betalt</span>
-            <span>{new Date(paidAt).toLocaleString("da-DK")}</span>
+            <span>{new Date(paidAt).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
           </div>
         )}
 
@@ -41,7 +42,10 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
           <Button
             className="w-full"
             disabled={isPending}
-            onClick={() => startTransition(async () => { await markSessionPaid(sessionId); })}
+            onClick={() => startTransition(async () => {
+              try { setError(null); await markSessionPaid(sessionId); }
+              catch (e) { setError(e instanceof Error ? e.message : "Kunne ikke markere som betalt"); }
+            })}
           >
             <Check className="h-4 w-4 mr-2" />
             {isPending ? "Markerer..." : "Markér som betalt"}
@@ -51,12 +55,19 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
             variant="outline"
             className="w-full"
             disabled={isPending}
-            onClick={() => startTransition(async () => { await markSessionUnpaid(sessionId); })}
+            onClick={() => {
+              if (!window.confirm("Fortryd betalingen? Opholdet markeres som ubetalt igen.")) return;
+              startTransition(async () => {
+                try { setError(null); await markSessionUnpaid(sessionId); }
+                catch (e) { setError(e instanceof Error ? e.message : "Kunne ikke fortryde betaling"); }
+              });
+            }}
           >
             <Undo2 className="h-4 w-4 mr-2" />
             {isPending ? "Fortryder..." : "Fortryd betaling"}
           </Button>
         )}
+        {error && <p className="text-sm p-2 rounded-lg bg-red-50 text-red-600">{error}</p>}
       </div>
     </div>
   );

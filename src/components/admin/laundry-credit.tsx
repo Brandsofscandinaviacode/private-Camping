@@ -148,7 +148,7 @@ export function LaundryCreditSection({ sessionId, currentCredit }: Props) {
         </div>
         {credit > 0 && (
           <button
-            onClick={handleReset}
+            onClick={() => { if (window.confirm(`Nulstil al vaskekredit (${credit.toFixed(0)} DKK)?`)) handleReset(); }}
             disabled={loading}
             className="text-xs text-destructive hover:underline disabled:opacity-50"
           >

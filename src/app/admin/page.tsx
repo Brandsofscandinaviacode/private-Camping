@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
   getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession,
-  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing,
+  getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing, getTotalConsumptionHistory,
 } from "@/lib/actions";
 import { getDashboardMovements } from "@/lib/dashboard-actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
@@ -12,7 +12,7 @@ import { Tent, AlertCircle, AlertTriangle } from "lucide-react";
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, history] = await Promise.all([
     getUnits(),
     getResourceTypes(),
     getUnpaidCount(),
@@ -20,6 +20,7 @@ export default async function AdminDashboard() {
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
     getEffectiveElPricing().catch(() => null),
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
+    getTotalConsumptionHistory("week").catch(() => []),
   ]);
 
   const unitData = await Promise.all(
@@ -81,6 +82,7 @@ export default async function AdminDashboard() {
         totalUsage={totalUsage}
         elPricing={elPricing}
         movements={movements}
+        history={history}
       />
 
       {/* Consolidated alerts */}
@@ -106,12 +108,19 @@ export default async function AdminDashboard() {
                 <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
                   <AlertTriangle className="h-[18px] w-[18px] text-amber-600" />
                 </div>
-                <p className="text-sm text-amber-800">
-                  <span className="font-bold">{alert.unitName}</span> bruger{" "}
-                  {alert.type === "electricity"
-                    ? `${alert.usage.toFixed(1)} kWh (grænse: ${alert.threshold} kWh)`
-                    : `${alert.usage.toFixed(0)} liter vand (grænse: ${alert.threshold} L)`}
-                </p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-amber-800">
+                    <span className="font-bold">{alert.unitName}</span> bruger{" "}
+                    {alert.type === "electricity"
+                      ? `${alert.usage.toFixed(1).replace(".", ",")} kWh (grænse: ${alert.threshold} kWh)`
+                      : `${alert.usage.toFixed(0)} liter vand (grænse: ${alert.threshold} L)`}
+                  </p>
+                  {/* How far past the limit — the marker at 100 % is the threshold */}
+                  <div className="relative mt-1.5 h-1.5 w-full max-w-xs rounded-full bg-amber-200/70 overflow-hidden" aria-hidden="true">
+                    <div className="h-full bg-amber-500 rounded-full" style={{ width: `${Math.min(100, (alert.usage / Math.max(alert.threshold, 0.01)) * 100)}%` }} />
+                    <div className="absolute inset-y-0 w-px bg-amber-800/60" style={{ left: `${Math.min(100, 100 / Math.max(1, alert.usage / Math.max(alert.threshold, 0.01))).toFixed(1)}%` }} />
+                  </div>
+                </div>
               </div>
             </Link>
           ))}

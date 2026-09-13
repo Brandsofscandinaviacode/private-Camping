@@ -25,6 +25,7 @@ const formatDKK = (v: number | null) => v !== null ? `${v.toFixed(2)} DKK` : "�
 export function LiveConsumption({ sessionId, hasElectricity, hasWater }: LiveConsumptionProps) {
   const [data, setData] = useState<ConsumptionData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -33,6 +34,7 @@ export function LiveConsumption({ sessionId, hasElectricity, hasWater }: LiveCon
       try {
         const result = await getLiveConsumption(sessionId);
         if (!mounted) return;
+        setFailed(false);
         if (result) {
           setData({
             usedKwh: result.usedKwh,
@@ -44,7 +46,8 @@ export function LiveConsumption({ sessionId, hasElectricity, hasWater }: LiveCon
           });
         }
       } catch {
-        // HA might be unavailable — keep showing last value
+        // HA/MQTT might be unavailable — keep showing the last value, but say so
+        if (mounted) setFailed(true);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -63,11 +66,13 @@ export function LiveConsumption({ sessionId, hasElectricity, hasWater }: LiveCon
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-sm">
       <div className="px-5 py-4 border-b border-border">
-        <h2 className="font-semibold">Dit forbrug</h2>
+        <h2 className="font-semibold">Live forbrug</h2>
       </div>
       <div className="p-5 space-y-3">
         {loading && !data ? (
           <p className="text-sm text-muted-foreground text-center py-2">Henter forbrug…</p>
+        ) : failed && !data ? (
+          <p className="text-sm text-red-600 text-center py-2">Kunne ikke hente måleraflæsning — tjek forbindelsen til Home Assistant/MQTT.</p>
         ) : (
           <>
             {hasElectricity && (

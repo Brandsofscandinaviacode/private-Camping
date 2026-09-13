@@ -541,7 +541,17 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
   }
 
   function copyPrefix(id: string) {
-    navigator.clipboard.writeText(id);
+    // navigator.clipboard is undefined on plain-HTTP LAN installs — fall back
+    // to the textarea trick like CopyButton does.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(id).catch(() => {});
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = id; ta.style.position = "fixed"; ta.style.left = "-9999px";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
     setCopiedPrefix(id);
     setTimeout(() => setCopiedPrefix(null), 1500);
   }
@@ -2413,7 +2423,6 @@ export function BookingSettings({ settings, resourceTypes: localResourceTypes = 
               </>
             )}
 
-            <SaveButton isPending={isPending} saved={saved} onClick={handleSave} />
           </div>
         </div>
       )}

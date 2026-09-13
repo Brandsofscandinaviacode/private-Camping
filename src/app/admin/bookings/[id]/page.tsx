@@ -50,6 +50,8 @@ export default async function BookingDetailPage({
   const hasHeatingMeter = !!(session.unit.hardware?.hasHeating && session.unit.hardware?.heatingMeterEntityId);
   const usedWater = (session.endWaterLiters != null && session.startWaterLiters != null)
     ? Math.max(0, session.endWaterLiters - session.startWaterLiters) : null;
+  // Deposit total for prepaid stays (prepaidAmount is the live balance, not the deposit)
+  const prepaidDeposited = session.billingMode === "PREPAID" ? await resolvePrepaidDeposited(session) : null;
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-7xl">
@@ -151,7 +153,7 @@ export default async function BookingDetailPage({
                 <div>
                   {session.billingMode === "PREPAID" ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                      Forudbetalt {session.prepaidAmount ? `(${session.prepaidAmount.toFixed(2)} DKK)` : ""}
+                      Forudbetalt {prepaidDeposited != null ? `(${prepaidDeposited.toFixed(2)} DKK)` : ""}
                     </span>
                   ) : (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Bagudbetalt</span>
@@ -394,7 +396,7 @@ export default async function BookingDetailPage({
             <PrepaidBalance
               sessionId={session.id}
               prepaidAmount={session.prepaidAmount ?? 0}
-              prepaidDeposited={await resolvePrepaidDeposited(session)}
+              prepaidDeposited={prepaidDeposited ?? 0}
               accumulatedCost={(session.accumulatedElCost ?? 0) + (session.accumulatedWaterCost ?? 0)}
               isActive={isActive}
             />

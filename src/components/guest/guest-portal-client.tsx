@@ -119,6 +119,7 @@ function Section({
       <button
         className="w-full flex items-center justify-between px-4 py-3.5 text-left hover:bg-muted/30 transition-colors"
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
       >
         <span className="flex items-center gap-2.5 text-base font-semibold">
           {icon}
@@ -185,6 +186,7 @@ export function GuestPortalClient({
     localStorage.setItem("campsense-lang", l);
   }
 
+
   const [consumption, setConsumption] = useState<ConsumptionData | null>(null);
   const [monthIndex, setMonthIndex] = useState(0); // 0 = current period (live), 1+ = invoices
   const [tempValue, setTempValue] = useState("21");
@@ -194,6 +196,18 @@ export function GuestPortalClient({
   const [payingInvoiceId, setPayingInvoiceId] = useState<number | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
+
+  // Keep <html lang> in step with the chosen language (layout hard-codes "da");
+  // also closes the fullscreen map on Escape.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+  useEffect(() => {
+    if (!mapExpanded) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMapExpanded(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mapExpanded]);
 
   const isActive = status === "ACTIVE";
 
@@ -253,7 +267,7 @@ export function GuestPortalClient({
         setTempMsg({ ok: true, text: tx.temperatureSet });
         setTimeout(() => setTempMsg(null), 4000);
       } catch {
-        setTempMsg({ ok: false, text: tx.paymentFailed });
+        setTempMsg({ ok: false, text: tx.errorOccurred });
         setTimeout(() => setTempMsg(null), 5000);
       }
     });
@@ -280,7 +294,7 @@ export function GuestPortalClient({
       const result = await createSessionPayment(sessionId, token);
       window.location.assign(result.paymentLink);
     } catch (e) {
-      setPayError(e instanceof Error ? e.message : "Betaling kunne ikke oprettes");
+      setPayError(e instanceof Error ? e.message : tx.paymentFailed);
       setPayingSession(false);
     }
   }
@@ -292,12 +306,15 @@ export function GuestPortalClient({
       const result = await createInvoicePayment(invoiceId);
       window.location.assign(result.paymentLink);
     } catch (e) {
-      setPayError(e instanceof Error ? e.message : "Betaling kunne ikke oprettes");
+      setPayError(e instanceof Error ? e.message : tx.paymentFailed);
       setPayingInvoiceId(null);
     }
   }
 
-  const formatDKK = (v: number | null) => v !== null ? `${v.toFixed(2)} DKK` : "—";
+  const intl = locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK";
+  const moneyFmt = new Intl.NumberFormat(intl, { style: "currency", currency: "DKK", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatDKK = (v: number | null) => (v !== null ? moneyFmt.format(v) : "—");
+  const litreLabel = locale === "en" ? "litres" : locale === "de" ? "Liter" : "liter";
 
   const hasServiceItems = laundryMachines.length > 0 || showers.length > 0;
   const hasServices = hasClimate || hasSmartLock || hasServiceItems;
@@ -306,10 +323,15 @@ export function GuestPortalClient({
 
   // Filter invoices to only this session's period (exclude previous tenants on same unit)
   const sessionStartDate = new Date(checkInTime);
-  const relevantInvoices = invoices.filter(inv => new Date(inv.periodEnd) >= sessionStartDate);
+  const relevantInvoices = isLongTerm
+    ? invoices
+    : invoices.filter((inv) => new Date(inv.periodEnd) >= sessionStartDate);
 
-  // Unpaid invoices for long-term
-  const unpaidInvoices = relevantInvoices.filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
+  // Unpaid invoices, oldest first so the banner's pay button settles the
+  // overdue one before newer ones.
+  const unpaidInvoices = relevantInvoices
+    .filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE")
+    .sort((a, b) => new Date(a.periodEnd).getTime() - new Date(b.periodEnd).getTime());
 
   // Next invoice date for long-term
   const nextInvoiceDateStr = (() => {
@@ -339,7 +361,9 @@ export function GuestPortalClient({
               <button
                 key={l}
                 onClick={() => changeLocale(l)}
-                className={`px-2.5 py-1 rounded-full transition-all text-xs font-medium ${
+                aria-pressed={locale === l}
+                lang={l}
+                className={`px-3 py-1.5 rounded-full transition-all text-xs font-medium ${
                   locale === l ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -398,7 +422,42 @@ export function GuestPortalClient({
                 </div>
               )}
 
-              {paymentStatus === "PAID" ? (
+              {billingMode === "PREPAID" && prepaidAmount != null ? (() => {
+                const deposited = prepaidDeposited ?? prepaidAmount;
+                const remaining = prepaidAmount - (totalElectricityCost ?? 0) - (totalWaterCost ?? 0);
+                const lbl = {
+                  deposited: locale === "en" ? "Prepaid" : locale === "de" ? "Vorauszahlung" : "Forudbetalt",
+                  used: locale === "en" ? "Used" : locale === "de" ? "Verbraucht" : "Forbrugt",
+                  remaining: locale === "en" ? "Remaining balance" : locale === "de" ? "Restguthaben" : "Resterende saldo",
+                  owed: locale === "en" ? "Amount due" : locale === "de" ? "Offener Betrag" : "Skyldigt beløb",
+                  settled: locale === "en" ? "Settled from your prepayment — nothing to pay." : locale === "de" ? "Mit der Vorauszahlung verrechnet — nichts zu zahlen." : "Trukket fra din forudbetaling — intet at betale.",
+                };
+                return (
+                  <div className="space-y-2 text-sm text-left">
+                    <div className="flex justify-between"><span className="text-muted-foreground">{lbl.deposited}</span><span>{formatDKK(deposited)}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">{lbl.used}</span><span>-{formatDKK(deposited - remaining)}</span></div>
+                    {remaining >= 0 ? (
+                      <>
+                        <div className="flex justify-between font-semibold text-green-700 border-t pt-2"><span>{lbl.remaining}</span><span>{formatDKK(remaining)}</span></div>
+                        <p className="text-xs text-muted-foreground">{lbl.settled}</p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex justify-between font-semibold text-red-700 border-t pt-2"><span>{lbl.owed}</span><span>{formatDKK(-remaining)}</span></div>
+                        {quickpayEnabled ? (
+                          <Button onClick={handlePaySession} disabled={payingSession} className="w-full min-h-11">
+                            <CreditCard className="h-4 w-4 mr-2" />
+                            {payingSession ? tx.creatingPayment : tx.payOnline}
+                          </Button>
+                        ) : (
+                          <p className="text-xs text-muted-foreground text-center">{tx.contactCampsite}</p>
+                        )}
+                        {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
+                      </>
+                    )}
+                  </div>
+                );
+              })() : paymentStatus === "PAID" ? (
                 <div className="bg-green-50 text-green-700 rounded-lg p-3 text-sm font-medium">
                   {tx.thankYou}
                 </div>
@@ -489,8 +548,9 @@ export function GuestPortalClient({
                   <div className="flex items-center justify-between">
                     <button
                       onClick={() => canGoBack && setMonthIndex(monthIndex + 1)}
-                      className={`p-1 rounded-md transition-colors ${canGoBack ? "hover:bg-muted text-foreground" : "text-muted-foreground/30 cursor-default"}`}
+                      className={`p-2.5 rounded-md transition-colors ${canGoBack ? "hover:bg-muted text-foreground" : "text-muted-foreground/30 cursor-default"}`}
                       disabled={!canGoBack}
+                      aria-label={locale === "en" ? "Previous month" : locale === "de" ? "Vorheriger Monat" : "Forrige måned"}
                     >
                       <ChevronLeft className="h-5 w-5" />
                     </button>
@@ -504,8 +564,9 @@ export function GuestPortalClient({
                     </div>
                     <button
                       onClick={() => canGoForward && setMonthIndex(monthIndex - 1)}
-                      className={`p-1 rounded-md transition-colors ${canGoForward ? "hover:bg-muted text-foreground" : "text-muted-foreground/30 cursor-default"}`}
+                      className={`p-2.5 rounded-md transition-colors ${canGoForward ? "hover:bg-muted text-foreground" : "text-muted-foreground/30 cursor-default"}`}
                       disabled={!canGoForward}
+                      aria-label={locale === "en" ? "Next month" : locale === "de" ? "Nächster Monat" : "Næste måned"}
                     >
                       <ChevronRight className="h-5 w-5" />
                     </button>
@@ -540,7 +601,7 @@ export function GuestPortalClient({
                       <div>
                         <p className="text-sm font-medium">{tx.water}</p>
                         <p className="text-xs text-muted-foreground">
-                          {waterLiters != null ? `${waterLiters.toFixed(0)} liter` : tx.awaitingData}
+                          {waterLiters != null ? `${waterLiters.toFixed(0)} ${litreLabel}` : tx.awaitingData}
                         </p>
                       </div>
                     </div>
@@ -553,7 +614,7 @@ export function GuestPortalClient({
                       <div className="h-9 w-9 rounded-xl bg-purple-500/10 flex items-center justify-center">
                         <WashingMachine className="h-4 w-4 text-purple-500" />
                       </div>
-                      <p className="text-sm font-medium">Services</p>
+                      <p className="text-sm font-medium">{locale === "de" ? "Dienste" : "Services"}</p>
                     </div>
                     <span className="font-semibold">{formatDKK(consumption!.servicesCost)}</span>
                   </div>
@@ -565,6 +626,23 @@ export function GuestPortalClient({
                     {formatDKK(total)}
                   </span>
                 </div>
+                {/* Where the money went — one stacked bar, colours match the rows above */}
+                {(() => {
+                  const parts = [
+                    { v: elecCost ?? 0, cls: "bg-amber-500" },
+                    { v: waterCost ?? 0, cls: "bg-blue-500" },
+                    { v: isCurrentMonth ? (consumption?.servicesCost ?? 0) : 0, cls: "bg-purple-500" },
+                  ].filter((x) => x.v > 0);
+                  const sum = parts.reduce((a, x) => a + x.v, 0);
+                  if (parts.length < 2 || sum <= 0) return null;
+                  return (
+                    <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                      {parts.map((x, i) => (
+                        <div key={i} className={x.cls} style={{ width: `${(x.v / sum) * 100}%` }} />
+                      ))}
+                    </div>
+                  );
+                })()}
 
                 {/* Paid amount row */}
                 {isLongTerm && (
@@ -600,11 +678,12 @@ export function GuestPortalClient({
                       variant="outline" size="sm"
                       disabled={payingInvoiceId === viewedInvoice.id}
                       onClick={() => handlePayInvoice(viewedInvoice.id)}
-                      className="w-full text-xs"
+                      className="w-full min-h-10"
                     >
-                      <CreditCard className="h-3.5 w-3.5 mr-1.5" />
-                      {payingInvoiceId === viewedInvoice.id ? tx.creatingPayment : `${tx.payInvoice} — ${viewedInvoice.totalAmount.toFixed(2)} DKK`}
+                      <CreditCard className="h-4 w-4 mr-1.5" />
+                      {payingInvoiceId === viewedInvoice.id ? tx.creatingPayment : `${tx.payInvoice} — ${formatDKK(viewedInvoice.totalAmount)}`}
                     </Button>
+                    {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
                   </>
                 )}
 
@@ -690,7 +769,7 @@ export function GuestPortalClient({
                                               locale === "de" ? "Rechnung(en) ausstehend" :
                                               "faktura(er) afventer betaling"}
                     {" — "}
-                    {unpaidInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0).toFixed(2)} DKK
+                    {formatDKK(unpaidInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0))}
                   </p>
                 </div>
               </div>
@@ -702,9 +781,12 @@ export function GuestPortalClient({
                   size="sm"
                 >
                   <CreditCard className="h-4 w-4 mr-2" />
-                  {payingInvoiceId === unpaidInvoices[0].id ? tx.creatingPayment : `${tx.payInvoice} — ${unpaidInvoices[0].totalAmount.toFixed(2)} DKK`}
+                  {payingInvoiceId === unpaidInvoices[0].id
+                    ? tx.creatingPayment
+                    : `${tx.payInvoice} — ${new Date(unpaidInvoices[0].periodStart).toLocaleDateString(intl, { month: "long" })} — ${formatDKK(unpaidInvoices[0].totalAmount)}`}
                 </Button>
               )}
+              {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
             </CardContent>
           </Card>
         )}
@@ -735,6 +817,22 @@ export function GuestPortalClient({
                     </span>
                   </div>
                 ))}
+                {activeMachines.map((m) => {
+                  const duration = Math.max(m.durationMinutes, m.minutesLeft, 1);
+                  const pct = Math.min(100, Math.max(0, (1 - m.minutesLeft / duration) * 100));
+                  return (
+                    <div key={`bar-${m.id}`} className="space-y-1">
+                      <div className="h-1 w-full rounded-full bg-blue-100 overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+                        <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                      {m.endsAt && (
+                        <p className="text-[11px] text-muted-foreground text-right">
+                          {new Date(m.endsAt).toLocaleTimeString(intl, { hour: "2-digit", minute: "2-digit" })}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </CardContent>
             </Card>
           );
@@ -798,7 +896,7 @@ export function GuestPortalClient({
                     {isPending ? tx.opening : tx.unlock}
                   </Button>
                   {unlockMsg === "ok" && <p className="text-sm text-center rounded-lg px-3 py-1.5 bg-green-50 text-green-700">{tx.doorUnlocked}</p>}
-                  {unlockMsg === "error" && <p className="text-sm text-center rounded-lg px-3 py-1.5 bg-red-50 text-red-600">{tx.paymentFailed}</p>}
+                  {unlockMsg === "error" && <p className="text-sm text-center rounded-lg px-3 py-1.5 bg-red-50 text-red-600">{tx.errorOccurred}</p>}
                 </div>
               )}
 
@@ -853,6 +951,9 @@ export function GuestPortalClient({
           <div
             className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
             onClick={() => setMapExpanded(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label={tx.siteMap}
           >
             <img
               src={siteMapUrl}
@@ -860,8 +961,10 @@ export function GuestPortalClient({
               className="max-w-full max-h-full object-contain"
             />
             <button
-              className="absolute top-4 right-4 text-white bg-black/50 rounded-full w-10 h-10 flex items-center justify-center text-xl"
+              className="absolute top-4 right-4 text-white bg-black/50 rounded-full w-11 h-11 flex items-center justify-center text-xl"
               onClick={() => setMapExpanded(false)}
+              aria-label={locale === "en" ? "Close map" : locale === "de" ? "Karte schließen" : "Luk kort"}
+              autoFocus
             >
               &times;
             </button>
@@ -1083,6 +1186,7 @@ function GuestServicesSection({
               </div>
               <Button
                 size="sm"
+                className="min-h-10 px-4"
                 disabled={!s.available || startingId !== null}
                 onClick={() => handleStartShower(s.id)}
               >
@@ -1135,6 +1239,7 @@ function GuestServicesSection({
                 </div>
                 <Button
                   size="sm"
+                  className="min-h-10 px-4"
                   disabled={!m.available || startingId !== null}
                   onClick={() => {
                     if (m.programs.length > 0) {
@@ -1305,13 +1410,18 @@ function PowerToggle({
     return () => { mounted = false; clearInterval(interval); };
   }, [token]);
 
+  const [toggleError, setToggleError] = useState<string | null>(null);
   async function handleToggle() {
     if (powerOn === null) return;
     setLoading(true);
+    setToggleError(null);
     try {
       const res = await guestTogglePower(token, !powerOn);
       if (res.ok) setPowerOn(res.powerOn);
-    } catch {}
+      else setToggleError(tx.errorOccurred);
+    } catch {
+      setToggleError(tx.errorOccurred);
+    }
     setLoading(false);
   }
 
@@ -1329,11 +1439,12 @@ function PowerToggle({
           </span>
         )}
       </div>
+      {toggleError && <p className="text-xs text-red-600 text-center">{toggleError}</p>}
       <Button
         onClick={handleToggle}
         disabled={loading || powerOn === null}
         variant={powerOn ? "destructive" : "default"}
-        className="w-full"
+        className="w-full min-h-10"
         size="sm"
       >
         {loading ? (

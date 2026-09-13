@@ -7,6 +7,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
@@ -72,13 +73,40 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
     return () => { cancelled = true; };
   }, [unitId, selectedDays, requestKey]);
 
+  // Range selector is rendered in every state so a user can widen the window
+  // when the current one has too little data to draw.
+  const rangeSelector = (
+    <div className="flex gap-2 justify-end">
+      {[1, 7, 30].map((d) => (
+        <button
+          key={d}
+          onClick={() => setSelectedDays(d)}
+          aria-pressed={selectedDays === d}
+          className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+            selectedDays === d
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-muted-foreground hover:bg-muted/80"
+          }`}
+        >
+          {d === 1 ? "24t" : `${d}d`}
+        </button>
+      ))}
+    </div>
+  );
+
   if (loading) {
     return (
-      <div className="h-48 flex items-center justify-center text-sm text-muted-foreground">
-        Indlæser graf...
+      <div className="space-y-3">
+        {rangeSelector}
+        <div className="h-48 flex items-center justify-center text-sm text-muted-foreground">
+          Indlæser graf...
+        </div>
       </div>
     );
   }
+
+  const hasWaterSeries = data.some((d) => d.vand != null);
+  const hasElSeries = data.some((d) => d.el != null);
 
   if (data.length < 2) {
     // Distinguish the three reasons a chart can be empty so the message is
@@ -93,30 +121,21 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
     }
 
     return (
-      <div className="h-48 flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-        <p>Ingen forbrugsgraf endnu</p>
-        <p className="text-xs">{message}</p>
+      <div className="space-y-3">
+        {rangeSelector}
+        <div className="h-48 flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+          <p>Ingen forbrugsgraf endnu</p>
+          <p className="text-xs">{message}</p>
+        </div>
       </div>
     );
   }
 
+  const fmtNum = (v: number) => v.toLocaleString("da-DK", { maximumFractionDigits: 2 });
+
   return (
     <div className="space-y-3">
-      <div className="flex gap-2 justify-end">
-        {[1, 7, 30].map((d) => (
-          <button
-            key={d}
-            onClick={() => setSelectedDays(d)}
-            className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-              selectedDays === d
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground hover:bg-muted/80"
-            }`}
-          >
-            {d === 1 ? "24t" : `${d}d`}
-          </button>
-        ))}
-      </div>
+      {rangeSelector}
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={data}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -126,8 +145,16 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
             tickLine={false}
             interval="preserveStartEnd"
           />
-          <YAxis tick={{ fontSize: 11 }} tickLine={false} width={45} />
+          {/* kWh and litres live on separate axes — hundreds of litres would
+              otherwise flatten the electricity line to zero. */}
+          {hasElSeries && (
+            <YAxis yAxisId="el" tick={{ fontSize: 11 }} tickLine={false} width={45} tickFormatter={fmtNum} />
+          )}
+          {hasWaterSeries && (
+            <YAxis yAxisId="vand" orientation="right" tick={{ fontSize: 11 }} tickLine={false} width={45} tickFormatter={fmtNum} />
+          )}
           <Tooltip
+            formatter={(value, name) => [typeof value === "number" ? fmtNum(value) : value, name]}
             contentStyle={{
               background: "hsl(var(--card))",
               border: "1px solid hsl(var(--border))",
@@ -135,22 +162,29 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
               fontSize: 13,
             }}
           />
-          <Line
-            type="monotone"
-            dataKey="el"
-            name="El (kWh)"
-            stroke="#eab308"
-            strokeWidth={2}
-            dot={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="vand"
-            name="Vand (L)"
-            stroke="#3b82f6"
-            strokeWidth={2}
-            dot={false}
-          />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          {hasElSeries && (
+            <Line
+              yAxisId="el"
+              type="monotone"
+              dataKey="el"
+              name="El (kWh)"
+              stroke="#eab308"
+              strokeWidth={2}
+              dot={false}
+            />
+          )}
+          {hasWaterSeries && (
+            <Line
+              yAxisId="vand"
+              type="monotone"
+              dataKey="vand"
+              name="Vand (L)"
+              stroke="#3b82f6"
+              strokeWidth={2}
+              dot={false}
+            />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

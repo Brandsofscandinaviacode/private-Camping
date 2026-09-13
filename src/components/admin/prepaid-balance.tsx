@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { Wallet, Plus, Loader2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { adjustPrepaidAmount } from "@/lib/actions";
+import { addPrepaidAmount } from "@/lib/actions";
 
 interface PrepaidBalanceProps {
   sessionId: number;
@@ -30,12 +30,23 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
   // Used = everything drawn from the deposit: services (already off the
   // balance) plus accumulated el/water.
   const used = prepaidDeposited - remainingRaw;
+  const servicesDrawn = Math.max(0, prepaidDeposited - prepaidAmount);
+  const elWaterDrawn = Math.max(0, accumulatedCost);
+  // Same levels as the guest portal: amber under 30 % left, red under 10 %.
+  const level = isOverdrawn || remaining < prepaidDeposited * 0.1 ? "red" : remaining < prepaidDeposited * 0.3 ? "amber" : "green";
+  const barBase = Math.max(prepaidDeposited, used, 0.01);
+  const segments = [
+    { label: "Services", value: servicesDrawn, cls: "bg-purple-500" },
+    { label: "El & vand", value: elWaterDrawn, cls: "bg-amber-500" },
+    { label: "Resterende", value: remaining, cls: "bg-green-500" },
+    { label: "Overtræk", value: overdrawnAmount, cls: "bg-red-500" },
+  ].filter((x) => x.value > 0);
 
   function handleAdd() {
     const extra = parseFloat(addAmount);
     if (isNaN(extra) || extra <= 0) return;
     startTransition(async () => {
-      await adjustPrepaidAmount(sessionId, prepaidAmount + extra);
+      await addPrepaidAmount(sessionId, extra);
       setSaved(true);
       setShowAdd(false);
       setAddAmount("");
@@ -61,18 +72,31 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
           </div>
         </div>
 
+        {/* Where the deposit went — one bar, one glance */}
+        <div className="space-y-1.5">
+          <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label="Fordeling af forudbetaling">
+            {segments.map((seg) => (
+              <div key={seg.label} className={seg.cls} style={{ width: `${(seg.value / barBase) * 100}%` }} title={`${seg.label}: ${seg.value.toFixed(2)} DKK`} />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+            {segments.map((seg) => (
+              <span key={seg.label} className="inline-flex items-center gap-1">
+                <span className={`h-2 w-2 rounded-full ${seg.cls}`} />
+                {seg.label} {seg.value.toFixed(0)}
+              </span>
+            ))}
+          </div>
+        </div>
+
         <div className={`flex items-center justify-between p-4 rounded-lg border ${
-          isOverdrawn
-            ? "bg-red-50 border-red-200"
-            : remaining < prepaidDeposited * 0.2
-              ? "bg-amber-50 border-amber-200"
-              : "bg-green-50 border-green-200"
+          level === "red" ? "bg-red-50 border-red-200" : level === "amber" ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"
         }`}>
           <div>
             <p className="text-xs text-muted-foreground">{isOverdrawn ? "Overtræk" : "Resterende"}</p>
           </div>
           <span className={`text-2xl font-bold tabular-nums ${
-            isOverdrawn ? "text-red-600" : remaining < prepaidDeposited * 0.2 ? "text-amber-600" : "text-green-600"
+            level === "red" ? "text-red-600" : level === "amber" ? "text-amber-600" : "text-green-600"
           }`}>
             {isOverdrawn ? `-${overdrawnAmount.toFixed(2)}` : remaining.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">DKK</span>
           </span>

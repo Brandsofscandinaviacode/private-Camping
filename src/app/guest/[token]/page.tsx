@@ -42,7 +42,7 @@ export default async function GuestPortalPage({
     const isPostpaid = (session.billingMode || "POSTPAID") !== "PREPAID";
     const invoices = isFastligger
       ? await prisma.invoice.findMany({
-          where: { unitId: session.unitId },
+          where: { unitId: session.unitId, status: { not: "DRAFT" } },
           orderBy: { periodEnd: "desc" },
           take: 12,
         })
@@ -50,6 +50,7 @@ export default async function GuestPortalPage({
       ? await prisma.invoice.findMany({
           where: {
             unitId: session.unitId,
+            status: { not: "DRAFT" },
             periodEnd: { gte: session.checkInTime },
             ...(session.checkOutTime ? { periodStart: { lte: session.checkOutTime } } : {}),
           },
