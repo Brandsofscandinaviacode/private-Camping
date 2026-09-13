@@ -931,6 +931,20 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
   );
 }
 
+// Copy-to-clipboard affordance for the tunnel guide's code blocks. Lives at
+// module level so React doesn't remount it (and lose focus/state) every render.
+function CopyBtn({ text, id, copiedId, onCopy }: { text: string; id: string; copiedId: string | null; onCopy: (text: string, id: string) => void }) {
+  return (
+    <button
+      onClick={() => onCopy(text, id)}
+      className="absolute top-2 right-2 p-1.5 rounded-md bg-background/80 hover:bg-background border text-muted-foreground hover:text-foreground transition-colors"
+      title="Kopier"
+    >
+      {copiedId === id ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
 // ── Cloudflare Tunnel Setup Guide ──
 function CloudflareTunnelGuide() {
   const [expanded, setExpanded] = useState(false);
@@ -942,15 +956,6 @@ function CloudflareTunnelGuide() {
     setTimeout(() => setCopiedCmd(null), 2000);
   }
 
-  const CopyBtn = ({ text, id }: { text: string; id: string }) => (
-    <button
-      onClick={() => copyToClipboard(text, id)}
-      className="absolute top-2 right-2 p-1.5 rounded-md bg-background/80 hover:bg-background border text-muted-foreground hover:text-foreground transition-colors"
-      title="Kopier"
-    >
-      {copiedCmd === id ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
-  );
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-sm">
@@ -997,7 +1002,7 @@ function CloudflareTunnelGuide() {
               Installer cloudflared på Raspberry Pi
             </h3>
             <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
-              <CopyBtn id="install" text="curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb && sudo dpkg -i cloudflared.deb" />
+              <CopyBtn copiedId={copiedCmd} onCopy={copyToClipboard} id="install" text="curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb && sudo dpkg -i cloudflared.deb" />
               <code>curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb<br />sudo dpkg -i cloudflared.deb</code>
             </div>
           </div>
@@ -1009,7 +1014,7 @@ function CloudflareTunnelGuide() {
               Log ind og opret tunnel
             </h3>
             <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
-              <CopyBtn id="login" text="cloudflared tunnel login&#10;cloudflared tunnel create ha-camping" />
+              <CopyBtn copiedId={copiedCmd} onCopy={copyToClipboard} id="login" text="cloudflared tunnel login&#10;cloudflared tunnel create ha-camping" />
               <code>cloudflared tunnel login<br />cloudflared tunnel create ha-camping</code>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
@@ -1028,7 +1033,7 @@ function CloudflareTunnelGuide() {
               Opret filen <code>~/.cloudflared/config.yml</code> på din Pi:
             </p>
             <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto whitespace-pre">
-              <CopyBtn id="config" text={`tunnel: DIT_TUNNEL_ID\ncredentials-file: /home/pi/.cloudflared/DIT_TUNNEL_ID.json\n\ningress:\n  - hostname: ha.din-camping.campsense.net\n    service: http://localhost:8123\n    originRequest:\n      noTLSVerify: true\n  - service: http_status:404`} />
+              <CopyBtn copiedId={copiedCmd} onCopy={copyToClipboard} id="config" text={`tunnel: DIT_TUNNEL_ID\ncredentials-file: /home/pi/.cloudflared/DIT_TUNNEL_ID.json\n\ningress:\n  - hostname: ha.din-camping.campsense.net\n    service: http://localhost:8123\n    originRequest:\n      noTLSVerify: true\n  - service: http_status:404`} />
               <code>{`tunnel: DIT_TUNNEL_ID
 credentials-file: /home/pi/.cloudflared/DIT_TUNNEL_ID.json
 
@@ -1052,7 +1057,7 @@ ingress:
               Tilføj DNS-record
             </h3>
             <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
-              <CopyBtn id="dns" text="cloudflared tunnel route dns ha-camping ha.din-camping.campsense.net" />
+              <CopyBtn copiedId={copiedCmd} onCopy={copyToClipboard} id="dns" text="cloudflared tunnel route dns ha-camping ha.din-camping.campsense.net" />
               <code>cloudflared tunnel route dns ha-camping ha.din-camping.campsense.net</code>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
@@ -1067,7 +1072,7 @@ ingress:
               Start som service (kør automatisk ved boot)
             </h3>
             <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto">
-              <CopyBtn id="service" text="sudo cloudflared service install&#10;sudo systemctl enable cloudflared&#10;sudo systemctl start cloudflared" />
+              <CopyBtn copiedId={copiedCmd} onCopy={copyToClipboard} id="service" text="sudo cloudflared service install&#10;sudo systemctl enable cloudflared&#10;sudo systemctl start cloudflared" />
               <code>sudo cloudflared service install<br />sudo systemctl enable cloudflared<br />sudo systemctl start cloudflared</code>
             </div>
           </div>
@@ -1082,7 +1087,7 @@ ingress:
               Tilføj dette til din <code>configuration.yaml</code> i Home Assistant:
             </p>
             <div className="relative bg-muted rounded-lg p-3 pr-10 font-mono text-sm overflow-x-auto whitespace-pre">
-              <CopyBtn id="hayaml" text={`http:\n  use_x_forwarded_for: true\n  trusted_proxies:\n    - 127.0.0.1\n    - 172.16.0.0/12`} />
+              <CopyBtn copiedId={copiedCmd} onCopy={copyToClipboard} id="hayaml" text={`http:\n  use_x_forwarded_for: true\n  trusted_proxies:\n    - 127.0.0.1\n    - 172.16.0.0/12`} />
               <code>{`http:
   use_x_forwarded_for: true
   trusted_proxies:

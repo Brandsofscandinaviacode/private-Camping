@@ -670,7 +670,7 @@ export async function updateLongTermTenant(
   }
 ) {
   await requireAuth();
-  let unit = await prisma.unit.findUnique({ where: { id: unitId } });
+  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
   if (!unit) throw new Error("Enhed ikke fundet");
 
   const portalToken = unit.longTermPortalToken || uuidv4();
@@ -4500,7 +4500,7 @@ export async function checkLaundryMachines() {
     data: { status: "CANCELLED" },
   });
 
-  return { turned_off: expired.length, expired_pending: expiredPending.count };
+  return { turned_off: expired.length, expired_pending: expiredPending.count, metered: meteredResult };
 }
 
 // ──────────────────────────────────────────────

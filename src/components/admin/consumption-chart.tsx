@@ -21,22 +21,27 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
   const [data, setData] = useState<
     { time: string; el: number | null; vand: number | null }[]
   >([]);
-  const [loading, setLoading] = useState(true);
   const [hasMeters, setHasMeters] = useState(true);
   const [firstLoggedAt, setFirstLoggedAt] = useState<Date | null>(null);
   const [selectedDays, setSelectedDays] = useState(days);
+  // Loading is derived: the chart is loading until data for the current
+  // unit/range key has arrived. Avoids a synchronous setState in the effect.
+  const requestKey = `${unitId}:${selectedDays}`;
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const loading = loadedKey !== requestKey;
 
   useEffect(() => {
-    setLoading(true);
+    let cancelled = false;
     getConsumptionChartData(unitId, selectedDays)
       .then((res) => {
+        if (cancelled) return;
         setHasMeters(res.hasMeters);
         setFirstLoggedAt(res.firstLoggedAt ? new Date(res.firstLoggedAt) : null);
 
         const logs = res.logs;
         if (logs.length < 2) {
           setData([]);
-          setLoading(false);
+          setLoadedKey(requestKey);
           return;
         }
 
@@ -61,10 +66,11 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
         }));
 
         setData(chartData);
-        setLoading(false);
+        setLoadedKey(requestKey);
       })
-      .catch(() => setLoading(false));
-  }, [unitId, selectedDays]);
+      .catch(() => { if (!cancelled) setLoadedKey(requestKey); });
+    return () => { cancelled = true; };
+  }, [unitId, selectedDays, requestKey]);
 
   if (loading) {
     return (

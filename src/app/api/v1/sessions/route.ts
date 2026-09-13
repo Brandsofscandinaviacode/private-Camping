@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateAPI } from "@/lib/api-auth";
 import { runWithApiAuth } from "@/lib/auth-context";
-import { checkIn, checkOut, getActiveSession } from "@/lib/actions";
+import { checkIn, checkOut } from "@/lib/actions";
 import { prisma } from "@/lib/prisma";
 import { getBaseUrl } from "@/lib/base-url";
 

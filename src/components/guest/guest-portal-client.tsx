@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import DOMPurify from "isomorphic-dompurify";
 import {
   Tent,
@@ -160,7 +160,6 @@ export function GuestPortalClient({
   isLongTerm,
   invoices,
   quickpayEnabled,
-  unitType,
   practicalInfo,
   siteMapUrl,
   laundryMachines,
@@ -279,7 +278,7 @@ export function GuestPortalClient({
     setPayError(null);
     try {
       const result = await createSessionPayment(sessionId, token);
-      window.location.href = result.paymentLink;
+      window.location.assign(result.paymentLink);
     } catch (e) {
       setPayError(e instanceof Error ? e.message : "Betaling kunne ikke oprettes");
       setPayingSession(false);
@@ -291,7 +290,7 @@ export function GuestPortalClient({
     setPayError(null);
     try {
       const result = await createInvoicePayment(invoiceId);
-      window.location.href = result.paymentLink;
+      window.location.assign(result.paymentLink);
     } catch (e) {
       setPayError(e instanceof Error ? e.message : "Betaling kunne ikke oprettes");
       setPayingInvoiceId(null);
