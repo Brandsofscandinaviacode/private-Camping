@@ -11,7 +11,12 @@ import { requireAuth } from "./auth";
 import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
 import { getBaseUrl } from "./base-url";
-import { resolvePrepaidDeposited } from "./prepaid";
+import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded } from "./prepaid";
+
+// How long a PENDING laundry/shower row waits for its card payment before it
+// is auto-cancelled. Must comfortably exceed the time a guest can spend on the
+// QuickPay page, or a late-but-accepted payment lands on a cancelled row.
+const PENDING_PAYMENT_TTL_MS = 15 * 60 * 1000;
 import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
@@ -733,7 +738,12 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   });
 
   if (!unit) throw new Error("Enhed ikke fundet");
-  if (unit.status === "OCCUPIED") throw new Error("Enheden er allerede optaget");
+  // Claim the unit atomically so a double-click can't open two stays on it.
+  const claimed = await prisma.unit.updateMany({
+    where: { id: unitId, status: { not: "OCCUPIED" } },
+    data: { status: "OCCUPIED" },
+  });
+  if (claimed.count === 0) throw new Error("Enheden er allerede optaget");
 
   const hw = unit.hardware;
   const pricing = await getPricing();
@@ -770,9 +780,16 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   }
 
   const guestPortalToken = uuidv4();
-  const session = await prisma.session.create({
+  let session: Awaited<ReturnType<typeof prisma.session.create>>;
+  try {
+    session = await prisma.session.create({
     data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, prepaidDeposited: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startHeatingKwh, startWaterLiters, status: "ACTIVE" },
-  });
+    });
+  } catch (e) {
+    // Release the claim so the unit isn't stuck OCCUPIED with no stay.
+    await prisma.unit.updateMany({ where: { id: unitId, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
+    throw e;
+  }
 
   // Update unit status; for long-term units also store tenant info for invoicing/portal
   const updateData: Record<string, unknown> = { status: "OCCUPIED" };
@@ -1822,7 +1839,7 @@ export async function getSessionByToken(token: string) {
 export async function getUnitByPortalToken(token: string) {
   return prisma.unit.findUnique({
     where: { longTermPortalToken: token },
-    include: { hardware: true, invoices: { orderBy: { periodEnd: "desc" }, take: 12 } },
+    include: { hardware: true, invoices: { where: { status: { not: "DRAFT" } }, orderBy: { periodEnd: "desc" }, take: 12 } },
   });
 }
 
@@ -1953,7 +1970,12 @@ export async function activateBookingSession(
   });
   if (!session) throw new Error("Booking ikke fundet");
   if (session.status !== "PENDING") throw new Error("Booking er allerede aktiveret");
-  if (session.unit.status === "OCCUPIED") throw new Error("Enheden er allerede optaget");
+  // Claim the unit atomically so a double-click can't activate twice.
+  const claimed = await prisma.unit.updateMany({
+    where: { id: session.unit.id, status: { not: "OCCUPIED" } },
+    data: { status: "OCCUPIED" },
+  });
+  if (claimed.count === 0) throw new Error("Enheden er allerede optaget");
 
   const unit = session.unit;
   const hw = unit.hardware;
@@ -1994,8 +2016,8 @@ export async function activateBookingSession(
     ? (updates.expectedCheckOut ? new Date(updates.expectedCheckOut) : null)
     : session.expectedCheckOut;
 
-  await prisma.session.update({
-    where: { id: sessionId },
+  const activated = await prisma.session.updateMany({
+    where: { id: sessionId, status: "PENDING" },
     data: {
       status: "ACTIVE",
       billingMode,
@@ -2012,6 +2034,10 @@ export async function activateBookingSession(
       startWaterLiters,
     },
   });
+  if (activated.count === 0) {
+    await prisma.unit.updateMany({ where: { id: unit.id, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
+    throw new Error("Booking er allerede aktiveret");
+  }
 
   const updateData: Record<string, unknown> = { status: "OCCUPIED" };
   if (unit.isLongTerm) {
@@ -2222,17 +2248,31 @@ export async function createMonthlyInvoice(unitId: number) {
     },
   });
 
-  // Reset the accumulator — that consumption is now billed on the invoice.
-  // Keep lastTick* values so the *next* tick computes delta from the same
-  // meter reading and we don't double-charge the hour this tick happened in.
+  // Services just billed on this invoice must not be billed again at checkout.
+  if (activeSession && servicesCost > 0) {
+    await Promise.all([
+      prisma.laundrySess.updateMany({
+        where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", createdAt: { gte: periodStart, lte: periodEnd } },
+        data: { paymentStatus: "INVOICED" },
+      }),
+      prisma.showerSess.updateMany({
+        where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", startedAt: { gte: periodStart, lte: periodEnd } },
+        data: { paymentStatus: "INVOICED" },
+      }),
+    ]);
+  }
+
+  // Subtract exactly what was billed — a tick that committed between our
+  // read and this write keeps its (unbilled) contribution instead of being
+  // wiped by a reset to 0. lastTick* stay so the next tick's delta is right.
   if (useAccumulator && sessionForBilling) {
     await prisma.session.update({
       where: { id: sessionForBilling.id },
       data: {
-        accumulatedElCost: 0,
-        accumulatedElKwh: 0,
-        accumulatedWaterCost: 0,
-        accumulatedWaterLiters: 0,
+        accumulatedElCost: { decrement: sessionForBilling.accumulatedElCost },
+        accumulatedElKwh: { decrement: sessionForBilling.accumulatedElKwh },
+        accumulatedWaterCost: { decrement: sessionForBilling.accumulatedWaterCost },
+        accumulatedWaterLiters: { decrement: sessionForBilling.accumulatedWaterLiters },
       },
     });
   }
@@ -2262,7 +2302,9 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
   if (!isInvoiceDay) return { created: 0, sent: 0 };
 
   // Check if already ran today (prevent duplicate invoices)
-  const todayStr = today.toISOString().slice(0, 10);
+  // Local date, not toISOString(): between local midnight and UTC midnight the
+  // UTC key still names yesterday, so the block would run twice on invoice day.
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   if (settings._last_auto_invoice_date === todayStr) return { created: 0, sent: 0 };
 
   // Find all seasonal units with tenant info
@@ -2363,7 +2405,7 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
 
   for (const session of sessions) {
     const hw = session.unit.hardware;
-    if (!session.prepaidAmount || !hardware.hasElectricitySwitch(hw)) continue;
+    if (session.prepaidAmount == null || !hardware.hasElectricitySwitch(hw)) continue;
     const switchEp = hardware.electricitySwitchEp(hw!);
     const prepaidAmount = session.prepaidAmount;
 
@@ -2687,7 +2729,35 @@ export async function markSessionUnpaid(sessionId: number) {
   revalidatePath(`/admin/bookings/${sessionId}`);
 }
 
-/** Adjust the prepaid amount for a booking (e.g. guest pays extra cash at reception). */
+/**
+ * Add to the live prepaid balance atomically (e.g. cash at reception).
+ * Uses increments so a concurrent laundry/shower decrement is never lost,
+ * and turns the electricity back on if a prior auto power-off is now funded.
+ */
+export async function addPrepaidAmount(sessionId: number, delta: number) {
+  await requireAuth();
+  if (!Number.isFinite(delta) || delta <= 0) throw new Error("Beløb skal være større end 0");
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { id: true, prepaidAmount: true, prepaidDeposited: true },
+  });
+  if (!session) throw new Error("Booking ikke fundet");
+  // An increment on a NULL column stays NULL in SQLite, so backfill legacy
+  // rows with an absolute value once; afterwards increment.
+  const depositedUpdate =
+    session.prepaidDeposited != null
+      ? { increment: delta }
+      : (await resolvePrepaidDeposited(session)) + delta;
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { prepaidAmount: { increment: delta }, prepaidDeposited: depositedUpdate },
+  });
+  await restorePrepaidPowerIfFunded(sessionId);
+  revalidatePath(`/admin/bookings/${sessionId}`);
+  revalidatePath("/admin/bookings");
+}
+
+/** Set the prepaid balance to an absolute amount (corrections). Prefer addPrepaidAmount for top-ups. */
 export async function adjustPrepaidAmount(sessionId: number, newAmount: number) {
   await requireAuth();
   if (newAmount < 0) throw new Error("Beløb kan ikke være negativt");
@@ -2704,6 +2774,7 @@ export async function adjustPrepaidAmount(sessionId: number, newAmount: number) 
     where: { id: sessionId },
     data: { prepaidAmount: newAmount, prepaidDeposited: deposited },
   });
+  if (delta > 0) await restorePrepaidPowerIfFunded(sessionId);
   revalidatePath(`/admin/bookings/${sessionId}`);
   revalidatePath("/admin/bookings");
 }
@@ -4037,9 +4108,9 @@ export async function deleteLaundryProgram(id: number) {
 // Get laundry machines with status for guest portal
 export async function getGuestLaundryMachines() {
   // Auto-expire stale PENDING sessions (older than 5 minutes)
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.laundrySess.updateMany({
-    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 
@@ -4133,9 +4204,9 @@ export async function createLaundryPayment(
   programId?: number | null,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   // Auto-expire stale PENDING sessions before checking availability
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.laundrySess.updateMany({
-    where: { machineId, status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { machineId, status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 
@@ -4220,6 +4291,7 @@ export async function createLaundryPayment(
       const res = await prisma.session.updateMany({
         where: {
           id: guestSession.id,
+          ...(creditUsed > 0 && { laundryCredit: { gte: creditUsed } }),
           ...(prepaidCreditUsed > 0 && { prepaidAmount: { gte: prepaidCreditUsed } }),
         },
         data: {
@@ -4243,7 +4315,9 @@ export async function createLaundryPayment(
         programId: chosenProgram?.id ?? null,
         programName: chosenProgram?.name ?? null,
         status: "ACTIVE",
-        paymentStatus: "PAID",
+        // Funded from the prepaid balance → keep the marker so the deposit
+        // reconstruction and the charges list can tell it apart from card.
+        paymentStatus: prepaidCreditUsed > 0 ? "PREPAID" : "PAID",
       },
     });
 
@@ -4302,6 +4376,9 @@ export async function createLaundryPayment(
       programName: chosenProgram?.name ?? null,
       status: "PENDING",
       paymentStatus: "UNPAID",
+      // The QuickPay link is for price minus laundry credit; the callback
+      // validates the paid amount against this, not the full price.
+      chargedAmount: amountToPay,
     },
   });
 
@@ -4491,11 +4568,11 @@ export async function checkLaundryMachines() {
   }
 
   // Auto-expire PENDING laundry sessions older than 5 minutes
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   const expiredPending = await prisma.laundrySess.updateMany({
     where: {
       status: "PENDING",
-      createdAt: { lte: fiveMinutesAgo },
+      createdAt: { lte: pendingCutoff },
     },
     data: { status: "CANCELLED" },
   });
@@ -4509,9 +4586,9 @@ export async function checkLaundryMachines() {
 export async function getServiceStatus() {
   await requireAuth();
   // Auto-expire stale PENDING sessions (older than 5 minutes)
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.laundrySess.updateMany({
-    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 
@@ -4739,9 +4816,9 @@ export async function deleteLaundryGroup(groupId: number) {
 // Public: get machines in a group by token (no auth needed)
 export async function getPublicLaundryGroup(token: string) {
   // Auto-expire stale PENDING sessions (older than 5 minutes)
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.laundrySess.updateMany({
-    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 
@@ -4797,9 +4874,9 @@ export async function getPublicLaundryGroup(token: string) {
 // Public: get a single machine for the per-machine QR flow
 export async function getPublicLaundryMachine(machineId: number) {
   // Auto-expire stale PENDING sessions older than 5 minutes
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.laundrySess.updateMany({
-    where: { machineId, status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { machineId, status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 
@@ -4852,9 +4929,9 @@ export async function createPublicLaundryPayment(
   programId?: number | null,
 ): Promise<{ ok: boolean; message: string; paymentLink?: string }> {
   // Auto-expire stale PENDING sessions before checking availability
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.laundrySess.updateMany({
-    where: { machineId, status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { machineId, status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 
@@ -5063,28 +5140,33 @@ async function createMeteredLaundryPaymentPortal(
   if (guestSession?.billingMode === "PREPAID") {
     const reserve = machine.maxReservationDKK;
     const remaining = guestSession.prepaidAmount ?? 0;
-    const res = await prisma.session.updateMany({
-      where: { id: guestSession.id, prepaidAmount: { gte: reserve } },
-      data: { prepaidAmount: { decrement: reserve } },
+    // Reservation and session row in one transaction: a failed create must
+    // not leave the balance decremented with nothing to refund it.
+    const sess = await prisma.$transaction(async (tx) => {
+      const res = await tx.session.updateMany({
+        where: { id: guestSession.id, prepaidAmount: { gte: reserve } },
+        data: { prepaidAmount: { decrement: reserve } },
+      });
+      if (res.count === 0) return null;
+      return tx.laundrySess.create({
+        data: {
+          machineId: machine.id,
+          sessionId: guestSession.id,
+          guestPortalToken,
+          accessToken,
+          endsAt,
+          pricePaid: 0,
+          billingMode: "METERED",
+          pricePerMinute: machine.pricePerMinute,
+          reservedAmount: reserve,
+          status: "ACTIVE",
+          paymentStatus: "PREPAID",
+        },
+      });
     });
-    if (res.count === 0) {
+    if (!sess) {
       return { ok: false, message: `Utilstrækkelig saldo — behøver ${reserve.toFixed(0)} DKK reservation, har ${remaining.toFixed(0)} DKK` };
     }
-    const sess = await prisma.laundrySess.create({
-      data: {
-        machineId: machine.id,
-        sessionId: guestSession.id,
-        guestPortalToken,
-        accessToken,
-        endsAt,
-        pricePaid: 0,
-        billingMode: "METERED",
-        pricePerMinute: machine.pricePerMinute,
-        reservedAmount: reserve,
-        status: "ACTIVE",
-        paymentStatus: "PREPAID",
-      },
-    });
     try {
       await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
     } catch (e) { logger.error("laundry", "metered laundry on (prepaid)", e); }
@@ -5396,9 +5478,9 @@ export async function resolveServiceCode(code: string): Promise<{ type: "shower"
 // ── Shower session core flow ──────────────────────────────────
 
 async function expireStaleShowerPendings() {
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
   await prisma.showerSess.updateMany({
-    where: { status: "PENDING", createdAt: { lte: fiveMinutesAgo } },
+    where: { status: "PENDING", createdAt: { lte: pendingCutoff } },
     data: { status: "CANCELLED" },
   });
 }
@@ -5493,7 +5575,7 @@ export async function createShowerPayment(
         pricePaid: price,
         minutesPaid: mins,
         pendingMinutes: mins,
-        paymentStatus: "PAID",
+        paymentStatus: "PREPAID",
       },
     });
     await activateShowerSession(sess.id);
@@ -5564,7 +5646,9 @@ export async function activateShowerSession(pendingId: number) {
     where: { id: pendingId },
     data: {
       status: "ACTIVE",
-      paymentStatus: "PAID",
+      // Card payments arrive as UNPAID → PAID; ON_ACCOUNT / PREPAID rows keep
+      // their marker, otherwise they'd never be billed (or double-counted).
+      paymentStatus: sess.paymentStatus === "UNPAID" ? "PAID" : sess.paymentStatus,
       startedAt: new Date(),
       endsAt,
       pricePaid: +(mins * sess.shower.pricePerMinute).toFixed(2),
@@ -5604,14 +5688,14 @@ export async function startShowerRelay(showerSessionId: number, accessToken?: st
  * Called when an extension payment resolves: adds the purchased
  * minutes on top of the existing timer.
  */
-export async function applyShowerExtension(showerSessionId: number) {
+export async function applyShowerExtension(showerSessionId: number): Promise<boolean> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
-  if (!sess) return;
+  if (!sess) return false;
   const extra = sess.pendingMinutes ?? 0;
-  if (extra <= 0) return;
+  if (extra <= 0) return false;
 
   // Active → extend endsAt. Paused → inflate the frozen remaining time.
   let newEndsAt = sess.endsAt;
@@ -5623,17 +5707,20 @@ export async function applyShowerExtension(showerSessionId: number) {
     newEndsAt = new Date(base.getTime() + extra * 60 * 1000);
   }
 
-  await prisma.showerSess.update({
-    where: { id: showerSessionId },
+  // Only an ACTIVE/PAUSED session can be extended — if the cron completed it
+  // between the purchase and this call, report it so the caller can refund.
+  const applied = await prisma.showerSess.updateMany({
+    where: { id: showerSessionId, status: { in: ["ACTIVE", "PAUSED"] } },
     data: {
       endsAt: newEndsAt,
       pauseRemainingMs: newPauseRemainingMs,
       minutesPaid: sess.minutesPaid + extra,
       pricePaid: +(sess.pricePaid + extra * sess.shower.pricePerMinute).toFixed(2),
       pendingMinutes: null,
-      paymentStatus: "PAID",
+      paymentStatus: sess.paymentStatus === "UNPAID" ? "PAID" : sess.paymentStatus,
     },
   });
+  if (applied.count === 0) return false;
 
   // Re-arm hardware auto-off with the new total remaining time
   if (sess.status === "ACTIVE" && newEndsAt) {
@@ -5646,6 +5733,7 @@ export async function applyShowerExtension(showerSessionId: number) {
       }
     }
   }
+  return true;
 }
 
 /**
@@ -5825,7 +5913,11 @@ export async function extendShowerPayment(
         where: { id: showerSessionId },
         data: { pendingMinutes: extra },
       });
-      await applyShowerExtension(showerSessionId);
+      const applied = await applyShowerExtension(showerSessionId);
+      if (!applied) {
+        await prisma.session.update({ where: { id: guestSession.id }, data: { prepaidAmount: { increment: price } } });
+        return { ok: false, message: "Badet er ikke længere aktivt — beløbet er ført tilbage til din saldo" };
+      }
       return { ok: true, message: `Forlænget med ${extra} minutter (trukket fra saldo)` };
     }
   }
@@ -6154,7 +6246,7 @@ async function completeMeteredSession(sess: {
       meterEndedAt: now,
       billedMinutes: finalMinutes,
       pricePaid: finalCost,
-      paymentStatus: "PAID",
+      paymentStatus: sess.paymentStatus === "PREPAID" ? "PREPAID" : "PAID",
     },
   });
 
@@ -6724,11 +6816,16 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
 
     if (existing) {
       const changes: Record<string, unknown> = {};
-      if (existing.unitId !== unitId) changes.unitId = unitId;
+      // Only a booking that hasn't started may be moved or have its arrival
+      // changed. An ACTIVE/COMPLETED stay has real meter baselines and a real
+      // check-in time; overwriting them from the feed shifts every invoice
+      // window and leaves the old unit marked occupied.
+      const notStarted = existing.status === "PENDING";
+      if (notStarted && existing.unitId !== unitId) changes.unitId = unitId;
       if (existing.guestName !== guestName) changes.guestName = guestName;
       if (existing.guestEmail !== guestEmail) changes.guestEmail = guestEmail;
       if (existing.guestPhone !== guestPhone) changes.guestPhone = guestPhone;
-      if (existing.checkInTime.getTime() !== checkInDate.getTime()) changes.checkInTime = checkInDate;
+      if (notStarted && existing.checkInTime.getTime() !== checkInDate.getTime()) changes.checkInTime = checkInDate;
       if (!existing.expectedCheckOut || existing.expectedCheckOut.getTime() !== checkOutDate.getTime()) {
         changes.expectedCheckOut = checkOutDate;
       }

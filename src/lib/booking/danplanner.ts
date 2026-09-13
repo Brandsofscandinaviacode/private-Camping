@@ -642,13 +642,6 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
         productType: productTypeValue,
       });
 
-      if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get("location") || "";
-        if (loc.includes("login") || loc.includes("Login")) {
-          throw new Error("Session udløbet. Log ind igen.");
-        }
-      }
-
       // Session gone (401/403, redirect to login, or a login/approve page
       // served with 200) — re-authenticate once, then run the whole flow
       // again so the antiforgery token is fetched with the new cookies too.

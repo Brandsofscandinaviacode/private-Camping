@@ -519,6 +519,7 @@ model LaundrySess {
   status          String   @default("ACTIVE")      // ACTIVE, COMPLETED, CANCELLED
   durationMinutes Int      @default(0)             // Snapshot of duration at start
   pricePaid       Float    @default(0)
+  chargedAmount   Float?                           // What the card link was for (price − laundry credit); callback validates against this
   paymentStatus   String   @default("UNPAID")      // UNPAID, PAID
   paymentId       String?                           // QuickPay transaction ID
 

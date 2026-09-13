@@ -45,6 +45,14 @@ export async function SessionCharges({ sessionId }: { sessionId: number }) {
                 <span className="text-[11px] leading-4 bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-px rounded-md">
                   Forudbetalt
                 </span>
+              ) : c.paymentStatus === "INVOICED" ? (
+                <span className="text-[11px] leading-4 bg-muted text-muted-foreground border border-border px-1.5 py-px rounded-md">
+                  Faktureret
+                </span>
+              ) : c.paymentStatus === "ON_ACCOUNT" ? (
+                <span className="text-[11px] leading-4 bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-px rounded-md">
+                  På regning
+                </span>
               ) : (
                 <span className="text-[11px] leading-4 bg-muted text-muted-foreground px-1.5 py-px rounded-md">
                   Ikke betalt

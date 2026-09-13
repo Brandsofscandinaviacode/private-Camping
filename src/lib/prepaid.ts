@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import * as hardware from "./hardware";
 
 /**
  * The total a guest has ever deposited on a prepaid stay (initial + top-ups).
@@ -37,4 +38,28 @@ export async function resolvePrepaidDeposited(session: {
   );
   const drawn = (laundry._sum.pricePaid ?? 0) + (showers._sum.pricePaid ?? 0) + activeDrawn;
   return (session.prepaidAmount ?? 0) + drawn;
+}
+
+/**
+ * After a top-up or admin adjustment: if a PREPAID stay had its electricity
+ * cut by checkPrepaidBalances and the balance now covers consumption again,
+ * turn the relay back on. Without this the guest pays and stays in the dark
+ * until an admin notices. Returns true if the relay was switched on.
+ */
+export async function restorePrepaidPowerIfFunded(sessionId: number): Promise<boolean> {
+  const s = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: { include: { hardware: true } } },
+  });
+  if (!s || s.status !== "ACTIVE" || s.billingMode !== "PREPAID") return false;
+  const hw = s.unit.hardware;
+  if (!hardware.hasElectricitySwitch(hw)) return false;
+  const remaining = (s.prepaidAmount ?? 0) - s.accumulatedElCost - s.accumulatedWaterCost;
+  if (remaining <= 0) return false;
+  try {
+    await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true);
+    return true;
+  } catch {
+    return false;
+  }
 }

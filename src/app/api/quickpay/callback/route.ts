@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { verifyCallbackChecksum, isPaymentAccepted } from "@/lib/quickpay";
 import { activateLaundrySession, activateShowerSession, applyShowerExtension } from "@/lib/actions";
 import { logger } from "@/lib/logger";
-import { resolvePrepaidDeposited } from "@/lib/prepaid";
+import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded } from "@/lib/prepaid";
 
 function getCallbackAmount(body: Record<string, unknown>): number | null {
   const ops = body.operations;
@@ -83,13 +83,29 @@ export async function POST(req: NextRequest) {
     });
 
     if (laundrySess) {
-      // Skip amount validation for metered sessions (pre-auth amount ≠ final charge)
+      // Skip amount validation for metered sessions (pre-auth amount ≠ final charge).
+      // The link was for chargedAmount (price minus laundry credit), not pricePaid.
       if (paidAmountOere !== null && laundrySess.billingMode !== "METERED") {
-        const expectedOere = Math.round(laundrySess.pricePaid * 100);
+        const expectedOere = Math.round((laundrySess.chargedAmount ?? laundrySess.pricePaid) * 100);
         if (paidAmountOere < expectedOere) {
           logger.error("quickpay", `Laundry ${laundrySess.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);
           return NextResponse.json({ error: "Amount mismatch" }, { status: 400 });
         }
+      }
+      // A guest who took longer than the pending TTL on the card page arrives
+      // here with an auto-CANCELLED row but a captured payment. Re-open it if
+      // the machine is still free; otherwise flag it loudly for a refund.
+      if (laundrySess.status === "CANCELLED") {
+        const busy = await prisma.laundrySess.findFirst({
+          where: { machineId: laundrySess.machineId, status: "ACTIVE", endsAt: { gt: new Date() } },
+          select: { id: true },
+        });
+        if (busy) {
+          logger.error("quickpay", `Laundry ${laundrySess.id}: paid after cancel but machine busy — REFUND ${quickpayId} manually`);
+          return NextResponse.json({ status: "ok", type: "laundry_late_busy", id: laundrySess.id });
+        }
+        await prisma.laundrySess.update({ where: { id: laundrySess.id }, data: { status: "PENDING" } });
+        logger.warn("quickpay", `Laundry ${laundrySess.id}: late payment after auto-cancel — re-opened`);
       }
       await activateLaundrySession(laundrySess.id);
       logger.info("quickpay", `Laundry session ${laundrySess.id} activated`);
@@ -99,15 +115,35 @@ export async function POST(req: NextRequest) {
     // 4. Check shower payments
     const showerSess = await prisma.showerSess.findFirst({
       where: { paymentId: quickpayId },
+      include: { shower: { select: { pricePerMinute: true } } },
     });
 
     if (showerSess) {
       if (paidAmountOere !== null) {
-        const expectedOere = Math.round(showerSess.pricePaid * 100);
+        // For an extension the link was for the extra minutes only — pricePaid
+        // is the running total, so comparing against it rejected every extension.
+        const isExtension = showerSess.status === "ACTIVE" || showerSess.status === "PAUSED";
+        const expectedDKK = isExtension
+          ? (showerSess.pendingMinutes ?? 0) * showerSess.shower.pricePerMinute
+          : showerSess.pricePaid;
+        const expectedOere = Math.round(expectedDKK * 100);
         if (paidAmountOere < expectedOere) {
           logger.error("quickpay", `Shower ${showerSess.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);
           return NextResponse.json({ error: "Amount mismatch" }, { status: 400 });
         }
+      }
+      if (showerSess.status === "CANCELLED") {
+        const busy = await prisma.showerSess.findFirst({
+          where: { showerId: showerSess.showerId, status: { in: ["ACTIVE", "PAUSED"] }, endsAt: { gt: new Date() } },
+          select: { id: true },
+        });
+        if (busy) {
+          logger.error("quickpay", `Shower ${showerSess.id}: paid after cancel but shower busy — REFUND ${quickpayId} manually`);
+          return NextResponse.json({ status: "ok", type: "shower_late_busy", id: showerSess.id });
+        }
+        await prisma.showerSess.update({ where: { id: showerSess.id }, data: { status: "PENDING" } });
+        showerSess.status = "PENDING";
+        logger.warn("quickpay", `Shower ${showerSess.id}: late payment after auto-cancel — re-opened`);
       }
       if (showerSess.status === "PENDING") {
         await activateShowerSession(showerSess.id);
@@ -178,6 +214,8 @@ export async function POST(req: NextRequest) {
         ]);
 
         logger.info("quickpay", `Top-up ${topupAmount} DKK for session ${topupSession.id}`);
+        // A prior auto power-off is now funded — turn the electricity back on.
+        await restorePrepaidPowerIfFunded(topupSession.id);
         return NextResponse.json({ status: "ok", type: "topup", id: topupSession.id, amount: topupAmount });
       }
     }
