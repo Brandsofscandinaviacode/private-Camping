@@ -63,3 +63,18 @@ export async function restorePrepaidPowerIfFunded(sessionId: number): Promise<bo
     return false;
   }
 }
+
+/**
+ * What a PREPAID stay owes beyond its balance. prepaidAmount already has every
+ * service draw taken off, so only el/water remain to set against it. Used by
+ * checkout (to decide PAID vs UNPAID), the card payment link, and the QuickPay
+ * callback's amount check, so all three agree on the figure the guest sees.
+ */
+export function prepaidShortfall(session: {
+  prepaidAmount: number | null;
+  totalElectricityCost: number | null;
+  totalWaterCost: number | null;
+}): number {
+  const due = (session.totalElectricityCost ?? 0) + (session.totalWaterCost ?? 0) - (session.prepaidAmount ?? 0);
+  return due > 0 ? Math.round(due * 100) / 100 : 0;
+}

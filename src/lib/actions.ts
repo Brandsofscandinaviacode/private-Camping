@@ -11,7 +11,7 @@ import { requireAuth } from "./auth";
 import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
 import { getBaseUrl } from "./base-url";
-import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded } from "./prepaid";
+import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "./prepaid";
 
 // How long a PENDING laundry/shower row waits for its card payment before it
 // is auto-cancelled. Must comfortably exceed the time a guest can spend on the
@@ -971,8 +971,13 @@ export async function checkOut(sessionId: number) {
     totalCost,
   };
   if (isPrepaid) {
-    updateData.paymentStatus = "PAID";
-    updateData.paidAt = new Date();
+    // Settled from the balance unless el/water overran it — then the
+    // shortfall stays open so the guest can pay it from the portal.
+    const shortfall = prepaidShortfall({ prepaidAmount: session.prepaidAmount, totalElectricityCost, totalWaterCost });
+    if (shortfall < 1) {
+      updateData.paymentStatus = "PAID";
+      updateData.paidAt = new Date();
+    }
   }
 
   // Conditional update: fail if status changed between our read and write
@@ -1352,7 +1357,7 @@ export async function checkOutWithStatement(sessionId: number) {
   // consumption since the last invoice. Ignored if under the 1 DKK threshold.
   if (session.billingMode !== "PREPAID") {
     try {
-      await createMonthlyInvoice(session.unitId);
+      await createMonthlyInvoiceInternal(session.unitId);
     } catch (e) {
       // Expected when there's no un-invoiced consumption or it's < 1 DKK.
       if (!(e instanceof Error) || !e.message.includes("mindst 1 DKK")) {
@@ -2063,6 +2068,12 @@ export async function activateBookingSession(
 // INVOICES — Monthly billing
 // ──────────────────────────────────────────────
 export async function createMonthlyInvoice(unitId: number) {
+  await requireAuth();
+  return createMonthlyInvoiceInternal(unitId);
+}
+
+// Unauthenticated core — for cron/checkout paths only (not a Server Action).
+async function createMonthlyInvoiceInternal(unitId: number) {
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -2318,12 +2329,12 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
 
   for (const unit of seasonalUnits) {
     try {
-      const invoice = await createMonthlyInvoice(unit.id);
+      const invoice = await createMonthlyInvoiceInternal(unit.id);
       created++;
 
       // Send notification
       if (unit.longTermGuestEmail || unit.longTermGuestPhone) {
-        await sendInvoiceToCustomer(invoice.id, unit.id);
+        await sendInvoiceToCustomerInternal(invoice.id, unit.id);
         sent++;
       }
     } catch (e) {
@@ -2463,7 +2474,7 @@ export async function testSendInvoice(): Promise<{ ok: boolean; message: string 
   if (!invoice) return { ok: false, message: "Ingen fakturaer fundet. Opret en faktura først." };
 
   try {
-    const result = await sendInvoiceToCustomer(invoice.id, invoice.unitId);
+    const result = await sendInvoiceToCustomerInternal(invoice.id, invoice.unitId);
     return result;
   } catch (e) {
     return { ok: false, message: `Fejl: ${e instanceof Error ? e.message : String(e)}` };
@@ -2478,6 +2489,7 @@ export async function getInvoiceByPaymentToken(token: string) {
 }
 
 export async function markInvoicePaid(invoiceId: number, paymentId?: string) {
+  await requireAuth();
   await prisma.invoice.update({
     where: { id: invoiceId },
     data: { status: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
@@ -2486,6 +2498,13 @@ export async function markInvoicePaid(invoiceId: number, paymentId?: string) {
 }
 
 export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
+  return sendInvoiceToCustomerInternal(invoiceId, unitId);
+}
+
+// Unauthenticated core — for the cron paths only. Not exported, so it is not
+// reachable as a Server Action.
+async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number): Promise<{ ok: boolean; message: string }> {
   const unit = await prisma.unit.findUnique({ where: { id: unitId } });
   if (!unit) return { ok: false, message: "Enhed ikke fundet" };
 
@@ -3009,11 +3028,13 @@ export async function getConsumptionChartData(unitId: number, days: number = 7) 
 // ──────────────────────────────────────────────
 // TOTAL CONSUMPTION HISTORY — aggregated across all units
 // ──────────────────────────────────────────────
-export async function getTotalConsumptionHistory(period: "week" | "month" = "week") {
+export async function getTotalConsumptionHistory(period: "week" | "month" = "week", weeks = 13) {
   await requireAuth();
   const since = new Date();
   if (period === "week") {
-    since.setDate(since.getDate() - 90); // last ~13 weeks
+    // Callers that only need a few bars (the dashboard sparkline) pass a
+    // smaller window — this reads every unit's logs, so don't over-fetch.
+    since.setDate(since.getDate() - weeks * 7);
   } else {
     since.setFullYear(since.getFullYear() - 1); // last 12 months
   }
@@ -3621,7 +3642,11 @@ export async function createSessionPayment(sessionId: number, portalToken: strin
   if (session.guestPortalToken !== portalToken) throw new Error("Ugyldigt token");
   if (session.paymentStatus === "PAID") throw new Error("Allerede betalt");
 
-  const amount = (session.totalCost || 0) + (session.externalPrice || 0);
+  // Prepaid: only the part el/water ran past the balance — the rest was
+  // already drawn from the deposit. Postpaid: the whole stay.
+  const amount = session.billingMode === "PREPAID"
+    ? prepaidShortfall(session)
+    : (session.totalCost || 0) + (session.externalPrice || 0);
   if (amount <= 0) throw new Error("Intet beløb at betale");
 
   const settings = await getGlobalSettings();
@@ -4152,6 +4177,7 @@ export async function getGuestLaundryMachines() {
       available: !isRunning,
       minutesLeft,
       endsAt: isRunning ? activeSession.endsAt.toISOString() : null,
+      startedAt: isRunning ? activeSession.startedAt.toISOString() : null,
       programs: m.programs.map((p) => ({
         id: p.id,
         name: p.name,

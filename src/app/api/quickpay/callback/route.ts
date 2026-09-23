@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { verifyCallbackChecksum, isPaymentAccepted } from "@/lib/quickpay";
 import { activateLaundrySession, activateShowerSession, applyShowerExtension } from "@/lib/actions";
 import { logger } from "@/lib/logger";
-import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded } from "@/lib/prepaid";
+import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "@/lib/prepaid";
 
 function getCallbackAmount(body: Record<string, unknown>): number | null {
   const ops = body.operations;
@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
 
     if (session) {
       if (paidAmountOere !== null && session.totalCost !== null) {
-        const expectedOere = Math.round(session.totalCost * 100);
+        // Must match what createSessionPayment linked: the shortfall for prepaid.
+        const expectedDKK = session.billingMode === "PREPAID"
+          ? prepaidShortfall(session)
+          : session.totalCost + (session.externalPrice ?? 0);
+        const expectedOere = Math.round(expectedDKK * 100);
         if (paidAmountOere < expectedOere) {
           logger.error("quickpay", `Session ${session.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);
           return NextResponse.json({ error: "Amount mismatch" }, { status: 400 });

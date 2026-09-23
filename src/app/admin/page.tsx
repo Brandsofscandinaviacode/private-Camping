@@ -20,7 +20,7 @@ export default async function AdminDashboard() {
     checkConsumptionAlarms().catch(() => ({ alerts: [] })),
     getEffectiveElPricing().catch(() => null),
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
-    getTotalConsumptionHistory("week").catch(() => []),
+    getTotalConsumptionHistory("week", 8).catch(() => []),
   ]);
 
   const unitData = await Promise.all(

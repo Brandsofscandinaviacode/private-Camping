@@ -31,7 +31,9 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
   // balance) plus accumulated el/water.
   const used = prepaidDeposited - remainingRaw;
   const servicesDrawn = Math.max(0, prepaidDeposited - prepaidAmount);
-  const elWaterDrawn = Math.max(0, accumulatedCost);
+  // The part of el/water that ran past the deposit is shown as "Overtræk",
+  // so it must not also be counted in "El & vand" (segments sum to the bar).
+  const elWaterDrawn = Math.max(0, accumulatedCost - overdrawnAmount);
   // Same levels as the guest portal: amber under 30 % left, red under 10 %.
   const level = isOverdrawn || remaining < prepaidDeposited * 0.1 ? "red" : remaining < prepaidDeposited * 0.3 ? "amber" : "green";
   const barBase = Math.max(prepaidDeposited, used, 0.01);
@@ -42,11 +44,18 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
     { label: "Overtræk", value: overdrawnAmount, cls: "bg-red-500" },
   ].filter((x) => x.value > 0);
 
+  const [addError, setAddError] = useState<string | null>(null);
   function handleAdd() {
     const extra = parseFloat(addAmount);
     if (isNaN(extra) || extra <= 0) return;
     startTransition(async () => {
-      await addPrepaidAmount(sessionId, extra);
+      setAddError(null);
+      try {
+        await addPrepaidAmount(sessionId, extra);
+      } catch (e) {
+        setAddError(e instanceof Error ? e.message : "Beløbet kunne ikke tilføjes");
+        return;
+      }
       setSaved(true);
       setShowAdd(false);
       setAddAmount("");
@@ -101,6 +110,8 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
             {isOverdrawn ? `-${overdrawnAmount.toFixed(2)}` : remaining.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">DKK</span>
           </span>
         </div>
+
+        {addError && <p className="text-sm p-2 rounded-lg bg-red-50 text-red-600">{addError}</p>}
 
         {isActive && (
           <>

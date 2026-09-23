@@ -84,7 +84,7 @@ interface GuestPortalClientProps {
   unitType: string;
   practicalInfo: Record<string, string | null>;
   siteMapUrl: string | null;
-  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; billingMode?: "FIXED" | "METERED"; pricePerMinute?: number; maxReservationDKK?: number; available: boolean; minutesLeft: number; endsAt: string | null; programs: { id: number; name: string; durationMinutes: number; pricePerUse: number }[] }[];
+  laundryMachines: { id: number; name: string; kind: "WASHER" | "DRYER"; location: string | null; durationMinutes: number; pricePerUse: number; billingMode?: "FIXED" | "METERED"; pricePerMinute?: number; maxReservationDKK?: number; available: boolean; minutesLeft: number; endsAt: string | null; startedAt?: string | null; programs: { id: number; name: string; durationMinutes: number; pricePerUse: number }[] }[];
   laundryCredit: number;
   showers: { id: number; name: string; location: string | null; pricePerMinute: number; minMinutes: number; maxMinutes: number; available: boolean; minutesLeft: number }[];
   nextInvoiceDay: number | null; // 1-31 or null
@@ -323,7 +323,11 @@ export function GuestPortalClient({
 
   // Filter invoices to only this session's period (exclude previous tenants on same unit)
   const sessionStartDate = new Date(checkInTime);
-  const relevantInvoices = isLongTerm
+  // Never show a previous tenant's invoices. For a long-term stay opened by its
+  // unit token there is no session, and the page passes "now" as checkInTime —
+  // in that case the server already scoped the list to this tenancy.
+  const hasRealCheckIn = sessionId !== null;
+  const relevantInvoices = isLongTerm && !hasRealCheckIn
     ? invoices
     : invoices.filter((inv) => new Date(inv.periodEnd) >= sessionStartDate);
 
@@ -430,7 +434,8 @@ export function GuestPortalClient({
                   used: locale === "en" ? "Used" : locale === "de" ? "Verbraucht" : "Forbrugt",
                   remaining: locale === "en" ? "Remaining balance" : locale === "de" ? "Restguthaben" : "Resterende saldo",
                   owed: locale === "en" ? "Amount due" : locale === "de" ? "Offener Betrag" : "Skyldigt beløb",
-                  settled: locale === "en" ? "Settled from your prepayment — nothing to pay." : locale === "de" ? "Mit der Vorauszahlung verrechnet — nichts zu zahlen." : "Trukket fra din forudbetaling — intet at betale.",
+                  settled: locale === "en" ? "Consumption settled from your prepayment." : locale === "de" ? "Verbrauch mit der Vorauszahlung verrechnet." : "Forbruget er trukket fra din forudbetaling.",
+                  stayNote: locale === "en" ? "The stay price is settled separately with the campsite." : locale === "de" ? "Der Aufenthaltspreis wird separat mit dem Campingplatz abgerechnet." : "Opholdsprisen afregnes separat med campingpladsen.",
                 };
                 return (
                   <div className="space-y-2 text-sm text-left">
@@ -440,6 +445,9 @@ export function GuestPortalClient({
                       <>
                         <div className="flex justify-between font-semibold text-green-700 border-t pt-2"><span>{lbl.remaining}</span><span>{formatDKK(remaining)}</span></div>
                         <p className="text-xs text-muted-foreground">{lbl.settled}</p>
+                        {externalPrice !== null && externalPrice > 0 && (
+                          <p className="text-xs text-muted-foreground">{lbl.stayNote}</p>
+                        )}
                       </>
                     ) : (
                       <>
@@ -799,36 +807,44 @@ export function GuestPortalClient({
           return (
             <Card className="border-blue-200 bg-blue-50/50">
               <CardContent className="py-3 space-y-2">
-                {activeMachines.map((m) => (
-                  <div key={m.id} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                        {m.kind === "WASHER"
-                          ? <WashingMachine className="h-4 w-4 text-blue-500" />
-                          : <Wind className="h-4 w-4 text-purple-500" />}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">{m.name}</p>
-                        {m.location && <p className="text-[11px] text-muted-foreground">{m.location}</p>}
-                      </div>
-                    </div>
-                    <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-1 rounded-full animate-pulse">
-                      {endsInLabel} {m.minutesLeft} min
-                    </span>
-                  </div>
-                ))}
                 {activeMachines.map((m) => {
-                  const duration = Math.max(m.durationMinutes, m.minutesLeft, 1);
-                  const pct = Math.min(100, Math.max(0, (1 - m.minutesLeft / duration) * 100));
+                  // Progress over this run's own length (startedAt → endsAt):
+                  // a program longer than the machine default would otherwise
+                  // pin the bar at 0 %.
+                  const startMs = m.startedAt ? new Date(m.startedAt).getTime() : null;
+                  const endMs = m.endsAt ? new Date(m.endsAt).getTime() : null;
+                  const pct = startMs !== null && endMs !== null && endMs > startMs
+                    ? Math.min(100, Math.max(0, ((Date.now() - startMs) / (endMs - startMs)) * 100))
+                    : null;
                   return (
-                    <div key={`bar-${m.id}`} className="space-y-1">
-                      <div className="h-1 w-full rounded-full bg-blue-100 overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
-                        <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                    <div key={m.id} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                            {m.kind === "WASHER"
+                              ? <WashingMachine className="h-4 w-4 text-blue-500" />
+                              : <Wind className="h-4 w-4 text-purple-500" />}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium">{m.name}</p>
+                            {m.location && <p className="text-[11px] text-muted-foreground">{m.location}</p>}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-1 rounded-full animate-pulse">
+                            {endsInLabel} {m.minutesLeft} min
+                          </span>
+                          {m.endsAt && (
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                              {new Date(m.endsAt).toLocaleTimeString(intl, { hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      {m.endsAt && (
-                        <p className="text-[11px] text-muted-foreground text-right">
-                          {new Date(m.endsAt).toLocaleTimeString(intl, { hour: "2-digit", minute: "2-digit" })}
-                        </p>
+                      {pct !== null && (
+                        <div className="h-1 w-full rounded-full bg-blue-100 overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+                          <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        </div>
                       )}
                     </div>
                   );

@@ -34,7 +34,7 @@ export function SessionActions({ sessionId, paymentStatus, isPaid, paidAt }: Ses
         {paidAt && (
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Betalt</span>
-            <span>{new Date(paidAt).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+            <span>{new Date(paidAt).toLocaleString("da-DK", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
           </div>
         )}
 
