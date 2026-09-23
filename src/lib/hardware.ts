@@ -50,7 +50,7 @@ async function readShellyStatus(
   component: string,
 ): Promise<{ data: ShellyComponentStatus; ageMs: number } | null> {
   const topic = `${prefix}/status/${component}`;
-  const msg = await mqttClient.getStatus(topic);
+  const msg = await mqttClient.getShellyStatus(prefix, component);
   if (!msg) return null;
   try {
     const data = JSON.parse(msg.payload) as ShellyComponentStatus;
@@ -101,12 +101,12 @@ export async function readEnergyKwhWithReason(
       return { kwh: null, reason: "MQTT: prefix eller komponent mangler" };
     }
     const topic = `${ep.mqttPrefix}/status/${ep.mqttComponent}`;
-    const msg = await mqttClient.getStatus(topic, 1500);
+    const msg = await mqttClient.getShellyStatus(ep.mqttPrefix, ep.mqttComponent);
     if (!msg) {
       return {
         kwh: null,
         reason: mqttClient.isConnected()
-          ? `MQTT: ingen besked på ${topic} — tjek prefix og komponent (se "Forbundne enheder" under MQTT)`
+          ? `MQTT: ${ep.mqttPrefix} svarede ikke på ${ep.mqttComponent} — enheden er offline, eller prefix/komponent er forkert (se "Forbundne enheder")`
           : "MQTT: CampSense er ikke forbundet til brokeren",
       };
     }

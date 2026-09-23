@@ -7,7 +7,8 @@
  * and never exposed to the browser.
  *
  * Shelly Gen2/3+ topic convention (per their docs):
- *   Status  — {prefix}/status/{component}   (retained JSON, QoS 0)
+ *   Status  — {prefix}/status/{component}   (JSON, QoS 0 — NOT retained,
+ *             and only published on change)
  *     e.g.  shellyplus1pm-abc123/status/switch:0
  *     payload includes  output:bool  apower:W  aenergy.total:Wh  voltage:V  current:A
  *   Command — {prefix}/command/{component}  (payload: "on" | "off" | "toggle")
@@ -15,8 +16,8 @@
  *
  * This client subscribes to each needed status topic on demand, caches the
  * latest payload + receive time in memory, and publishes commands directly.
- * Retained messages mean the latest state is delivered immediately on
- * subscribe, so we don't need a long warm-up period.
+ * Because status is neither retained nor periodic, reads that find no recent
+ * cached value ask the device via RPC ({prefix}/rpc → <Component>.GetStatus).
  */
 
 import mqtt from "mqtt";
@@ -90,6 +91,11 @@ class MqttClientWrapper {
   private connectPromise: Promise<MqttClient | null> | null = null;
   private reconnecting: Promise<MqttClient | null> | null = null;
   private lastConfigKey = "";
+  // Shelly RPC over MQTT: requests go to {prefix}/rpc with src = our reply
+  // prefix, responses arrive on {replyPrefix}/rpc and are matched by id.
+  private readonly replyPrefix = `campsense-rpc-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+  private rpcSeq = 1;
+  private pendingRpc = new Map<number, (result: unknown) => void>();
 
   /**
    * Ensure a live MQTT connection using current GlobalSetting config.
@@ -150,6 +156,14 @@ class MqttClientWrapper {
         });
 
         c.on("message", (topic, payload) => {
+          if (topic === `${this.replyPrefix}/rpc`) {
+            try {
+              const msg = JSON.parse(payload.toString()) as { id?: number; result?: unknown };
+              const resolve = typeof msg.id === "number" ? this.pendingRpc.get(msg.id) : undefined;
+              if (resolve) { this.pendingRpc.delete(msg.id!); resolve(msg.result ?? null); }
+            } catch { /* ignore malformed reply */ }
+            return;
+          }
           this.cache.set(topic, { payload: payload.toString(), receivedAt: new Date() });
           this.msgCounts.set(topic, (this.msgCounts.get(topic) ?? 0) + 1);
         });
@@ -165,8 +179,18 @@ class MqttClientWrapper {
           for (const topic of this.subscribed) {
             c.subscribe(topic, { qos: 0 });
           }
+          c.subscribe(`${this.replyPrefix}/rpc`, { qos: 0 });
         });
 
+        // The 'connect' handler above only fires on *re*connects of this client.
+        // A freshly created client (e.g. after the old one dropped) must get the
+        // existing subscriptions now, or it would silently receive nothing.
+        for (const topic of this.subscribed) c.subscribe(topic, { qos: 0 });
+        c.subscribe(`${this.replyPrefix}/rpc`, { qos: 0 });
+
+        if (this.client && this.client !== c) {
+          try { this.client.end(true); } catch { /* ignore */ }
+        }
         this.client = c;
         return c;
       } catch (e) {
@@ -224,6 +248,55 @@ class MqttClientWrapper {
       if (c) return c;
     }
     return null;
+  }
+
+  /**
+   * Call a Shelly Gen2+ RPC method over MQTT and wait for its result.
+   * Returns null on timeout or when not connected.
+   */
+  async rpc(prefix: string, method: string, params: Record<string, unknown>, timeoutMs = 3000): Promise<unknown | null> {
+    const c = await this.ensureConnected();
+    if (!c) return null;
+    const id = this.rpcSeq++;
+    const result = new Promise<unknown | null>((resolve) => {
+      this.pendingRpc.set(id, resolve);
+      setTimeout(() => {
+        if (this.pendingRpc.delete(id)) resolve(null);
+      }, timeoutMs);
+    });
+    c.publish(`${prefix}/rpc`, JSON.stringify({ id, src: this.replyPrefix, method, params }), { qos: 0 });
+    return result;
+  }
+
+  /**
+   * Latest status for a Shelly component. Shelly status notifications are NOT
+   * retained and are only sent on change, so a subscribe-and-wait often gets
+   * nothing (an idle 0 W meter never publishes). Use a recent cached message
+   * if there is one; otherwise ask the device directly via
+   * <Component>.GetStatus, which answers immediately.
+   */
+  async getShellyStatus(prefix: string, component: string): Promise<CachedMessage | null> {
+    const topic = `${prefix}/status/${component}`;
+    await this.subscribe(topic);
+    const cached = this.getCached(topic);
+    const FRESH_MS = 5 * 60_000;
+    if (cached && Date.now() - cached.receivedAt.getTime() < FRESH_MS) return cached;
+
+    const m = component.match(/^([a-z0-9]+):(\d+)$/i);
+    if (m) {
+      const names: Record<string, string> = { switch: "Switch", pm1: "PM1", em1: "EM1", em: "EM", cover: "Cover", light: "Light", input: "Input" };
+      const method = names[m[1].toLowerCase()];
+      if (method) {
+        const result = await this.rpc(prefix, `${method}.GetStatus`, { id: parseInt(m[2], 10) });
+        if (result && typeof result === "object") {
+          const msg = { payload: JSON.stringify(result), receivedAt: new Date() };
+          this.cache.set(topic, msg);
+          return msg;
+        }
+      }
+    }
+    // Device didn't answer — fall back to whatever we last saw, however old.
+    return cached;
   }
 
   /**
