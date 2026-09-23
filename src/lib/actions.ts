@@ -2936,6 +2936,9 @@ export async function getSystemStatus() {
   return {
     cronLastRun: settings._cron_last_run || null,
     cronLastStatus: settings._cron_last_status || null,
+    // Meter logging, invoices etc. only run on the "heavy" tick (every 10 min);
+    // the 2-minute calls in between just handle showers/laundry/booking sync.
+    cronLastFullRun: settings._cron_last_full_run || null,
     cronAlerts: settings._cron_alerts || "0",
     totalLogs: logCount,
     latestLogTime: latestLog?.recordedAt?.toISOString() || null,

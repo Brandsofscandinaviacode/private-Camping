@@ -22,6 +22,7 @@ import { getSystemStatus, updateMultipleSettings } from "@/lib/actions";
 interface StatusData {
   cronLastRun: string | null;
   cronLastStatus: string | null;
+  cronLastFullRun: string | null;
   cronAlerts: string;
   totalLogs: number;
   latestLogTime: string | null;
@@ -59,6 +60,9 @@ export function SystemStatus() {
 
   useEffect(() => {
     loadStatus();
+    // Keep the card live — otherwise the counters look frozen while cron runs.
+    const t = setInterval(loadStatus, 30_000);
+    return () => clearInterval(t);
   }, []);
 
   async function handleTestCron() {
@@ -77,7 +81,12 @@ export function SystemStatus() {
       });
       const json = await res.json();
       if (json.ok) {
-        setCronTestResult({ ok: true, message: `Cron kørte succesfuldt. ${json.alerts} alarmer.` });
+        setCronTestResult({
+          ok: true,
+          message: json.ranHeavyTasks
+            ? `Cron kørte — målere aflæst, ${json.alerts ?? 0} alarmer.`
+            : "Cron kørte (hurtige opgaver). Måleraflæsning sker kun hvert 10. minut.",
+        });
       } else {
         setCronTestResult({ ok: false, message: json.error || "Ukendt fejl" });
       }
@@ -111,7 +120,7 @@ export function SystemStatus() {
     return diffMs < 30 * 60 * 1000 && status.cronLastStatus === "ok";
   }
 
-  if (loading) {
+  if (loading && !status) {
     return (
       <div className="rounded-xl border border-border/60 bg-card shadow-sm p-8 text-center">
         <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
@@ -171,6 +180,19 @@ export function SystemStatus() {
               Målinger logget
             </span>
             <span className="font-medium tabular-nums">{status.totalLogs.toLocaleString("da-DK")}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground flex items-center gap-2">
+              <Zap className="h-4 w-4" />
+              Sidste måleraflæsning
+            </span>
+            <span className="font-medium">
+              {formatTime(status.cronLastFullRun)}
+              {status.cronLastFullRun && (() => {
+                const mins = Math.max(0, Math.ceil((new Date(status.cronLastFullRun).getTime() + 10 * 60_000 - Date.now()) / 60_000));
+                return <span className="text-muted-foreground font-normal"> · næste om {mins} min</span>;
+              })()}
+            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground flex items-center gap-2">
