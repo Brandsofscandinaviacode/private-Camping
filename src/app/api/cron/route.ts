@@ -98,6 +98,8 @@ export async function GET(req: NextRequest) {
     let invoiceResult = null;
     let overdueResult = null;
     let prepaidResult = null;
+    let logResult: Awaited<ReturnType<typeof logAllConsumption>> | null = null;
+    let heavyStatus = "ok";
 
     if (runHeavy) {
       // Refresh spot prices BEFORE ticking sessions — the tick reads the
@@ -110,15 +112,30 @@ export async function GET(req: NextRequest) {
         // Non-critical — don't fail the cron
       }
 
-      // Tick every active session: delta × current hourly spot price → accumulator
-      tickResult = await tickAllSessionConsumption();
+      // Each heavy task runs on its own: one failing must not skip the rest,
+      // and failures are recorded in _cron_heavy_status rather than being
+      // hidden by the next 2-minute tick writing "ok".
+      const heavyErrors: string[] = [];
+      const step = async <T,>(name: string, fn: () => Promise<T>): Promise<T | null> => {
+        try { return await fn(); }
+        catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          heavyErrors.push(`${name}: ${msg}`);
+          logger.error("cron", `Heavy task ${name} failed`, msg);
+          return null;
+        }
+      };
 
-      await logAllConsumption();
-      const alarmResult = await checkConsumptionAlarms();
-      alerts = alarmResult.alerts;
-      invoiceResult = await autoCreateAndSendInvoices();
-      overdueResult = await checkOverdueInvoices();
-      prepaidResult = await checkPrepaidBalances();
+      // Tick every active session: delta × current hourly spot price → accumulator
+      tickResult = await step("forbrug-tick", () => tickAllSessionConsumption());
+      logResult = await step("måleraflæsning", () => logAllConsumption());
+      const alarmResult = await step("alarmer", () => checkConsumptionAlarms());
+      alerts = alarmResult?.alerts ?? [];
+      invoiceResult = await step("fakturaer", () => autoCreateAndSendInvoices());
+      overdueResult = await step("forfaldne", () => checkOverdueInvoices());
+      prepaidResult = await step("forudbetalt", () => checkPrepaidBalances());
+
+      heavyStatus = heavyErrors.length ? `fejl: ${heavyErrors.join("; ")}` : "ok";
     }
 
     // Track last run time
@@ -130,6 +147,8 @@ export async function GET(req: NextRequest) {
       settingsToUpdate.push(
         { key: "_cron_last_full_run", value: new Date().toISOString() },
         { key: "_cron_alerts", value: String(alerts.length) },
+        { key: "_cron_heavy_status", value: heavyStatus },
+        { key: "_cron_log_summary", value: JSON.stringify(logResult ?? { withMeters: 0, logged: 0, noReading: [] }) },
       );
     }
     await updateMultipleSettings(settingsToUpdate);
@@ -142,7 +161,8 @@ export async function GET(req: NextRequest) {
       bookingSync,
       ...(runHeavy
         ? {
-            logged: true,
+            logged: logResult,
+            heavyStatus,
             alerts: alerts.length,
             alertDetails: alerts,
             invoices: invoiceResult,

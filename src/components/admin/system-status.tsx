@@ -23,6 +23,9 @@ interface StatusData {
   cronLastRun: string | null;
   cronLastStatus: string | null;
   cronLastFullRun: string | null;
+  cronHeavyStatus: string | null;
+  cronLogSummary: { withMeters: number; logged: number; noReading: string[] } | null;
+  meterFailures: { context: string; lastFail: string }[];
   cronAlerts: string;
   totalLogs: number;
   latestLogTime: string | null;
@@ -117,7 +120,8 @@ export function SystemStatus() {
     const lastRun = new Date(status.cronLastRun);
     const diffMs = Date.now() - lastRun.getTime();
     // Healthy if ran within last 30 minutes
-    return diffMs < 30 * 60 * 1000 && status.cronLastStatus === "ok";
+    const heavyOk = !status.cronHeavyStatus || status.cronHeavyStatus === "ok";
+    return diffMs < 30 * 60 * 1000 && status.cronLastStatus === "ok" && heavyOk;
   }
 
   if (loading && !status) {
@@ -194,6 +198,17 @@ export function SystemStatus() {
               })()}
             </span>
           </div>
+          {status.cronLogSummary && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                Sidste aflæsning
+              </span>
+              <span className={`font-medium tabular-nums ${status.cronLogSummary.logged < status.cronLogSummary.withMeters ? "text-amber-600" : ""}`}>
+                {status.cronLogSummary.logged} af {status.cronLogSummary.withMeters} enheder
+              </span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="text-muted-foreground flex items-center gap-2">
               <Bell className="h-4 w-4" />
@@ -203,6 +218,29 @@ export function SystemStatus() {
               {status.cronAlerts}
             </span>
           </div>
+
+          {status.cronHeavyStatus && status.cronHeavyStatus !== "ok" && (
+            <div className="flex items-start gap-2.5 text-sm p-3 rounded-lg bg-red-50 text-red-700">
+              <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span><span className="font-medium">Sidste tunge kørsel fejlede</span> — {status.cronHeavyStatus.replace(/^fejl: /, "")}</span>
+            </div>
+          )}
+          {status.cronLogSummary && status.cronLogSummary.withMeters === 0 && (
+            <div className="text-sm p-3 rounded-lg bg-amber-50 text-amber-800">
+              Ingen enheder har en el- eller vandmåler tilknyttet, så der er intet at logge.
+              Tilknyt målere under hver enheds hardware-indstillinger.
+            </div>
+          )}
+          {status.cronLogSummary && status.cronLogSummary.noReading.length > 0 && (
+            <div className="text-sm p-3 rounded-lg bg-amber-50 text-amber-800 space-y-1">
+              <p className="font-medium">Ingen aflæsning fra {status.cronLogSummary.noReading.length} enhed{status.cronLogSummary.noReading.length === 1 ? "" : "er"}:</p>
+              <p className="text-xs">{status.cronLogSummary.noReading.slice(0, 12).join(", ")}{status.cronLogSummary.noReading.length > 12 ? ` og ${status.cronLogSummary.noReading.length - 12} flere` : ""}</p>
+              <p className="text-xs text-amber-700">
+                Måleren svarede ikke. Tjek at Home Assistant / MQTT er forbundet, og at måler-entiteten
+                (HA) eller prefix + komponent (MQTT) er korrekt under enhedens hardware.
+              </p>
+            </div>
+          )}
 
           <div className="pt-2">
             <Button variant="outline" size="sm" onClick={handleTestCron} disabled={testingCron}>

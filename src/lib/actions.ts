@@ -2939,6 +2939,13 @@ export async function getSystemStatus() {
     // Meter logging, invoices etc. only run on the "heavy" tick (every 10 min);
     // the 2-minute calls in between just handle showers/laundry/booking sync.
     cronLastFullRun: settings._cron_last_full_run || null,
+    // Outcome of the last heavy run — kept separate from _cron_last_status,
+    // which the next 2-minute tick overwrites with "ok".
+    cronHeavyStatus: settings._cron_heavy_status || null,
+    cronLogSummary: (() => {
+      try { return settings._cron_log_summary ? JSON.parse(settings._cron_log_summary) as { withMeters: number; logged: number; noReading: string[] } : null; }
+      catch { return null; }
+    })(),
     cronAlerts: settings._cron_alerts || "0",
     totalLogs: logCount,
     latestLogTime: latestLog?.recordedAt?.toISOString() || null,
@@ -2960,22 +2967,36 @@ export async function getSystemStatus() {
 // ──────────────────────────────────────────────
 // CONSUMPTION LOGGING — periodic meter readings
 // ──────────────────────────────────────────────
-export async function logAllConsumption() {
+export async function logAllConsumption(): Promise<{
+  withMeters: number;
+  logged: number;
+  noReading: string[];
+}> {
   const units = await prisma.unit.findMany({
     include: { hardware: true },
   });
 
+  let withMeters = 0;
+  let logged = 0;
+  // A meter that returns no value is not an exception — it used to vanish
+  // silently. Collect them so the admin can see which units aren't logging.
+  const noReading: string[] = [];
+
   for (const unit of units) {
     const hw = unit.hardware;
     if (!hw) continue;
+    const hasEl = hardware.hasElectricityMeter(hw);
+    const hasWater = hardware.hasWaterMeter(hw);
+    if (!hasEl && !hasWater) continue;
+    withMeters++;
 
     let electricityKwh: number | null = null;
     let waterLiters: number | null = null;
 
-    if (hardware.hasElectricityMeter(hw)) {
+    if (hasEl) {
       electricityKwh = await safeReadMeter(hardware.electricityMeterEp(hw), `logAll:el unit=${unit.id}`);
     }
-    if (hardware.hasWaterMeter(hw)) {
+    if (hasWater) {
       waterLiters = await safeReadMeter(hardware.waterMeterEp(hw), `logAll:water unit=${unit.id}`);
     }
 
@@ -2983,8 +3004,13 @@ export async function logAllConsumption() {
       await prisma.consumptionLog.create({
         data: { unitId: unit.id, electricityKwh, waterLiters },
       });
+      logged++;
+    } else {
+      noReading.push(unitDisplayName(unit.type, unit.name));
     }
   }
+
+  return { withMeters, logged, noReading };
 }
 
 export async function getConsumptionLogs(unitId: number, days: number = 7) {
