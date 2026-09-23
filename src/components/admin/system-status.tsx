@@ -24,7 +24,7 @@ interface StatusData {
   cronLastStatus: string | null;
   cronLastFullRun: string | null;
   cronHeavyStatus: string | null;
-  cronLogSummary: { withMeters: number; logged: number; noReading: string[] } | null;
+  cronLogSummary: { withMeters: number; logged: number; noReading: string[]; reasons?: { unit: string; reason: string }[] } | null;
   meterFailures: { context: string; lastFail: string }[];
   cronAlerts: string;
   totalLogs: number;
@@ -234,10 +234,17 @@ export function SystemStatus() {
           {status.cronLogSummary && status.cronLogSummary.noReading.length > 0 && (
             <div className="text-sm p-3 rounded-lg bg-amber-50 text-amber-800 space-y-1">
               <p className="font-medium">Ingen aflæsning fra {status.cronLogSummary.noReading.length} enhed{status.cronLogSummary.noReading.length === 1 ? "" : "er"}:</p>
-              <p className="text-xs">{status.cronLogSummary.noReading.slice(0, 12).join(", ")}{status.cronLogSummary.noReading.length > 12 ? ` og ${status.cronLogSummary.noReading.length - 12} flere` : ""}</p>
+              {status.cronLogSummary.reasons && status.cronLogSummary.reasons.length > 0 ? (
+                <ul className="text-xs space-y-1 pt-0.5">
+                  {status.cronLogSummary.reasons.slice(0, 12).map((r, i) => (
+                    <li key={i}><span className="font-medium">{r.unit}:</span> {r.reason}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs">{status.cronLogSummary.noReading.slice(0, 12).join(", ")}</p>
+              )}
               <p className="text-xs text-amber-700">
-                Måleren svarede ikke. Tjek at Home Assistant / MQTT er forbundet, og at måler-entiteten
-                (HA) eller prefix + komponent (MQTT) er korrekt under enhedens hardware.
+                Øvrige enheder aflæses som normalt — kun disse springes over.
               </p>
             </div>
           )}

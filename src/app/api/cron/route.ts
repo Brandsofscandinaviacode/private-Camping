@@ -148,7 +148,7 @@ export async function GET(req: NextRequest) {
         { key: "_cron_last_full_run", value: new Date().toISOString() },
         { key: "_cron_alerts", value: String(alerts.length) },
         { key: "_cron_heavy_status", value: heavyStatus },
-        { key: "_cron_log_summary", value: JSON.stringify(logResult ?? { withMeters: 0, logged: 0, noReading: [] }) },
+        { key: "_cron_log_summary", value: JSON.stringify(logResult ?? { withMeters: 0, logged: 0, noReading: [], reasons: [] }) },
       );
     }
     await updateMultipleSettings(settingsToUpdate);

@@ -2943,7 +2943,7 @@ export async function getSystemStatus() {
     // which the next 2-minute tick overwrites with "ok".
     cronHeavyStatus: settings._cron_heavy_status || null,
     cronLogSummary: (() => {
-      try { return settings._cron_log_summary ? JSON.parse(settings._cron_log_summary) as { withMeters: number; logged: number; noReading: string[] } : null; }
+      try { return settings._cron_log_summary ? JSON.parse(settings._cron_log_summary) as { withMeters: number; logged: number; noReading: string[]; reasons?: { unit: string; reason: string }[] } : null; }
       catch { return null; }
     })(),
     cronAlerts: settings._cron_alerts || "0",
@@ -2971,6 +2971,7 @@ export async function logAllConsumption(): Promise<{
   withMeters: number;
   logged: number;
   noReading: string[];
+  reasons: { unit: string; reason: string }[];
 }> {
   const units = await prisma.unit.findMany({
     include: { hardware: true },
@@ -2981,7 +2982,9 @@ export async function logAllConsumption(): Promise<{
   // A meter that returns no value is not an exception — it used to vanish
   // silently. Collect them so the admin can see which units aren't logging.
   const noReading: string[] = [];
+  const reasons: { unit: string; reason: string }[] = [];
 
+  // Each unit is read on its own; one failing meter never stops the rest.
   for (const unit of units) {
     const hw = unit.hardware;
     if (!hw) continue;
@@ -2989,15 +2992,24 @@ export async function logAllConsumption(): Promise<{
     const hasWater = hardware.hasWaterMeter(hw);
     if (!hasEl && !hasWater) continue;
     withMeters++;
+    const label = unitDisplayName(unit.type, unit.name);
 
     let electricityKwh: number | null = null;
     let waterLiters: number | null = null;
 
-    if (hasEl) {
-      electricityKwh = await safeReadMeter(hardware.electricityMeterEp(hw), `logAll:el unit=${unit.id}`);
-    }
-    if (hasWater) {
-      waterLiters = await safeReadMeter(hardware.waterMeterEp(hw), `logAll:water unit=${unit.id}`);
+    try {
+      if (hasEl) {
+        const r = await hardware.readEnergyKwhWithReason(hardware.electricityMeterEp(hw));
+        electricityKwh = r.kwh;
+        if (r.reason) reasons.push({ unit: label, reason: `El — ${r.reason}` });
+      }
+      if (hasWater) {
+        const r = await hardware.readEnergyKwhWithReason(hardware.waterMeterEp(hw));
+        waterLiters = r.kwh;
+        if (r.reason) reasons.push({ unit: label, reason: `Vand — ${r.reason}` });
+      }
+    } catch (e) {
+      reasons.push({ unit: label, reason: e instanceof Error ? e.message : String(e) });
     }
 
     if (electricityKwh !== null || waterLiters !== null) {
@@ -3006,11 +3018,11 @@ export async function logAllConsumption(): Promise<{
       });
       logged++;
     } else {
-      noReading.push(unitDisplayName(unit.type, unit.name));
+      noReading.push(label);
     }
   }
 
-  return { withMeters, logged, noReading };
+  return { withMeters, logged, noReading, reasons };
 }
 
 export async function getConsumptionLogs(unitId: number, days: number = 7) {

@@ -88,6 +88,50 @@ export async function readEnergyKwh(ep: HardwareEndpoint): Promise<number | null
   }
 }
 
+/**
+ * Like readEnergyKwh, but when there is no value it says why — so the admin
+ * sees "wrong MQTT prefix" or "HA entity unavailable" instead of a bare
+ * "no reading". Used by the cron's meter logging.
+ */
+export async function readEnergyKwhWithReason(
+  ep: HardwareEndpoint,
+): Promise<{ kwh: number | null; reason: string | null }> {
+  if (ep.source === "MQTT") {
+    if (!ep.mqttPrefix || !ep.mqttComponent) {
+      return { kwh: null, reason: "MQTT: prefix eller komponent mangler" };
+    }
+    const topic = `${ep.mqttPrefix}/status/${ep.mqttComponent}`;
+    const msg = await mqttClient.getStatus(topic, 1500);
+    if (!msg) {
+      return {
+        kwh: null,
+        reason: mqttClient.isConnected()
+          ? `MQTT: ingen besked på ${topic} — tjek prefix og komponent (se "Forbundne enheder" under MQTT)`
+          : "MQTT: CampSense er ikke forbundet til brokeren",
+      };
+    }
+    try {
+      const data = JSON.parse(msg.payload) as ShellyComponentStatus;
+      const wh = data.aenergy?.total;
+      if (typeof wh !== "number") {
+        return { kwh: null, reason: `MQTT: ${topic} har ingen energitæller (aenergy.total) — komponenten måler ikke kWh` };
+      }
+      return { kwh: wh / 1000, reason: null };
+    } catch {
+      return { kwh: null, reason: `MQTT: ugyldig besked på ${topic}` };
+    }
+  }
+  if (!ep.haEntityId) return { kwh: null, reason: "HA: ingen måler-entitet valgt" };
+  try {
+    const state = await ha.getEntityState(ep.haEntityId);
+    const v = parseFloat(state.state);
+    if (isNaN(v)) return { kwh: null, reason: `HA: ${ep.haEntityId} er "${state.state}"` };
+    return { kwh: v, reason: null };
+  } catch (e) {
+    return { kwh: null, reason: `HA: kunne ikke hente ${ep.haEntityId} (${e instanceof Error ? e.message : "ukendt fejl"})` };
+  }
+}
+
 /** Read instantaneous power in W. Returns null if unavailable. */
 export async function readPowerWatts(
   ep: HardwareEndpoint,
