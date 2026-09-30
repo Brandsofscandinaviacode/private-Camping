@@ -11,8 +11,18 @@ async function getSettings() {
 // ──────────────────────────────────────────────
 // Template rendering
 // ──────────────────────────────────────────────
-function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] || "");
+function escapeHtml(v: string): string {
+  return v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
+// Keys may contain Danish letters ({{beløb}}), so match Unicode letters —
+// \w would leave "{{beløb}}" untouched in every message. Guest-supplied values
+// (name, e-mail, phone) are escaped when the result is HTML.
+function renderTemplate(template: string, vars: Record<string, string>, html = false): string {
+  return template.replace(/\{\{([\p{L}\p{N}_]+)\}\}/gu, (_, key: string) => {
+    const v = vars[key] || "";
+    return html ? escapeHtml(v) : v;
+  });
 }
 
 // ──────────────────────────────────────────────
@@ -177,7 +187,8 @@ export async function sendCheckInNotification(
     );
     const body = renderTemplate(
       s.template_checkin_email_body || "<h2>Velkommen, {{navn}}!</h2><p>Du er checket ind på <strong>{{enhed}}</strong>.</p><p><a href=\"{{link}}\">Åbn gæsteportal</a></p>",
-      vars
+      vars,
+      true
     );
     results.email = await sendEmail(guestEmail, subject, body);
   }
@@ -223,7 +234,8 @@ export async function sendInvoiceNotification(
     );
     const body = renderTemplate(
       s.template_invoice_email_body || "<h2>Faktura for {{periode}}</h2><p>Hej {{navn}},</p><p>Din faktura for <strong>{{enhed}}</strong>: <strong>{{beløb}} DKK</strong></p><p><a href=\"{{link}}\">Se faktura</a></p>",
-      vars
+      vars,
+      true
     );
     results.email = await sendEmail(guestEmail, subject, body);
   }

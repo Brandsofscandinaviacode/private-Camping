@@ -26,7 +26,8 @@ export function startShowerScheduler() {
     running = true;
     try {
       const { checkShowerSessions } = await import("./actions");
-      await checkShowerSessions();
+      const { runWithApiAuth } = await import("./auth-context");
+      await runWithApiAuth(() => checkShowerSessions());
     } catch (e) {
       logger.error("shower-scheduler", "Sweep failed", e);
     } finally {

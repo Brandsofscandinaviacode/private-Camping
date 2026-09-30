@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { verifyCallbackChecksum, isPaymentAccepted } from "@/lib/quickpay";
 import { activateLaundrySession, activateShowerSession, applyShowerExtension } from "@/lib/actions";
 import { logger } from "@/lib/logger";
+import { runWithApiAuth } from "@/lib/auth-context";
 import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "@/lib/prepaid";
 
 function getCallbackAmount(body: Record<string, unknown>): number | null {
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
         await prisma.laundrySess.update({ where: { id: laundrySess.id }, data: { status: "PENDING" } });
         logger.warn("quickpay", `Laundry ${laundrySess.id}: late payment after auto-cancel — re-opened`);
       }
-      await activateLaundrySession(laundrySess.id);
+      await runWithApiAuth(() => activateLaundrySession(laundrySess.id));
       logger.info("quickpay", `Laundry session ${laundrySess.id} activated`);
       return NextResponse.json({ status: "ok", type: "laundry", id: laundrySess.id });
     }
@@ -150,10 +151,10 @@ export async function POST(req: NextRequest) {
         logger.warn("quickpay", `Shower ${showerSess.id}: late payment after auto-cancel — re-opened`);
       }
       if (showerSess.status === "PENDING") {
-        await activateShowerSession(showerSess.id);
+        await runWithApiAuth(() => activateShowerSession(showerSess.id));
         logger.info("quickpay", `Shower session ${showerSess.id} activated`);
       } else if (showerSess.status === "ACTIVE" || showerSess.status === "PAUSED") {
-        await applyShowerExtension(showerSess.id);
+        await runWithApiAuth(() => applyShowerExtension(showerSess.id));
         logger.info("quickpay", `Shower session ${showerSess.id} extended`);
       }
       return NextResponse.json({ status: "ok", type: "shower", id: showerSess.id });

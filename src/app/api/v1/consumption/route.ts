@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateAPI } from "@/lib/api-auth";
+import { runWithApiAuth } from "@/lib/auth-context";
 import { getLiveConsumption, getConsumptionLogs, getTotalUsage, getPricing, getEffectiveElPricing } from "@/lib/actions";
 
 // GET /api/v1/consumption?session_id=1 — Get live consumption for a session
@@ -9,7 +10,10 @@ import { getLiveConsumption, getConsumptionLogs, getTotalUsage, getPricing, getE
 export async function GET(req: NextRequest) {
   const auth = await authenticateAPI(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: 401 });
+  return runWithApiAuth(() => handle(req));
+}
 
+async function handle(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get("session_id");
   const unitId = req.nextUrl.searchParams.get("unit_id");
   const days = req.nextUrl.searchParams.get("days");

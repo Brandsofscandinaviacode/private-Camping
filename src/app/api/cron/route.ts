@@ -33,7 +33,12 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: 401 });
   }
+  // Every task below is an auth-guarded server action; the bearer check
+  // above is what authorises them.
+  return runWithApiAuth(() => runCron());
+}
 
+async function runCron() {
   const HEAVY_INTERVAL_MS = 10 * 60_000; // 10 minutes
 
   try {
@@ -45,10 +50,9 @@ export async function GET(req: NextRequest) {
     // Called on every tick but self-throttling: it honours its own
     // `booking_sync_interval_minutes` setting, so the admin-chosen cadence is
     // respected exactly rather than being rounded to the heavy-task interval.
-    // Runs with API auth because syncBookings() calls requireAuth().
     let bookingSync: Awaited<ReturnType<typeof autoSyncBookings>> = { ran: false };
     try {
-      bookingSync = await runWithApiAuth(() => autoSyncBookings());
+      bookingSync = await autoSyncBookings();
     } catch (e) {
       logger.error("cron", "Booking auto-sync failed", e instanceof Error ? e.message : e);
     }

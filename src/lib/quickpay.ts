@@ -142,7 +142,9 @@ export async function verifyCallbackChecksum(rawBody: string, checksum: string):
     .update(rawBody)
     .digest("hex");
 
-  return computed === checksum;
+  const a = Buffer.from(computed, "utf8");
+  const b = Buffer.from(checksum ?? "", "utf8");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 // ──────────────────────────────────────────────

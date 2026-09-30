@@ -217,7 +217,7 @@ export function GuestPortalClient({
 
     async function fetchConsumption() {
       try {
-        const data = await getLiveConsumption(sessionId!);
+        const data = await getLiveConsumption(sessionId!, token);
         if (mounted && data) setConsumption(data);
       } catch {}
     }
@@ -303,7 +303,7 @@ export function GuestPortalClient({
     setPayingInvoiceId(invoiceId);
     setPayError(null);
     try {
-      const result = await createInvoicePayment(invoiceId);
+      const result = await createInvoicePayment(invoiceId, token);
       window.location.assign(result.paymentLink);
     } catch (e) {
       setPayError(e instanceof Error ? e.message : tx.paymentFailed);

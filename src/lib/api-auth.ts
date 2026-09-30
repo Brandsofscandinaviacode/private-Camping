@@ -1,5 +1,13 @@
 import { NextRequest } from "next/server";
+import { timingSafeEqual, createHash } from "crypto";
 import { prisma } from "./prisma";
+
+// Constant-time compare (hashing first equalises lengths).
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 // API authentication via Bearer token stored in global settings (key: "api_key")
 export async function authenticateAPI(req: NextRequest): Promise<{ ok: boolean; error?: string }> {
@@ -15,7 +23,7 @@ export async function authenticateAPI(req: NextRequest): Promise<{ ok: boolean; 
     return { ok: false, error: "API key not configured. Set it in Settings > System." };
   }
 
-  if (token !== setting.value) {
+  if (!safeEqual(token, setting.value)) {
     return { ok: false, error: "Invalid API key" };
   }
 

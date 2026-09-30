@@ -34,6 +34,10 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes);
 
     const ext = file.name.split(".").pop()?.toLowerCase() || "png";
+    // SVG is excluded: it can carry script and is served from our origin.
+    if (!["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) {
+      return NextResponse.json({ error: "Kun PNG, JPG, GIF eller WebP" }, { status: 400 });
+    }
     const filename = `site-map.${ext}`;
     const uploadDir = getUploadDir();
 

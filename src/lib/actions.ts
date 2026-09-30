@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
+import { readGlobalSettings } from "./settings";
 import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
@@ -75,8 +76,8 @@ export async function getEffectiveElPricing() {
 }
 
 export async function getGlobalSettings() {
-  const settings = await prisma.globalSetting.findMany();
-  return Object.fromEntries(settings.map((s) => [s.key, s.value]));
+  await requireAuth();
+  return readGlobalSettings();
 }
 
 // ──────────────────────────────────────────────
@@ -717,6 +718,9 @@ export async function removeLongTermTenant(unitId: number) {
 export async function updateMultipleSettings(
   settings: { key: string; value: string }[]
 ) {
+  // Public server action — without this anyone could overwrite api_key,
+  // payment keys etc. The cron route calls it inside runWithApiAuth.
+  await requireAuth();
   for (const s of settings) {
     await prisma.globalSetting.upsert({
       where: { key: s.key },
@@ -820,7 +824,7 @@ async function sendCheckInNotificationAsync(
 ) {
   try {
     const { sendCheckInNotification } = await import("./notifications");
-    const settings = await getGlobalSettings();
+    const settings = await readGlobalSettings();
     const baseUrl = getBaseUrl(settings);
     const portalUrl = `${baseUrl}/guest/${portalToken}`;
     await sendCheckInNotification(guestName, guestPhone, guestEmail, portalUrl, unitName || "");
@@ -840,7 +844,7 @@ export async function checkOut(sessionId: number) {
   // us it's handled safely — we just re-read the session below and pick
   // up the freshest accumulator state either way.
   try {
-    await tickSessionConsumption(sessionId);
+    await tickSessionConsumptionInternal(sessionId);
   } catch (e) {
     logger.error("checkout", "checkOut: final tick fejlede", e);
   }
@@ -938,7 +942,7 @@ export async function checkOut(sessionId: number) {
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0) + totalServicesCost;
 
   // Turn off devices based on auto_power_off setting
-  const globalSettings = await getGlobalSettings();
+  const globalSettings = await readGlobalSettings();
   const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
 
   if (autoPowerOff) {
@@ -1085,7 +1089,7 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
   let session = initial;
   if (initial.status === "ACTIVE") {
     try {
-      await tickSessionConsumption(sessionId);
+      await tickSessionConsumptionInternal(sessionId);
       const reloaded = await prisma.session.findUnique({
         where: { id: sessionId },
         include: { unit: { include: { hardware: true } } },
@@ -1387,7 +1391,14 @@ export async function checkOutWithStatement(sessionId: number) {
 // interval — at 10-min ticks it's ~10 min of consumption priced into the
 // neighbouring hour at the hour boundary.
 // ──────────────────────────────────────────────
-export async function tickSessionConsumption(sessionId: number): Promise<{
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use tickSessionConsumptionInternal directly. */
+export async function tickSessionConsumption(...args: Parameters<typeof tickSessionConsumptionInternal>) {
+  await requireAuth();
+  return tickSessionConsumptionInternal(...args);
+}
+
+async function tickSessionConsumptionInternal(sessionId: number): Promise<{
   addedKwh: number;
   addedElCost: number;
   addedLiters: number;
@@ -1532,7 +1543,14 @@ export async function tickSessionConsumption(sessionId: number): Promise<{
 }
 
 // Tick every active session — invoked from the cron route.
-export async function tickAllSessionConsumption(): Promise<{
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use tickAllSessionConsumptionInternal directly. */
+export async function tickAllSessionConsumption(...args: Parameters<typeof tickAllSessionConsumptionInternal>) {
+  await requireAuth();
+  return tickAllSessionConsumptionInternal(...args);
+}
+
+async function tickAllSessionConsumptionInternal(): Promise<{
   ticked: number;
   totalKwh: number;
   totalElCost: number;
@@ -1547,7 +1565,7 @@ export async function tickAllSessionConsumption(): Promise<{
   let totalElCost = 0;
   for (const s of active) {
     try {
-      const result = await tickSessionConsumption(s.id);
+      const result = await tickSessionConsumptionInternal(s.id);
       if (result) {
         ticked++;
         totalKwh += result.addedKwh;
@@ -1570,13 +1588,23 @@ export async function tickAllSessionConsumption(): Promise<{
 // If `lastTickAt` is older than 60s we opportunistically trigger a tick
 // so an operator viewing the booking gets near-live updates.
 // ──────────────────────────────────────────────
-export async function getLiveConsumption(sessionId: number) {
+/**
+ * Live consumption for an active session. Guests pass their portal token
+ * (session or long-term unit token); without one the caller must be admin/API.
+ */
+export async function getLiveConsumption(sessionId: number, portalToken?: string) {
+  if (portalToken === undefined) await requireAuth();
   const initial = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
   });
 
   if (!initial || initial.status !== "ACTIVE") return null;
+  if (
+    portalToken !== undefined &&
+    portalToken !== initial.guestPortalToken &&
+    portalToken !== initial.unit.longTermPortalToken
+  ) return null;
 
   // Opportunistic tick — keeps the accumulator fresh when someone is actively
   // viewing the booking. Cron is the guarantee (every 10 min); this is the
@@ -1586,7 +1614,7 @@ export async function getLiveConsumption(sessionId: number) {
   let session = initial;
   if (isStale) {
     try {
-      await tickSessionConsumption(sessionId);
+      await tickSessionConsumptionInternal(sessionId);
       // Reload with the fresh accumulator values
       const reloaded = await prisma.session.findUnique({
         where: { id: sessionId },
@@ -2175,7 +2203,7 @@ async function createMonthlyInvoiceInternal(unitId: number) {
   // spot-price billing is time-weighted, not a snapshot.
   if (activeSession) {
     try {
-      await tickSessionConsumption(activeSession.id);
+      await tickSessionConsumptionInternal(activeSession.id);
     } catch (e) {
       logger.error("invoice", "createMonthlyInvoice: tick fejlede", e);
     }
@@ -2295,8 +2323,15 @@ async function createMonthlyInvoiceInternal(unitId: number) {
 // ──────────────────────────────────────────────
 // AUTO INVOICING — cron-triggered for fastliggere
 // ──────────────────────────────────────────────
-export async function autoCreateAndSendInvoices(): Promise<{ created: number; sent: number }> {
-  const settings = await getGlobalSettings();
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use autoCreateAndSendInvoicesInternal directly. */
+export async function autoCreateAndSendInvoices(...args: Parameters<typeof autoCreateAndSendInvoicesInternal>) {
+  await requireAuth();
+  return autoCreateAndSendInvoicesInternal(...args);
+}
+
+async function autoCreateAndSendInvoicesInternal(): Promise<{ created: number; sent: number }> {
+  const settings = await readGlobalSettings();
   if (settings.invoice_email_enabled !== "true") return { created: 0, sent: 0 };
 
   const invoiceDaySetting = settings.invoice_email_day || "1";
@@ -2353,8 +2388,15 @@ export async function autoCreateAndSendInvoices(): Promise<{ created: number; se
 }
 
 // Check overdue invoices and optionally cut power
-export async function checkOverdueInvoices(): Promise<{ markedOverdue: number; powerOff: number }> {
-  const settings = await getGlobalSettings();
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use checkOverdueInvoicesInternal directly. */
+export async function checkOverdueInvoices(...args: Parameters<typeof checkOverdueInvoicesInternal>) {
+  await requireAuth();
+  return checkOverdueInvoicesInternal(...args);
+}
+
+async function checkOverdueInvoicesInternal(): Promise<{ markedOverdue: number; powerOff: number }> {
+  const settings = await readGlobalSettings();
   const deadlineDays = parseInt(settings.invoice_payment_deadline_days || "14", 10);
   const autoPowerOff = settings.invoice_auto_power_off === "true";
 
@@ -2398,8 +2440,15 @@ export async function checkOverdueInvoices(): Promise<{ markedOverdue: number; p
 // ──────────────────────────────────────────────
 // PREPAID AUTO POWER-OFF — when balance depleted
 // ──────────────────────────────────────────────
-export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
-  const settings = await getGlobalSettings();
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use checkPrepaidBalancesInternal directly. */
+export async function checkPrepaidBalances(...args: Parameters<typeof checkPrepaidBalancesInternal>) {
+  await requireAuth();
+  return checkPrepaidBalancesInternal(...args);
+}
+
+async function checkPrepaidBalancesInternal(): Promise<{ powerOff: number }> {
+  const settings = await readGlobalSettings();
   if (settings.prepaid_auto_power_off !== "true") return { powerOff: 0 };
 
   // Find all active PREPAID sessions
@@ -2425,7 +2474,7 @@ export async function checkPrepaidBalances(): Promise<{ powerOff: number }> {
     // a snapshot. The cron already ticks, but we do it here too so the
     // cutoff decision uses the freshest possible numbers.
     try {
-      await tickSessionConsumption(session.id);
+      await tickSessionConsumptionInternal(session.id);
     } catch (e) {
       logger.error("prepaid", `checkPrepaidBalances: tick fejlede for session ${session.id}`, e);
       // Fall through — we'll still read the accumulator, but the staleness
@@ -2540,7 +2589,7 @@ async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number):
     return { ok: false, message: "Ingen email eller telefon registreret på lejeren" };
   }
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
   const portalUrl = portalToken ? `${baseUrl}/guest/${portalToken}` : baseUrl;
 
@@ -2899,7 +2948,7 @@ export async function resendGuestNotification(sessionId: number) {
   const dispName = unitDisplayName(session.unit.type, session.unit.name);
 
   const { sendCheckInNotification } = await import("./notifications");
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
   const portalUrl = `${baseUrl}/guest/${session.guestPortalToken}`;
 
@@ -2926,7 +2975,7 @@ export async function getUnpaidCount() {
 // ──────────────────────────────────────────────
 export async function getSystemStatus() {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const logCount = await prisma.consumptionLog.count();
   const latestLog = await prisma.consumptionLog.findFirst({ orderBy: { recordedAt: "desc" } });
   const unitCount = await prisma.unit.count();
@@ -2967,7 +3016,14 @@ export async function getSystemStatus() {
 // ──────────────────────────────────────────────
 // CONSUMPTION LOGGING — periodic meter readings
 // ──────────────────────────────────────────────
-export async function logAllConsumption(): Promise<{
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use logAllConsumptionInternal directly. */
+export async function logAllConsumption(...args: Parameters<typeof logAllConsumptionInternal>) {
+  await requireAuth();
+  return logAllConsumptionInternal(...args);
+}
+
+async function logAllConsumptionInternal(): Promise<{
   withMeters: number;
   logged: number;
   noReading: string[];
@@ -3435,10 +3491,17 @@ export async function exportInvoicesCSV() {
 // ──────────────────────────────────────────────
 // CONSUMPTION ALARM — check for excessive usage
 // ──────────────────────────────────────────────
-export async function checkConsumptionAlarms(): Promise<{
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use checkConsumptionAlarmsInternal directly. */
+export async function checkConsumptionAlarms(...args: Parameters<typeof checkConsumptionAlarmsInternal>) {
+  await requireAuth();
+  return checkConsumptionAlarmsInternal(...args);
+}
+
+async function checkConsumptionAlarmsInternal(): Promise<{
   alerts: { unitId: number; unitName: string; type: "electricity" | "water"; usage: number; threshold: number }[];
 }> {
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   if (settings.alarm_enabled !== "true") return { alerts: [] };
 
   const kwhThreshold = parseFloat(settings.alarm_kwh_threshold || "10");
@@ -3690,7 +3753,7 @@ export async function createSessionPayment(sessionId: number, portalToken: strin
     : (session.totalCost || 0) + (session.externalPrice || 0);
   if (amount <= 0) throw new Error("Intet beløb at betale");
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
 
   const { createPaymentLink, generateOrderId } = await import("./quickpay");
@@ -3714,16 +3777,21 @@ export async function createSessionPayment(sessionId: number, portalToken: strin
   return { paymentLink };
 }
 
-export async function createInvoicePayment(invoiceId: number) {
+export async function createInvoicePayment(invoiceId: number, guestToken: string) {
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: { unit: true },
   });
-  if (!invoice) throw new Error("Faktura ikke fundet");
+  if (!invoice || !guestToken) throw new Error("Faktura ikke fundet");
+  // The guest may only pay invoices for the unit their portal link belongs to.
+  const ownsInvoice =
+    invoice.unit.longTermPortalToken === guestToken ||
+    (await prisma.session.count({ where: { unitId: invoice.unitId, guestPortalToken: guestToken } })) > 0;
+  if (!ownsInvoice) throw new Error("Faktura ikke fundet");
   if (invoice.status === "PAID") throw new Error("Allerede betalt");
   if (invoice.totalAmount <= 0) throw new Error("Intet beløb at betale");
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
   let portalToken: string | null = invoice.unit.longTermPortalToken;
 
@@ -4304,7 +4372,7 @@ export async function createLaundryPayment(
 
   // ── METERED billing mode — delegate to metered flow ──
   if (machine.billingMode === "METERED") {
-    const settings = await getGlobalSettings();
+    const settings = await readGlobalSettings();
     const baseUrl = getBaseUrl(settings);
     const returnPath = `/guest/${guestPortalToken}`;
     return createMeteredLaundryPaymentPortal(machine, guestPortalToken, returnPath, baseUrl, settings);
@@ -4328,7 +4396,7 @@ export async function createLaundryPayment(
   const duration = chosenProgram ? chosenProgram.durationMinutes : machine.durationMinutes;
 
   // PREPAID guests always use their balance for services
-  const globalSettings = await getGlobalSettings();
+  const globalSettings = await readGlobalSettings();
   let prepaidCreditUsed = 0;
   if (guestSession?.billingMode === "PREPAID" && guestSession.prepaidAmount) {
     const prepaidRemaining = guestSession.prepaidAmount;
@@ -4450,7 +4518,7 @@ export async function createLaundryPayment(
   });
 
   // Create QuickPay payment for remaining amount
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
 
   if (settings.quickpay_enabled !== "true") {
@@ -4508,7 +4576,14 @@ export async function createLaundryPayment(
 }
 
 // Start a laundry machine after payment is confirmed (called from callback)
-export async function activateLaundrySession(laundrySessionId: number) {
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use activateLaundrySessionInternal directly. */
+export async function activateLaundrySession(...args: Parameters<typeof activateLaundrySessionInternal>) {
+  await requireAuth();
+  return activateLaundrySessionInternal(...args);
+}
+
+async function activateLaundrySessionInternal(laundrySessionId: number) {
   const sess = await prisma.laundrySess.findUnique({
     where: { id: laundrySessionId },
     include: { machine: true },
@@ -4561,7 +4636,7 @@ export async function createPrepaidTopUp(
   if (session.billingMode !== "PREPAID") return { ok: false, message: "Kun for forudbetalte ophold" };
   if (amount <= 0) return { ok: false, message: "Ugyldigt beløb" };
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   if (settings.quickpay_enabled !== "true") {
     return { ok: false, message: "Online betaling er ikke aktiveret" };
   }
@@ -4595,7 +4670,14 @@ export async function createPrepaidTopUp(
 }
 
 // Called by cron to turn off expired laundry machines
-export async function checkLaundryMachines() {
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use checkLaundryMachinesInternal directly. */
+export async function checkLaundryMachines(...args: Parameters<typeof checkLaundryMachinesInternal>) {
+  await requireAuth();
+  return checkLaundryMachinesInternal(...args);
+}
+
+async function checkLaundryMachinesInternal() {
   // Fixed-mode sessions: turn off when endsAt passes
   const expired = await prisma.laundrySess.findMany({
     where: {
@@ -4619,7 +4701,7 @@ export async function checkLaundryMachines() {
   }
 
   // Metered sessions: tick power monitoring
-  const meteredResult = await tickMeteredLaundry();
+  const meteredResult = await tickMeteredLaundryInternal();
 
   // Safety: force-complete metered sessions past their 4h safety timeout
   const meteredExpired = await prisma.laundrySess.findMany({
@@ -5027,7 +5109,7 @@ export async function createPublicLaundryPayment(
     });
   }
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
   const returnPath = returnToken.startsWith("machine:")
     ? `/laundry/machine/${returnToken.slice("machine:".length)}`
@@ -5598,7 +5680,7 @@ export async function createShowerPayment(
   const price = +(mins * shower.pricePerMinute).toFixed(2);
   const endsAt = new Date(Date.now() + mins * 60 * 1000);
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
 
   // POSTPAID ON_ACCOUNT: start immediately, bill at checkout/invoice
@@ -5619,7 +5701,7 @@ export async function createShowerPayment(
         paymentStatus: "ON_ACCOUNT",
       },
     });
-    await activateShowerSession(sess.id);
+    await activateShowerSessionInternal(sess.id);
     return { ok: true, message: `Bad startet i ${mins} min — ${price.toFixed(0)} DKK på regning`, showerSessionId: sess.id, accessToken: sess.accessToken };
   }
 
@@ -5645,7 +5727,7 @@ export async function createShowerPayment(
         paymentStatus: "PREPAID",
       },
     });
-    await activateShowerSession(sess.id);
+    await activateShowerSessionInternal(sess.id);
     return { ok: true, message: `Bad startet i ${mins} min (trukket fra saldo)`, showerSessionId: sess.id, accessToken: sess.accessToken };
   }
 
@@ -5664,7 +5746,7 @@ export async function createShowerPayment(
 
   // No QuickPay configured → start immediately (dev / free mode)
   if (settings.quickpay_enabled !== "true") {
-    await activateShowerSession(pending.id);
+    await activateShowerSessionInternal(pending.id);
     return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id, accessToken: pending.accessToken };
   }
 
@@ -5697,7 +5779,14 @@ export async function createShowerPayment(
  * Called when the QuickPay callback accepts the payment, OR when QuickPay
  * is disabled and we start immediately. Opens the valve + flips status.
  */
-export async function activateShowerSession(pendingId: number) {
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use activateShowerSessionInternal directly. */
+export async function activateShowerSession(...args: Parameters<typeof activateShowerSessionInternal>) {
+  await requireAuth();
+  return activateShowerSessionInternal(...args);
+}
+
+async function activateShowerSessionInternal(pendingId: number) {
   const sess = await prisma.showerSess.findUnique({
     where: { id: pendingId },
     include: { shower: true },
@@ -5734,7 +5823,7 @@ export async function startShowerRelay(showerSessionId: number, accessToken?: st
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!accessToken || sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "ACTIVE") return { ok: false, message: "Session er ikke aktiv" };
 
   const remainingSec = Math.max(0, Math.ceil((new Date(sess.endsAt).getTime() - Date.now()) / 1000));
@@ -5755,7 +5844,14 @@ export async function startShowerRelay(showerSessionId: number, accessToken?: st
  * Called when an extension payment resolves: adds the purchased
  * minutes on top of the existing timer.
  */
-export async function applyShowerExtension(showerSessionId: number): Promise<boolean> {
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use applyShowerExtensionInternal directly. */
+export async function applyShowerExtension(...args: Parameters<typeof applyShowerExtensionInternal>) {
+  await requireAuth();
+  return applyShowerExtensionInternal(...args);
+}
+
+async function applyShowerExtensionInternal(showerSessionId: number): Promise<boolean> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
@@ -5813,8 +5909,8 @@ export async function getShowerSessionState(showerSessionId: number, accessToken
     include: { shower: true },
   });
   if (!sess) return null;
-  // Validate access token (skip for internal/cron callers that don't pass one)
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return null;
+  // The access token from the shower link is the only credential guests have
+  if (!accessToken || sess.accessToken !== accessToken) return null;
 
   const now = Date.now();
   let secondsLeft = 0;
@@ -5872,7 +5968,7 @@ export async function pauseShower(showerSessionId: number, accessToken?: string)
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!accessToken || sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "ACTIVE") return { ok: false, message: "Kan ikke pause nu" };
 
   if (sess.pauseResumedAt) {
@@ -5907,7 +6003,7 @@ export async function resumeShower(showerSessionId: number, accessToken?: string
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!accessToken || sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "PAUSED") return { ok: false, message: "Ikke på pause" };
 
   const remainingMs = sess.pauseRemainingMs ?? 0;
@@ -5947,7 +6043,7 @@ export async function extendShowerPayment(
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
-  if (accessToken !== undefined && sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
+  if (!accessToken || sess.accessToken !== accessToken) return { ok: false, message: "Ugyldig adgang" };
   if (sess.status !== "ACTIVE" && sess.status !== "PAUSED") {
     return { ok: false, message: "Kan kun forlænge en aktiv session" };
   }
@@ -5959,7 +6055,7 @@ export async function extendShowerPayment(
 
   const price = +(extra * sess.shower.pricePerMinute).toFixed(2);
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
 
   // PREPAID guests extend from their balance — same rules as the initial
@@ -5980,7 +6076,7 @@ export async function extendShowerPayment(
         where: { id: showerSessionId },
         data: { pendingMinutes: extra },
       });
-      const applied = await applyShowerExtension(showerSessionId);
+      const applied = await applyShowerExtensionInternal(showerSessionId);
       if (!applied) {
         await prisma.session.update({ where: { id: guestSession.id }, data: { prepaidAmount: { increment: price } } });
         return { ok: false, message: "Badet er ikke længere aktivt — beløbet er ført tilbage til din saldo" };
@@ -5994,7 +6090,7 @@ export async function extendShowerPayment(
       where: { id: showerSessionId },
       data: { pendingMinutes: extra },
     });
-    await applyShowerExtension(showerSessionId);
+    await applyShowerExtensionInternal(showerSessionId);
     return { ok: true, message: `Forlænget med ${extra} minutter` };
   }
 
@@ -6101,7 +6197,14 @@ export async function completeExpiredLaundry(laundrySessionId: number) {
 // Called by cron every 2 minutes. Reads power consumption from Shelly/HA,
 // tracks billing timer start/stop based on power threshold.
 // ──────────────────────────────────────────────
-export async function tickMeteredLaundry() {
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use tickMeteredLaundryInternal directly. */
+export async function tickMeteredLaundry(...args: Parameters<typeof tickMeteredLaundryInternal>) {
+  await requireAuth();
+  return tickMeteredLaundryInternal(...args);
+}
+
+async function tickMeteredLaundryInternal() {
   const sessions = await prisma.laundrySess.findMany({
     where: { status: "ACTIVE", billingMode: "METERED" },
     include: { machine: true },
@@ -6377,7 +6480,14 @@ export async function getMeteredLaundryStatus(accessToken: string) {
  *  - Close expired active sessions (turn off valve)
  *  - Cancel old pending sessions
  */
-export async function checkShowerSessions() {
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use checkShowerSessionsInternal directly. */
+export async function checkShowerSessions(...args: Parameters<typeof checkShowerSessionsInternal>) {
+  await requireAuth();
+  return checkShowerSessionsInternal(...args);
+}
+
+async function checkShowerSessionsInternal() {
   const now = new Date();
 
   // 1) Auto-resume pauses that hit the 5 min cap
@@ -6431,7 +6541,7 @@ export async function checkShowerSessions() {
 
 export async function testAccountingConnection(): Promise<{ ok: boolean; message: string }> {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const providerType = (settings.accounting_provider || "none") as import("./accounting").AccountingProviderType;
   const { getAccountingProvider } = await import("./accounting");
   const provider = getAccountingProvider(providerType, settings);
@@ -6445,7 +6555,7 @@ export async function syncInvoicesToAccounting(): Promise<{
   errors: { invoiceId: number; error: string }[];
 }> {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const providerType = (settings.accounting_provider || "none") as import("./accounting").AccountingProviderType;
   const { getAccountingProvider } = await import("./accounting");
   const provider = getAccountingProvider(providerType, settings);
@@ -6534,7 +6644,7 @@ export async function syncSessionsToAccounting(): Promise<{
   errors: { sessionId: number; error: string }[];
 }> {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const providerType = (settings.accounting_provider || "none") as import("./accounting").AccountingProviderType;
   const { getAccountingProvider } = await import("./accounting");
   const provider = getAccountingProvider(providerType, settings);
@@ -6641,7 +6751,7 @@ export async function initBookingLogin(creds?: { url?: string; username?: string
     }
   }
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const result = await danplannerLogin({
     baseUrl: settings.danplanner_url || "https://admin.danplanner.dk",
     username: settings.danplanner_username || "",
@@ -6676,7 +6786,7 @@ export async function initBookingLogin(creds?: { url?: string; username?: string
 
 export async function verifyBooking2FA(code: string) {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const baseUrl = settings.danplanner_url || "https://admin.danplanner.dk";
   const cookies = settings.danplanner_cookies || "";
 
@@ -6722,7 +6832,7 @@ async function persistRefreshedBookingSession(cookies: string): Promise<void> {
 
 export async function testBookingConnection() {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
@@ -6734,7 +6844,7 @@ export async function testBookingConnection() {
 
 export async function fetchBookingResourceTypes() {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
@@ -6746,7 +6856,7 @@ export async function fetchBookingResourceTypes() {
 
 export async function fetchBookingResources(typeId: string) {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
@@ -6760,7 +6870,7 @@ export async function syncBookingResources() {
   await requireAuth();
   await ensureResourceTypes();
 
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
@@ -6831,7 +6941,7 @@ export async function syncBookingResources() {
 
 export async function syncBookings(productType: "all" | "tourist" | "seasonal" = "all") {
   await requireAuth();
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
   const provider = getBookingProvider(
     (settings.booking_provider || "none") as "danplanner" | "none",
     settings,
@@ -6947,7 +7057,14 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
  *
  * Must be called inside `runWithApiAuth` — `syncBookings` requires auth.
  */
-export async function autoSyncBookings(): Promise<{
+/** Auth-guarded entry point (server action). Cron/webhooks call it inside
+ *  runWithApiAuth; in-module callers use autoSyncBookingsInternal directly. */
+export async function autoSyncBookings(...args: Parameters<typeof autoSyncBookingsInternal>) {
+  await requireAuth();
+  return autoSyncBookingsInternal(...args);
+}
+
+async function autoSyncBookingsInternal(): Promise<{
   ran: boolean;
   reason?: string;
   created?: number;
@@ -6955,7 +7072,7 @@ export async function autoSyncBookings(): Promise<{
   skipped?: number;
   error?: string;
 }> {
-  const settings = await getGlobalSettings();
+  const settings = await readGlobalSettings();
 
   if (settings.booking_auto_sync !== "true") return { ran: false, reason: "disabled" };
   if (!settings.booking_provider || settings.booking_provider === "none") {

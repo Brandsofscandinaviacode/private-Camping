@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { getSessionByToken, getUnitByPortalToken, getActiveSession, getGlobalSettings, getGuestLaundryMachines, getGuestShowers } from "@/lib/actions";
+import { getSessionByToken, getUnitByPortalToken, getActiveSession, getGuestLaundryMachines, getGuestShowers } from "@/lib/actions";
+import { readGlobalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
@@ -12,7 +13,7 @@ export default async function GuestPortalPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const globalSettings = await getGlobalSettings();
+  const globalSettings = await readGlobalSettings();
   const quickpayEnabled = globalSettings.quickpay_enabled === "true";
   const siteMapUrl = globalSettings.site_map_url || null;
   const invoiceDay = globalSettings.invoice_email_day ? parseInt(globalSettings.invoice_email_day, 10) || null : null;
