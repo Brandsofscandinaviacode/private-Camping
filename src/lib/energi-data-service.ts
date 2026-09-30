@@ -149,10 +149,12 @@ export async function getCurrentSpotPrice(area: "DK1" | "DK2" = "DK1"): Promise<
       if (exact) return exact.priceDKK / 1000; // DKK/MWh → DKK/kWh
     } catch { /* DB error — fall through */ }
 
-    // 2. Most recent cached price as fallback
+    // 2. Fallback: the latest PAST hour within the last 6 hours. Never a
+    //    future hour (that's tomorrow's price) or a months-old row.
     try {
+      const earliest = danishHourPrefix(new Date(danishNow().getTime() - 6 * 3600_000));
       const latest = await prisma.spotPriceCache.findFirst({
-        where: { area },
+        where: { area, hourDK: { gte: earliest, lt: currentDanishHour } },
         orderBy: { hourDK: "desc" },
       });
       if (latest) return latest.priceDKK / 1000;
@@ -342,9 +344,9 @@ export async function getEffectiveElPrice(
   const spotPrice = await getCurrentSpotPrice(area);
 
   if (spotPrice === null) {
-    if (mode === "spot") {
-      return { pricePerKwh: surcharge, spotPrice: null, mode };
-    }
+    // No current spot price (API down, wrong area cached): bill the fixed
+    // price rather than the surcharge alone, which would under-bill heavily.
+    logger.warn("eds", `Ingen aktuel spotpris for ${area} — bruger fast pris`);
     return { pricePerKwh: fixedPrice, spotPrice: null, mode };
   }
 

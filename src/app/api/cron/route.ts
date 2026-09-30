@@ -10,6 +10,8 @@ import {
   checkPrepaidBalances,
   tickAllSessionConsumption,
   autoSyncBookings,
+  getPricing,
+  cleanupOldData,
 } from "@/lib/actions";
 import { refreshSpotPriceCache, cleanOldSpotPrices } from "@/lib/energi-data-service";
 import { authenticateAPI } from "@/lib/api-auth";
@@ -43,8 +45,17 @@ async function runCron() {
 
   try {
     // ── Fast tasks (every call) ──────────────────────────────
-    const laundryResult = await checkLaundryMachines();
-    const showerResult = await checkShowerSessions();
+    // Isolated: one failing (e.g. SQLite busy) must not skip the rest.
+    const fast = async <T,>(name: string, fn: () => Promise<T>): Promise<T | { error: string }> => {
+      try { return await fn(); }
+      catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.error("cron", `Fast task ${name} failed`, msg);
+        return { error: msg };
+      }
+    };
+    const laundryResult = await fast("vaskeri", () => checkLaundryMachines());
+    const showerResult = await fast("bad", () => checkShowerSessions());
 
     // ── Booking auto-sync ────────────────────────────────────
     // Called on every tick but self-throttling: it honours its own
@@ -109,7 +120,8 @@ async function runCron() {
       // Refresh spot prices BEFORE ticking sessions — the tick reads the
       // current hour's spot price, so we want it as fresh as possible.
       try {
-        const refreshed = await refreshSpotPriceCache();
+        const { edsPriceArea } = await getPricing();
+        const refreshed = await refreshSpotPriceCache(edsPriceArea);
         const cleaned = await cleanOldSpotPrices();
         spotCacheResult = { fetched: refreshed.fetched, cleaned };
       } catch {
@@ -138,6 +150,8 @@ async function runCron() {
       invoiceResult = await step("fakturaer", () => autoCreateAndSendInvoices());
       overdueResult = await step("forfaldne", () => checkOverdueInvoices());
       prepaidResult = await step("forudbetalt", () => checkPrepaidBalances());
+      // Nightly housekeeping (runs on the heavy ticks between 03:00 and 04:00)
+      if (new Date().getHours() === 3) await step("oprydning", () => cleanupOldData());
 
       heavyStatus = heavyErrors.length ? `fejl: ${heavyErrors.join("; ")}` : "ok";
     }

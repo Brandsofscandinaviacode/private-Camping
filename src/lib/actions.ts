@@ -877,12 +877,19 @@ export async function checkOut(sessionId: number) {
     endWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `checkOut:water session=${sessionId}`);
   }
 
+  // Whether the tick accumulator covers each meter. Decided by whether a
+  // tick ever read it — NOT by the accumulator being > 0: after a mid-stay
+  // invoice it is legitimately 0, and falling back to (end − start) × price
+  // would bill the already-invoiced consumption a second time.
+  const elTicked = session.lastTickAt != null && (session.lastTickKwh != null || session.lastTickHeatingKwh != null);
+  const waterTicked = session.lastTickAt != null && session.lastTickWaterLiters != null;
+
   // Block checkout if a configured meter failed to read and we have no accumulator
   const meterFailures: string[] = [];
-  if (hardware.hasElectricityMeter(hw) && endKwh === null && session.accumulatedElCost === 0) {
+  if (hardware.hasElectricityMeter(hw) && endKwh === null && !elTicked) {
     meterFailures.push("el-måler");
   }
-  if (hardware.hasWaterMeter(hw) && endWaterLiters === null && session.accumulatedWaterCost === 0) {
+  if (hardware.hasWaterMeter(hw) && endWaterLiters === null && !waterTicked) {
     meterFailures.push("vandmåler");
   }
   if (meterFailures.length > 0) {
@@ -893,11 +900,10 @@ export async function checkOut(sessionId: number) {
   // Costs come straight from the accumulator — that's the time-weighted
   // sum of (delta × hourly spot price) across every tick, which is the
   // correct billable amount regardless of what the price is right now.
-  // If the accumulator is zero (e.g. legacy session pre-dating the feature),
-  // fall back to the old snapshot calculation so we never undercount.
-  let totalElectricityCost: number | null = session.accumulatedElCost > 0
+  // Only a meter no tick ever read (legacy session) uses the snapshot.
+  let totalElectricityCost: number | null = elTicked || session.accumulatedElCost > 0
     ? session.accumulatedElCost : null;
-  let totalWaterCost: number | null = session.accumulatedWaterCost > 0
+  let totalWaterCost: number | null = waterTicked || session.accumulatedWaterCost > 0
     ? session.accumulatedWaterCost : null;
 
   if (totalElectricityCost === null || totalWaterCost === null) {
@@ -1210,7 +1216,7 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
   // when each kWh was consumed. Fall back to snapshot pricing for sessions
   // pre-dating the accumulator or with no tick history.
   const useAccumulatorForRemainder =
-    session.accumulatedElCost > 0 || session.accumulatedWaterCost > 0;
+    session.lastTickAt != null || session.accumulatedElCost > 0 || session.accumulatedWaterCost > 0;
   const remElectricityCost = useAccumulatorForRemainder
     ? session.accumulatedElCost
     : (remCombinedKwh ?? 0) * effectiveElPrice;
@@ -1219,9 +1225,11 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
     : (remWaterL ?? 0) * waterRate;
   const remTotal = remElectricityCost + remWaterCost;
 
-  // Only include the remainder as a period if it has > 0 consumption
-  if (remCombinedKwh != null || remWaterL != null) {
-    const hasAny = (remCombinedKwh ?? 0) > 0 || (remWaterL ?? 0) > 0;
+  // Include the remainder when it has consumption — or a cost: after a meter
+  // reset / failed read the kWh can be 0 or null while the accumulator
+  // still holds money that checkout will charge.
+  {
+    const hasAny = (remCombinedKwh ?? 0) > 0 || (remWaterL ?? 0) > 0 || remTotal > 0.005;
     if (hasAny) {
       periods.push({
         label: session.status === "ACTIVE"
@@ -1455,11 +1463,27 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updateData: Record<string, any> = {};
 
+  // Plausibility cap: a meter can't physically advance faster than the
+  // supply allows. Guards against a glitch reading (e.g. HA reporting 0 on
+  // restart → baseline resets → next tick would bill the whole counter).
+  const hoursSinceTick = Math.max(
+    0.05,
+    (Date.now() - (session.lastTickAt ?? session.checkInTime).getTime()) / 3_600_000,
+  );
+  const capDelta = (delta: number, maxPerHour: number, label: string) => {
+    const cap = maxPerHour * hoursSinceTick;
+    if (delta <= cap) return delta;
+    logger.warn("tick", `Session ${sessionId}: ${label} spring på ${delta.toFixed(1)} afvist (max ${cap.toFixed(1)}) — måler-glitch/reset?`);
+    return 0;
+  };
+  const MAX_KW = 11;            // 16 A three-phase
+  const MAX_LITERS_PER_HOUR = 1800; // 30 L/min
+
   // Main electricity
   if (currentKwh !== null) {
     const baseline = session.lastTickKwh ?? session.startKwh;
     if (baseline !== null) {
-      const delta = Math.max(0, currentKwh - baseline);
+      const delta = capDelta(Math.max(0, currentKwh - baseline), MAX_KW, "el");
       addElKwh += delta;
       addElCost += delta * elPrice;
     } else {
@@ -1473,7 +1497,7 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
   if (currentHeatingKwh !== null) {
     const baseline = session.lastTickHeatingKwh ?? session.startHeatingKwh;
     if (baseline !== null) {
-      const delta = Math.max(0, currentHeatingKwh - baseline);
+      const delta = capDelta(Math.max(0, currentHeatingKwh - baseline), MAX_KW, "varme");
       addElKwh += delta;
       addElCost += delta * elPrice;
     } else {
@@ -1486,7 +1510,7 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
   if (currentWaterLiters !== null) {
     const baseline = session.lastTickWaterLiters ?? session.startWaterLiters;
     if (baseline !== null) {
-      const delta = Math.max(0, currentWaterLiters - baseline);
+      const delta = capDelta(Math.max(0, currentWaterLiters - baseline), MAX_LITERS_PER_HOUR, "vand");
       addWaterLiters += delta;
       addWaterCost += delta * waterPrice;
     } else {
@@ -2124,21 +2148,21 @@ async function createMonthlyInvoiceInternal(unitId: number) {
   // Use the last invoice's periodEnd as the start of the new period if it
   // falls after the session check-in — prevents overlapping periods when
   // multiple invoices are created for the same session.
-  const lastInvoiceForPeriod = activeSessionForPeriod
-    ? await prisma.invoice.findFirst({
-        where: { unitId },
-        orderBy: { id: "desc" },
-      })
-    : null;
+  const lastUnitInvoice = await prisma.invoice.findFirst({
+    where: { unitId },
+    orderBy: { id: "desc" },
+  });
+  const lastInvoiceForPeriod = activeSessionForPeriod ? lastUnitInvoice : null;
 
   const periodStart = activeSessionForPeriod
     ? (lastInvoiceForPeriod && lastInvoiceForPeriod.periodEnd > activeSessionForPeriod.checkInTime
         ? lastInvoiceForPeriod.periodEnd
         : activeSessionForPeriod.checkInTime)
-    : new Date(now.getFullYear(), now.getMonth(), 1);
-  const periodEnd = activeSessionForPeriod
-    ? now
-    : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    : (lastUnitInvoice?.periodEnd ?? new Date(now.getFullYear(), now.getMonth() - (now.getDate() <= 7 ? 1 : 0), 1));
+  // Without a session (long-term tenant) the invoice covers the time since
+  // the last invoice up to now. A calendar-month period labelled the day-1
+  // run as the month just starting and excluded last month's services.
+  const periodEnd = now;
 
   const hw = unit.hardware;
 
@@ -2163,6 +2187,12 @@ async function createMonthlyInvoiceInternal(unitId: number) {
     where: { unitId, status: "ACTIVE" },
     orderBy: { checkInTime: "desc" },
   });
+  // A prepaid guest pays from their balance. Invoicing would bill the same
+  // consumption again and then (by draining the accumulator) inflate the
+  // balance by the invoiced amount.
+  if (activeSession?.billingMode === "PREPAID") {
+    throw new Error("Enheden har en forudbetalt gæst — forbruget trækkes fra saldoen og faktureres ikke");
+  }
 
   if (hardware.hasElectricityMeter(hw)) {
     endKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `invoice:el unit=${unitId}`);
@@ -2214,18 +2244,21 @@ async function createMonthlyInvoiceInternal(unitId: number) {
     : null;
 
   // If we have a real accumulator, use it verbatim — it's the
-  // time-weighted truth. Otherwise fall back to snapshot pricing.
-  let electricityCost: number;
-  let waterCost: number;
-  const useAccumulator = sessionForBilling && sessionForBilling.accumulatedElCost > 0;
+  // time-weighted truth. Otherwise fall back to snapshot pricing. Decided per
+  // utility and by whether a tick ever read the meter: a 0 accumulator (just
+  // invoiced, or no use) must not trigger a snapshot that re-bills.
+  const useElAccumulator = !!sessionForBilling && (
+    sessionForBilling.accumulatedElCost > 0 ||
+    (sessionForBilling.lastTickAt != null &&
+      (sessionForBilling.lastTickKwh != null || sessionForBilling.lastTickHeatingKwh != null))
+  );
+  const useWaterAccumulator = !!sessionForBilling && (
+    sessionForBilling.accumulatedWaterCost > 0 ||
+    (sessionForBilling.lastTickAt != null && sessionForBilling.lastTickWaterLiters != null)
+  );
 
-  if (useAccumulator) {
-    electricityCost = sessionForBilling.accumulatedElCost;
-    waterCost = sessionForBilling.accumulatedWaterCost;
-  } else {
-    // Legacy snapshot pricing — used for units without an active session
-    // or for brand-new sessions where no tick has accumulated anything.
-    let effectiveElPrice = pricing.pricePerKwh;
+  let effectiveElPrice = pricing.pricePerKwh;
+  if (!useElAccumulator) {
     try {
       const effective = await getEffectiveElPricing();
       effectiveElPrice = effective.pricePerKwh;
@@ -2235,16 +2268,25 @@ async function createMonthlyInvoiceInternal(unitId: number) {
     if (activeSession?.pricePerKwhOverride != null) {
       effectiveElPrice = activeSession.pricePerKwhOverride;
     }
-    const waterRate = activeSession?.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+  }
+  const waterRate = activeSession?.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
 
+  let electricityCost: number;
+  if (useElAccumulator) {
+    electricityCost = sessionForBilling!.accumulatedElCost;
+  } else {
+    // Snapshot pricing — units without an active session, or sessions
+    // whose meter no tick has read yet.
     const mainElecCost = (endKwh !== null && startKwh !== null)
       ? Math.max(0, endKwh - startKwh) * effectiveElPrice : 0;
     const heatingElecCost = (endHeatingKwh !== null && startHeatingKwh !== null)
       ? Math.max(0, endHeatingKwh - startHeatingKwh) * effectiveElPrice : 0;
     electricityCost = mainElecCost + heatingElecCost;
-    waterCost = (endWaterLiters !== null && startWaterLiters !== null)
-      ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
   }
+  const waterCost = useWaterAccumulator
+    ? sessionForBilling!.accumulatedWaterCost
+    : (endWaterLiters !== null && startWaterLiters !== null)
+      ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
 
   // Include ON_ACCOUNT services in invoice period
   let servicesCost = 0;
@@ -2304,14 +2346,18 @@ async function createMonthlyInvoiceInternal(unitId: number) {
   // Subtract exactly what was billed — a tick that committed between our
   // read and this write keeps its (unbilled) contribution instead of being
   // wiped by a reset to 0. lastTick* stay so the next tick's delta is right.
-  if (useAccumulator && sessionForBilling) {
+  if (sessionForBilling && (useElAccumulator || useWaterAccumulator)) {
     await prisma.session.update({
       where: { id: sessionForBilling.id },
       data: {
-        accumulatedElCost: { decrement: sessionForBilling.accumulatedElCost },
-        accumulatedElKwh: { decrement: sessionForBilling.accumulatedElKwh },
-        accumulatedWaterCost: { decrement: sessionForBilling.accumulatedWaterCost },
-        accumulatedWaterLiters: { decrement: sessionForBilling.accumulatedWaterLiters },
+        ...(useElAccumulator ? {
+          accumulatedElCost: { decrement: sessionForBilling.accumulatedElCost },
+          accumulatedElKwh: { decrement: sessionForBilling.accumulatedElKwh },
+        } : {}),
+        ...(useWaterAccumulator ? {
+          accumulatedWaterCost: { decrement: sessionForBilling.accumulatedWaterCost },
+          accumulatedWaterLiters: { decrement: sessionForBilling.accumulatedWaterLiters },
+        } : {}),
       },
     });
   }
@@ -2353,6 +2399,18 @@ async function autoCreateAndSendInvoicesInternal(): Promise<{ created: number; s
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   if (settings._last_auto_invoice_date === todayStr) return { created: 0, sent: 0 };
 
+  // Claim today BEFORE invoicing: if the run dies halfway, the next cron tick
+  // must not invoice the units that were already done a second time.
+  // Failed units are logged for manual invoicing instead.
+  const prevMarker = settings._last_auto_invoice_date;
+  const claimed = prevMarker === undefined
+    ? await prisma.globalSetting.createMany({ data: [{ key: "_last_auto_invoice_date", value: todayStr }] }).catch(() => ({ count: 0 }))
+    : await prisma.globalSetting.updateMany({
+        where: { key: "_last_auto_invoice_date", value: prevMarker },
+        data: { value: todayStr },
+      });
+  if (claimed.count === 0) return { created: 0, sent: 0 };
+
   // Find all seasonal units with tenant info
   const seasonalUnits = await prisma.unit.findMany({
     where: { type: "SEASONAL", isLongTerm: true, longTermGuestName: { not: null } },
@@ -2373,16 +2431,9 @@ async function autoCreateAndSendInvoicesInternal(): Promise<{ created: number; s
         sent++;
       }
     } catch (e) {
-      logger.error("invoice", `Auto-faktura fejl for enhed ${unit.id}`, e);
+      logger.error("invoice", `Auto-faktura fejl for enhed ${unit.id} — opret den manuelt`, e);
     }
   }
-
-  // Mark as done for today
-  await prisma.globalSetting.upsert({
-    where: { key: "_last_auto_invoice_date" },
-    update: { value: todayStr },
-    create: { key: "_last_auto_invoice_date", value: todayStr },
-  });
 
   return { created, sent };
 }
@@ -2423,8 +2474,22 @@ async function checkOverdueInvoicesInternal(): Promise<{ markedOverdue: number; 
     });
     markedOverdue++;
 
-    // Auto power-off if enabled
-    if (autoPowerOff && hardware.hasElectricitySwitch(invoice.unit.hardware)) {
+    // Auto power-off if enabled — but only for the debtor. The invoice is
+    // tied to the unit, and the person living there now may be someone else.
+    let debtorStillThere = false;
+    if (autoPowerOff) {
+      const current = await prisma.session.findFirst({
+        where: { unitId: invoice.unitId, status: "ACTIVE" },
+        orderBy: { checkInTime: "desc" },
+      });
+      debtorStillThere = current
+        ? current.checkInTime <= invoice.periodEnd
+        : invoice.unit.isLongTerm;
+      if (!debtorStillThere) {
+        logger.info("invoice", `Faktura ${invoice.id} forfalden, men ${invoice.unit.name} har en ny gæst/er ledig — strøm ikke afbrudt`);
+      }
+    }
+    if (autoPowerOff && debtorStillThere && hardware.hasElectricitySwitch(invoice.unit.hardware)) {
       try {
         await hardware.setSwitch(hardware.electricitySwitchEp(invoice.unit.hardware!), false);
         powerOff++;
@@ -4596,7 +4661,9 @@ async function activateLaundrySessionInternal(laundrySessionId: number) {
     const endsAt = new Date(Date.now() + maxHours * 60 * 60 * 1000);
     await prisma.laundrySess.update({
       where: { id: laundrySessionId },
-      data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
+      // startedAt = activation, so the "no power within 10 min" auto-cancel
+      // doesn't count the time the guest spent on the payment page.
+      data: { status: "ACTIVE", paymentStatus: "PAID", endsAt, startedAt: new Date() },
     });
     try {
       await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), maxHours * 3600);
@@ -4677,6 +4744,26 @@ export async function checkLaundryMachines(...args: Parameters<typeof checkLaund
   return checkLaundryMachinesInternal(...args);
 }
 
+/**
+ * Housekeeping (cron, nightly): ConsumptionLog gets a row per metered unit
+ * every 10 minutes and `_meter_fail_<context>` keys are created per session,
+ * so both grow without bound otherwise.
+ */
+export async function cleanupOldData() {
+  await requireAuth();
+  const logCutoff = new Date(Date.now() - 400 * 24 * 3600_000);
+  const failCutoff = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+  const logs = await prisma.consumptionLog.deleteMany({ where: { recordedAt: { lt: logCutoff } } });
+  const fails = await prisma.globalSetting.deleteMany({
+    where: { key: { startsWith: "_meter_fail_" }, value: { lt: failCutoff } },
+  });
+  return { consumptionLogs: logs.count, meterFailKeys: fails.count };
+}
+
+// How long an expiry sweep keeps retrying a relay that won't switch off
+// before completing the session anyway (and logging it for manual action).
+const RELAY_OFF_RETRY_MS = 30 * 60_000;
+
 async function checkLaundryMachinesInternal() {
   // Fixed-mode sessions: turn off when endsAt passes
   const expired = await prisma.laundrySess.findMany({
@@ -4692,10 +4779,14 @@ async function checkLaundryMachinesInternal() {
     try {
       await hardware.setSwitch(hardware.switchRowEp(session.machine), false);
     } catch (e) {
-      logger.error("laundry", `Failed to turn off laundry machine ${session.machine.name}`, e);
+      // Leave it ACTIVE so the next sweep retries — HA relays have no
+      // on-device safety timer. Give up after RELAY_OFF_RETRY_MS.
+      const overdueMs = Date.now() - session.endsAt.getTime();
+      logger.error("laundry", `Failed to turn off laundry machine ${session.machine.name}${overdueMs < RELAY_OFF_RETRY_MS ? " — prøver igen" : " — giver op, sluk manuelt"}`, e);
+      if (overdueMs < RELAY_OFF_RETRY_MS) continue;
     }
-    await prisma.laundrySess.update({
-      where: { id: session.id },
+    await prisma.laundrySess.updateMany({
+      where: { id: session.id, status: "ACTIVE" },
       data: { status: "COMPLETED" },
     });
   }
@@ -6215,9 +6306,9 @@ async function tickMeteredLaundryInternal() {
 
   for (const sess of sessions) {
     try {
-      // Auto-cancel if 10 minutes elapsed with no power detected
+      // Auto-cancel if 10 minutes elapsed since activation with no power detected
       if (!sess.meterStartedAt) {
-        const elapsed = Date.now() - new Date(sess.createdAt).getTime();
+        const elapsed = Date.now() - new Date(sess.startedAt).getTime();
         if (elapsed > 10 * 60 * 1000) {
           await cancelMeteredSession(sess);
           completed++;
@@ -6234,9 +6325,11 @@ async function tickMeteredLaundryInternal() {
       const reading = await hardware.readPowerWatts(ep);
       const now = new Date();
 
-      // If reading fails, skip this session entirely — don't trigger false idle
-      if (!reading) {
-        logger.warn("laundry", `Metered session ${sess.id}: power reading failed, skipping tick`);
+      // If reading fails — or is a stale cached value from a device that
+      // stopped answering — skip this session: don't bill on an old "running"
+      // value and don't trigger false idle on an old 0 W.
+      if (!reading || (reading.ageMs ?? 0) > 3 * 60_000) {
+        logger.warn("laundry", `Metered session ${sess.id}: power reading ${reading ? "stale" : "failed"}, skipping tick`);
         continue;
       }
 
@@ -6314,9 +6407,10 @@ function buildPowerEndpoint(machine: {
     if (!machine.mqttPrefix || !machine.mqttComponent) return null;
     return { source, mqttPrefix: machine.mqttPrefix, mqttComponent: machine.mqttComponent };
   }
-  const entityId = machine.powerEntityId || machine.switchEntityId;
-  if (!entityId) return null;
-  return { source, haEntityId: entityId };
+  // A switch entity reports "on"/"off", never watts — falling back to it made
+  // every reading fail and auto-cancelled every metered wash after 10 min.
+  if (!machine.powerEntityId) return null;
+  return { source, haEntityId: machine.powerEntityId };
 }
 
 async function cancelMeteredSession(sess: {
@@ -6520,12 +6614,33 @@ async function checkShowerSessionsInternal() {
     where: { status: "ACTIVE", endsAt: { lte: now } },
     include: { shower: true },
   });
+  let completedCount = 0;
   for (const sess of expired) {
-    try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) { logger.error("shower", "Shower close", e); }
-    await prisma.showerSess.update({
-      where: { id: sess.id },
+    try {
+      await hardware.setSwitch(hardware.switchRowEp(sess.shower), false);
+    } catch (e) {
+      // Keep it ACTIVE so the next sweep retries (HA valves have no
+      // on-device auto-off). Give up after RELAY_OFF_RETRY_MS.
+      const overdueMs = Date.now() - sess.endsAt.getTime();
+      logger.error("shower", `Shower close${overdueMs < RELAY_OFF_RETRY_MS ? " — prøver igen" : " — giver op, sluk manuelt"}`, e);
+      if (overdueMs < RELAY_OFF_RETRY_MS) continue;
+    }
+    // Conditional: an extension paid meanwhile moved endsAt forward — then
+    // the session must stay ACTIVE (and its relay was switched back on).
+    const res = await prisma.showerSess.updateMany({
+      where: { id: sess.id, status: "ACTIVE", endsAt: { lte: new Date() } },
       data: { status: "COMPLETED" },
     });
+    completedCount += res.count;
+    if (res.count === 0) {
+      // Extended while we were switching off — switch it back on.
+      const fresh = await prisma.showerSess.findUnique({ where: { id: sess.id } });
+      if (fresh?.status === "ACTIVE" && fresh.endsAt > new Date()) {
+        const remainingSec = Math.ceil((fresh.endsAt.getTime() - Date.now()) / 1000);
+        try { await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), remainingSec + 60); }
+        catch (e) { logger.error("shower", "Re-open after extension race", e); }
+      }
+    }
   }
 
   // 3) Clean up stale pending sessions
@@ -6533,7 +6648,7 @@ async function checkShowerSessionsInternal() {
 
   return {
     autoResumed: expiredPauses.length,
-    completed: expired.length,
+    completed: completedCount,
   };
 }
 

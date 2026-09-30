@@ -1,6 +1,9 @@
 import type { BookingProvider, BookingEntry, BookingLoginResult, BookingVerifyResult } from "./types";
 import { logger } from "../logger";
 
+// A hanging Danplanner request would otherwise stall the whole cron tick.
+const FETCH_TIMEOUT_MS = 20_000;
+
 interface DanplannerConfig {
   baseUrl: string;
   username: string;
@@ -128,6 +131,7 @@ async function followRedirect(
   let currentCookies = cookies;
   for (let i = 0; i < maxHops; i++) {
     const res = await fetch(current, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { Cookie: currentCookies },
       redirect: "manual",
     });
@@ -150,7 +154,7 @@ export async function danplannerLogin(config: DanplannerConfig): Promise<Booking
   try {
     logger.info("danplanner", "Starting login", { baseUrl: config.baseUrl, username: config.username });
 
-    const loginPageRes = await fetch(`${config.baseUrl}/Account/login`, { redirect: "manual" });
+    const loginPageRes = await fetch(`${config.baseUrl}/Account/login`, { redirect: "manual", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     const loginHtml = await loginPageRes.text();
     let cookies = mergeCookies("", extractCookies(loginPageRes.headers));
 
@@ -170,6 +174,7 @@ export async function danplannerLogin(config: DanplannerConfig): Promise<Booking
     });
 
     const loginRes = await fetch(`${config.baseUrl}/Account/login`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -291,6 +296,7 @@ export async function danplannerVerify2FA(
       let approveHtml = "";
       for (const url of candidateUrls) {
         const res = await fetch(url, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           headers: { Cookie: workingCookies },
           redirect: "manual",
         });
@@ -360,6 +366,7 @@ export async function danplannerVerify2FA(
     const body = new URLSearchParams(fields);
 
     const verifyRes = await fetch(actionUrl, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -536,6 +543,7 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
       throw new Error("Ikke forbundet til Danplanner. Log ind først.");
     }
     const res = await fetch(`${config.baseUrl}${path}`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { Cookie: cookies },
       redirect: "manual",
     });
@@ -596,6 +604,7 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
       let token = "";
       try {
         const dashRes = await fetch(`${config.baseUrl}/`, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           headers: { Cookie: cookies },
           redirect: "manual",
         });
@@ -629,6 +638,7 @@ export function createDanplannerProvider(config: DanplannerConfig): BookingProvi
       if (token) headers["RequestVerificationToken"] = token;
 
       const res = await fetch(`${config.baseUrl}/Dashboard/GetGuests`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         method: "POST",
         headers,
         body: body.toString(),
