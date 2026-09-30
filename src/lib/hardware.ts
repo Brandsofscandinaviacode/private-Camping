@@ -61,6 +61,46 @@ async function readShellyStatus(
   }
 }
 
+/**
+ * Where a component's energy counter lives. Switch/PM report `aenergy.total`
+ * on the component itself; the EM family keeps energy in a separate data
+ * component (EM1Data / EMData) with different field names.
+ */
+async function readShellyEnergyWh(prefix: string, component: string): Promise<{ wh: number | null; reason: string | null }> {
+  const m = component.match(/^([a-z0-9]+):(\d+)$/i);
+  const kind = m?.[1].toLowerCase();
+  const idx = m?.[2] ?? "0";
+  if (kind === "em1" || kind === "em") {
+    const dataComp = kind === "em1" ? `em1data:${idx}` : `emdata:${idx}`;
+    const res = await readShellyStatus(prefix, dataComp);
+    if (!res) return { wh: null, reason: null };
+    const d = res.data as ShellyComponentStatus & { total_act_energy?: number; total_act?: number };
+    const wh = kind === "em1" ? d.total_act_energy : d.total_act;
+    return typeof wh === "number" ? { wh, reason: null } : { wh: null, reason: `${dataComp} har ingen energitæller` };
+  }
+  const res = await readShellyStatus(prefix, component);
+  if (!res) return { wh: null, reason: null };
+  const wh = res.data.aenergy?.total;
+  return typeof wh === "number" ? { wh, reason: null } : { wh: null, reason: `${component} har ingen energitæller (aenergy.total) — komponenten måler ikke kWh` };
+}
+
+function shellyPowerW(component: string, data: ShellyComponentStatus): number | null {
+  const kind = component.split(":")[0].toLowerCase();
+  const d = data as ShellyComponentStatus & { act_power?: number; total_act_power?: number };
+  const w = kind === "em1" ? d.act_power : kind === "em" ? d.total_act_power : d.apower;
+  return typeof w === "number" ? w : null;
+}
+
+/** HA energy sensors may report Wh or MWh; billing works in kWh. */
+async function readHaEnergyKwh(entityId: string): Promise<{ kwh: number | null; state: string }> {
+  const st = await ha.getEntityState(entityId);
+  const v = parseFloat(st.state);
+  if (isNaN(v)) return { kwh: null, state: st.state };
+  const unit = (st.attributes.unit_of_measurement as string | undefined)?.toLowerCase();
+  const kwh = unit === "wh" ? v / 1000 : unit === "mwh" ? v * 1000 : v;
+  return { kwh, state: st.state };
+}
+
 function normalizedSource(source: string | null | undefined): HardwareSource {
   return source === "MQTT" ? "MQTT" : "HA";
 }
@@ -71,21 +111,7 @@ function normalizedSource(source: string | null | undefined): HardwareSource {
 
 /** Read cumulative energy in kWh. Returns null if unavailable. */
 export async function readEnergyKwh(ep: HardwareEndpoint): Promise<number | null> {
-  if (ep.source === "MQTT") {
-    if (!ep.mqttPrefix || !ep.mqttComponent) return null;
-    const res = await readShellyStatus(ep.mqttPrefix, ep.mqttComponent);
-    if (!res) return null;
-    const wh = res.data.aenergy?.total;
-    if (typeof wh !== "number") return null;
-    return wh / 1000;
-  }
-  // HA
-  if (!ep.haEntityId) return null;
-  try {
-    return await ha.getEntityNumericState(ep.haEntityId);
-  } catch {
-    return null;
-  }
+  return (await readEnergyKwhWithReason(ep)).kwh;
 }
 
 /**
@@ -100,33 +126,21 @@ export async function readEnergyKwhWithReason(
     if (!ep.mqttPrefix || !ep.mqttComponent) {
       return { kwh: null, reason: "MQTT: prefix eller komponent mangler" };
     }
-    const topic = `${ep.mqttPrefix}/status/${ep.mqttComponent}`;
-    const msg = await mqttClient.getShellyStatus(ep.mqttPrefix, ep.mqttComponent);
-    if (!msg) {
-      return {
-        kwh: null,
-        reason: mqttClient.isConnected()
-          ? `MQTT: ${ep.mqttPrefix} svarede ikke på ${ep.mqttComponent} — enheden er offline, eller prefix/komponent er forkert (se "Forbundne enheder")`
-          : "MQTT: CampSense er ikke forbundet til brokeren",
-      };
-    }
-    try {
-      const data = JSON.parse(msg.payload) as ShellyComponentStatus;
-      const wh = data.aenergy?.total;
-      if (typeof wh !== "number") {
-        return { kwh: null, reason: `MQTT: ${topic} har ingen energitæller (aenergy.total) — komponenten måler ikke kWh` };
-      }
-      return { kwh: wh / 1000, reason: null };
-    } catch {
-      return { kwh: null, reason: `MQTT: ugyldig besked på ${topic}` };
-    }
+    const r = await readShellyEnergyWh(ep.mqttPrefix, ep.mqttComponent);
+    if (r.wh !== null) return { kwh: r.wh / 1000, reason: null };
+    if (r.reason) return { kwh: null, reason: `MQTT: ${r.reason}` };
+    return {
+      kwh: null,
+      reason: mqttClient.isConnected()
+        ? `MQTT: ${ep.mqttPrefix} svarede ikke på ${ep.mqttComponent} — enheden er offline, eller prefix/komponent er forkert (se "Forbundne enheder")`
+        : "MQTT: CampSense er ikke forbundet til brokeren",
+    };
   }
   if (!ep.haEntityId) return { kwh: null, reason: "HA: ingen måler-entitet valgt" };
   try {
-    const state = await ha.getEntityState(ep.haEntityId);
-    const v = parseFloat(state.state);
-    if (isNaN(v)) return { kwh: null, reason: `HA: ${ep.haEntityId} er "${state.state}"` };
-    return { kwh: v, reason: null };
+    const r = await readHaEnergyKwh(ep.haEntityId);
+    if (r.kwh === null) return { kwh: null, reason: `HA: ${ep.haEntityId} er "${r.state}"` };
+    return { kwh: r.kwh, reason: null };
   } catch (e) {
     return { kwh: null, reason: `HA: kunne ikke hente ${ep.haEntityId} (${e instanceof Error ? e.message : "ukendt fejl"})` };
   }
@@ -140,8 +154,8 @@ export async function readPowerWatts(
     if (!ep.mqttPrefix || !ep.mqttComponent) return null;
     const res = await readShellyStatus(ep.mqttPrefix, ep.mqttComponent);
     if (!res) return null;
-    const w = res.data.apower;
-    if (typeof w !== "number") return null;
+    const w = shellyPowerW(ep.mqttComponent, res.data);
+    if (w === null) return null;
     return { watts: w, ageMs: res.ageMs };
   }
   // HA
@@ -163,14 +177,31 @@ export async function readPowerWatts(
   }
 }
 
+/**
+ * Switch a Shelly relay via RPC and wait for the device's reply. A plain
+ * publish is only acknowledged by the broker, so an offline device looked
+ * like success — callers then ended sessions / counted power-offs that never
+ * happened. Throws if the device doesn't confirm or reports an error.
+ */
+async function shellySwitchSet(prefix: string, component: string, params: { on: boolean; toggle_after?: number }): Promise<void> {
+  const m = component.match(/^switch:(\d+)$/i);
+  if (!m) {
+    // Not a switch component — fall back to the command topic (unconfirmed).
+    await mqttClient.publish(`${prefix}/command/${component}`, params.on ? "on" : "off");
+    return;
+  }
+  const reply = await mqttClient.rpc(prefix, "Switch.Set", { id: parseInt(m[1], 10), ...params }, 4000);
+  if (!reply) throw new Error(`${prefix} bekræftede ikke kommandoen (offline?)`);
+  if (reply.error) throw new Error(`${prefix}: ${reply.error.message ?? "fejl"} (kode ${reply.error.code ?? "?"})`);
+}
+
 /** Turn a switch endpoint on or off. Throws on transport failure. */
 export async function setSwitch(ep: HardwareEndpoint, on: boolean): Promise<void> {
   if (ep.source === "MQTT") {
     if (!ep.mqttPrefix || !ep.mqttComponent) {
       throw new Error("MQTT prefix/component ikke konfigureret");
     }
-    const topic = `${ep.mqttPrefix}/command/${ep.mqttComponent}`;
-    await mqttClient.publish(topic, on ? "on" : "off");
+    await shellySwitchSet(ep.mqttPrefix, ep.mqttComponent, { on });
     return;
   }
   // HA
@@ -192,17 +223,7 @@ export async function setSwitchTimed(ep: HardwareEndpoint, autoOffSeconds: numbe
       throw new Error("MQTT prefix/component ikke konfigureret");
     }
     // Shelly Gen2+ RPC: Switch.Set with toggle_after for hardware auto-off.
-    // Component id is like "switch:0" — we need the numeric part.
-    const idMatch = ep.mqttComponent.match(/:(\d+)$/);
-    const switchId = idMatch ? parseInt(idMatch[1], 10) : 0;
-    const rpcTopic = `${ep.mqttPrefix}/rpc`;
-    const rpcPayload = JSON.stringify({
-      id: Date.now() % 100000,
-      src: "campsense",
-      method: "Switch.Set",
-      params: { id: switchId, on: true, toggle_after: autoOffSeconds },
-    });
-    await mqttClient.publish(rpcTopic, rpcPayload);
+    await shellySwitchSet(ep.mqttPrefix, ep.mqttComponent, { on: true, toggle_after: autoOffSeconds });
     return;
   }
   // HA — no device-level timer available, just turn on normally

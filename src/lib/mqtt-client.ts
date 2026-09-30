@@ -25,6 +25,11 @@ import type { MqttClient, IClientOptions, IClientPublishOptions } from "mqtt";
 import { prisma } from "./prisma";
 import { logger } from "./logger";
 
+export interface RpcReply {
+  result?: unknown;
+  error?: { code?: number; message?: string };
+}
+
 interface CachedMessage {
   payload: string;
   receivedAt: Date;
@@ -95,7 +100,11 @@ class MqttClientWrapper {
   // prefix, responses arrive on {replyPrefix}/rpc and are matched by id.
   private readonly replyPrefix = `campsense-rpc-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
   private rpcSeq = 1;
-  private pendingRpc = new Map<number, (result: unknown) => void>();
+  private pendingRpc = new Map<number, (reply: RpcReply) => void>();
+  // After a failed connect, don't retry on every read for a while — with the
+  // broker down each attempt costs a 10 s timeout, which made a cron run with
+  // many meters take many minutes.
+  private connectBackoffUntil = 0;
 
   /**
    * Ensure a live MQTT connection using current GlobalSetting config.
@@ -105,6 +114,7 @@ class MqttClientWrapper {
   async ensureConnected(): Promise<MqttClient | null> {
     if (this.client?.connected) return this.client;
     if (this.connectPromise) return this.connectPromise;
+    if (Date.now() < this.connectBackoffUntil) return null;
 
     this.connectPromise = (async () => {
       try {
@@ -135,40 +145,55 @@ class MqttClientWrapper {
         };
 
         const c = mqtt.connect(options);
+        // Permanent error listener: mqtt.js re-emits socket errors on every
+        // retry, and an 'error' event with no listener crashes Node.
+        c.on("error", (err) => {
+          logger.error("mqtt", "Connection error", err.message);
+        });
 
         // Wait for either connect or error
-        await new Promise<void>((resolve, reject) => {
-          const onConnect = () => {
-            c.off("error", onError);
-            resolve();
-          };
-          const onError = (err: Error) => {
-            c.off("connect", onConnect);
-            reject(err);
-          };
-          c.once("connect", onConnect);
-          c.once("error", onError);
-          setTimeout(() => {
-            c.off("connect", onConnect);
-            c.off("error", onError);
-            reject(new Error("MQTT connect timeout"));
-          }, 10_000);
-        });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const onConnect = () => {
+              c.off("error", onError);
+              resolve();
+            };
+            const onError = (err: Error) => {
+              c.off("connect", onConnect);
+              reject(err);
+            };
+            c.once("connect", onConnect);
+            c.once("error", onError);
+            timer = setTimeout(() => {
+              c.off("connect", onConnect);
+              c.off("error", onError);
+              reject(new Error("MQTT connect timeout"));
+            }, 10_000);
+          });
+        } catch (e) {
+          // This client never became this.client, so teardown() won't end it —
+          // end it here or it keeps retrying in the background forever.
+          c.removeAllListeners();
+          c.on("error", () => {});
+          try { c.end(true); } catch { /* ignore */ }
+          throw e;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        this.connectBackoffUntil = 0;
 
         c.on("message", (topic, payload) => {
           if (topic === `${this.replyPrefix}/rpc`) {
             try {
-              const msg = JSON.parse(payload.toString()) as { id?: number; result?: unknown };
+              const msg = JSON.parse(payload.toString()) as { id?: number } & RpcReply;
               const resolve = typeof msg.id === "number" ? this.pendingRpc.get(msg.id) : undefined;
-              if (resolve) { this.pendingRpc.delete(msg.id!); resolve(msg.result ?? null); }
+              if (resolve) { this.pendingRpc.delete(msg.id!); resolve({ result: msg.result, error: msg.error }); }
             } catch { /* ignore malformed reply */ }
             return;
           }
           this.cache.set(topic, { payload: payload.toString(), receivedAt: new Date() });
           this.msgCounts.set(topic, (this.msgCounts.get(topic) ?? 0) + 1);
-        });
-        c.on("error", (err) => {
-          logger.error("mqtt", "Connection error", err.message);
         });
         c.on("close", () => {
           // mqtt.js will auto-reconnect via reconnectPeriod; subscriptions are
@@ -195,6 +220,7 @@ class MqttClientWrapper {
         return c;
       } catch (e) {
         logger.error("mqtt", "Connect failed", e instanceof Error ? e.message : e);
+        this.connectBackoffUntil = Date.now() + 30_000;
         await this.teardown();
         return null;
       } finally {
@@ -254,11 +280,11 @@ class MqttClientWrapper {
    * Call a Shelly Gen2+ RPC method over MQTT and wait for its result.
    * Returns null on timeout or when not connected.
    */
-  async rpc(prefix: string, method: string, params: Record<string, unknown>, timeoutMs = 3000): Promise<unknown | null> {
+  async rpc(prefix: string, method: string, params: Record<string, unknown>, timeoutMs = 3000): Promise<RpcReply | null> {
     const c = await this.ensureConnected();
     if (!c) return null;
     const id = this.rpcSeq++;
-    const result = new Promise<unknown | null>((resolve) => {
+    const result = new Promise<RpcReply | null>((resolve) => {
       this.pendingRpc.set(id, resolve);
       setTimeout(() => {
         if (this.pendingRpc.delete(id)) resolve(null);
@@ -279,24 +305,31 @@ class MqttClientWrapper {
     const topic = `${prefix}/status/${component}`;
     await this.subscribe(topic);
     const cached = this.getCached(topic);
-    const FRESH_MS = 5 * 60_000;
+    const FRESH_MS = 2 * 60_000;
     if (cached && Date.now() - cached.receivedAt.getTime() < FRESH_MS) return cached;
 
     const m = component.match(/^([a-z0-9]+):(\d+)$/i);
     if (m) {
-      const names: Record<string, string> = { switch: "Switch", pm1: "PM1", em1: "EM1", em: "EM", cover: "Cover", light: "Light", input: "Input" };
+      const names: Record<string, string> = {
+        switch: "Switch", pm1: "PM1", em1: "EM1", em: "EM", em1data: "EM1Data", emdata: "EMData",
+        cover: "Cover", light: "Light", input: "Input",
+      };
       const method = names[m[1].toLowerCase()];
       if (method) {
-        const result = await this.rpc(prefix, `${method}.GetStatus`, { id: parseInt(m[2], 10) });
-        if (result && typeof result === "object") {
-          const msg = { payload: JSON.stringify(result), receivedAt: new Date() };
+        const reply = await this.rpc(prefix, `${method}.GetStatus`, { id: parseInt(m[2], 10) });
+        if (reply?.result && typeof reply.result === "object") {
+          const msg = { payload: JSON.stringify(reply.result), receivedAt: new Date() };
           this.cache.set(topic, msg);
           return msg;
         }
       }
     }
-    // Device didn't answer — fall back to whatever we last saw, however old.
-    return cached;
+    // Device didn't answer. A slightly older value is still useful, but never
+    // one so old it could be a previous guest's meter reading (check-in
+    // baseline) or mask an offline device from the staleness guards.
+    const MAX_FALLBACK_MS = 15 * 60_000;
+    if (cached && Date.now() - cached.receivedAt.getTime() < MAX_FALLBACK_MS) return cached;
+    return null;
   }
 
   /**
@@ -439,6 +472,7 @@ class MqttClientWrapper {
 
   /** Force a reconnect (e.g. after config change in admin UI). */
   async reconnect(): Promise<MqttClient | null> {
+    this.connectBackoffUntil = 0;
     if (this.reconnecting) return this.reconnecting;
     this.reconnecting = (async () => {
       try {
