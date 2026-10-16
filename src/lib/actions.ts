@@ -21,6 +21,7 @@ import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall 
 // QuickPay page, or a late-but-accepted payment lands on a cancelled row.
 const PENDING_PAYMENT_TTL_MS = 15 * 60 * 1000;
 import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
+import { claimBookingSyncSlot, resolveSyncConflictInternal, syncBookingsWithProvider } from "./booking/sync";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
 // failure with context instead of swallowing it silently and returns null on
@@ -7083,107 +7084,68 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
     settings,
     persistRefreshedBookingSession,
   );
-  if (!provider) return { created: 0, updated: 0, skipped: [] as Array<{ booking: string; reason: string }>, error: "Ingen booking-udbyder konfigureret" };
-
-  const providerName = settings.booking_provider || "danplanner";
-
-  let bookings;
-  try {
-    bookings = await provider.getBookings(productType);
-  } catch (err) {
+  if (!provider) {
     return {
-      created: 0,
-      updated: 0,
-      skipped: [] as Array<{ booking: string; reason: string }>,
-      error: (err as Error).message,
+      created: 0, updated: 0, skipped: [] as Array<{ booking: string; reason: string }>,
+      conflicts: 0, missing: 0, total: 0, error: "Ingen booking-udbyder konfigureret",
     };
   }
 
-  let created = 0;
-  let updated = 0;
-  const skipped: Array<{ booking: string; reason: string }> = [];
-
-  // Cache units by name for fast lookup
-  const allUnits = await prisma.unit.findMany({ select: { id: true, name: true } });
-  const unitsByName = new Map(allUnits.map((u) => [u.name.toLowerCase().trim(), u.id]));
-
-  for (const booking of bookings) {
-    const unitId = unitsByName.get(booking.unitName.toLowerCase().trim());
-    if (!unitId) {
-      skipped.push({ booking: `${booking.bookingNumber} (${booking.unitName})`, reason: "Enhed findes ikke" });
-      continue;
-    }
-
-    const checkInDate = new Date(booking.checkIn + "T12:00:00");
-    const checkOutDate = new Date(booking.checkOut + "T12:00:00");
-    const externalRef = `${providerName}:${booking.externalBookingId}`;
-
-    // Look up by externalRef (stored in bookingRef field with prefix)
-    const existing = await prisma.session.findFirst({
-      where: { bookingRef: externalRef },
-    });
-
-    // Don't import a stay that is already over — it could only ever show
-    // up as an expired reservation.
-    if (!existing && checkOutDate < startOfToday()) {
-      skipped.push({ booking: `${booking.bookingNumber} (${booking.unitName})`, reason: "Opholdet er allerede afsluttet" });
-      continue;
-    }
-
-    const guestName = booking.customerName || booking.guestNames || "Ukendt gæst";
-    const guestEmail = booking.email || null;
-    const guestPhone = booking.phone || null;
-
-    if (existing) {
-      const changes: Record<string, unknown> = {};
-      // Only a booking that hasn't started may be moved or have its arrival
-      // changed. An ACTIVE/COMPLETED stay has real meter baselines and a real
-      // check-in time; overwriting them from the feed shifts every invoice
-      // window and leaves the old unit marked occupied.
-      const notStarted = existing.status === "PENDING";
-      if (notStarted && existing.unitId !== unitId) changes.unitId = unitId;
-      if (existing.guestName !== guestName) changes.guestName = guestName;
-      if (existing.guestEmail !== guestEmail) changes.guestEmail = guestEmail;
-      if (existing.guestPhone !== guestPhone) changes.guestPhone = guestPhone;
-      if (notStarted && existing.checkInTime.getTime() !== checkInDate.getTime()) changes.checkInTime = checkInDate;
-      if (!existing.expectedCheckOut || existing.expectedCheckOut.getTime() !== checkOutDate.getTime()) {
-        changes.expectedCheckOut = checkOutDate;
-      }
-      if (Object.keys(changes).length > 0) {
-        await prisma.session.update({ where: { id: existing.id }, data: changes });
-        updated++;
-      }
-    } else {
-      await prisma.session.create({
-        data: {
-          unitId,
-          guestName,
-          guestEmail,
-          guestPhone,
-          bookingRef: externalRef,
-          guestPortalToken: uuidv4(),
-          status: "PENDING",
-          paymentStatus: "UNPAID",
-          checkInTime: checkInDate,
-          expectedCheckOut: checkOutDate,
-          billingMode: "POSTPAID",
-        },
-      });
-      created++;
-    }
-  }
-
-  logger.info("danplanner", "Booking sync completed", {
-    created,
-    updated,
-    skippedCount: skipped.length,
-    totalFromProvider: bookings.length,
-  });
+  // Matching, desk-edit protection and status recording: src/lib/booking/sync.ts
+  const result = await syncBookingsWithProvider(provider, settings.booking_provider || "danplanner", productType);
 
   revalidatePath("/admin");
   revalidatePath("/admin/bookings");
   revalidatePath("/admin/map");
-  return { created, updated, skipped };
+  return result;
+}
+
+/**
+ * "Hent nu" on the status line: a sync right away, sharing the cron's slot
+ * so it can't overlap the automatic one. Returns Danish text for the toast.
+ */
+export async function syncBookingsNow(): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
+  const settings = await readGlobalSettings();
+  if (!settings.booking_provider || settings.booking_provider === "none") {
+    return { ok: false, message: "Intet bookingsystem er sat op — se Indstillinger → Booking" };
+  }
+  if (!(await claimBookingSyncSlot(20_000))) {
+    return { ok: false, message: "Der hentes allerede gæster — prøv igen om et øjeblik" };
+  }
+  const productType = (settings.booking_sync_product_type || "all") as "all" | "tourist" | "seasonal";
+  try {
+    const r = await syncBookings(productType);
+    if (r.error) return { ok: false, message: `Hentning fejlede: ${r.error}` };
+    const parts: string[] = [];
+    if (r.created) parts.push(`${r.created} ${r.created === 1 ? "ny" : "nye"}`);
+    if (r.updated) parts.push(`${r.updated} opdateret`);
+    if (r.conflicts) parts.push(`${r.conflicts} med forskelle at tage stilling til`);
+    if (r.missing) parts.push(`${r.missing} ikke længere i bookingsystemet`);
+    return { ok: true, message: `Hentet ${r.total} gæster${parts.length ? ` — ${parts.join(", ")}` : " — ingen ændringer"}` };
+  } catch (e) {
+    logger.error("danplanner", "Manual sync threw", e instanceof Error ? e.message : e);
+    return { ok: false, message: "Hentning fejlede — prøv igen" };
+  }
+}
+
+/** The desk's answer to "Danplanner siger: …": take theirs or keep ours. */
+export async function resolveBookingSyncConflict(
+  sessionId: number,
+  field: string,
+  choice: "booking" | "mine",
+): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
+  if (!Number.isInteger(sessionId) || (choice !== "booking" && choice !== "mine")) {
+    return { ok: false, message: "Ugyldig forespørgsel" };
+  }
+  const r = await resolveSyncConflictInternal(sessionId, String(field), choice);
+  if (r.ok) {
+    revalidatePath(`/admin/bookings/${sessionId}`);
+    revalidatePath("/admin/bookings");
+    revalidatePath("/admin");
+  }
+  return r;
 }
 
 /**
@@ -7252,15 +7214,8 @@ async function autoSyncBookingsInternal(): Promise<{
   const productType = (settings.booking_sync_product_type || "all") as "all" | "tourist" | "seasonal";
 
   try {
+    // syncBookings records the outcome in _booking_last_sync* itself.
     const r = await syncBookings(productType);
-    const status = r.error
-      ? `fejl: ${r.error}`
-      : `ok: ${r.created} nye, ${r.updated} opdateret${r.skipped.length ? `, ${r.skipped.length} sprunget over` : ""}`;
-
-    await updateMultipleSettings([
-      { key: "_booking_last_sync", value: new Date().toISOString() },
-      { key: "_booking_last_sync_status", value: status },
-    ]);
 
     if (r.error) {
       logger.error("danplanner", "Auto-sync failed", r.error);
@@ -7270,6 +7225,8 @@ async function autoSyncBookingsInternal(): Promise<{
     logger.info("danplanner", "Auto-sync completed", {
       created: r.created,
       updated: r.updated,
+      conflicts: r.conflicts,
+      missing: r.missing,
       skipped: r.skipped.length,
     });
     return { ran: true, created: r.created, updated: r.updated, skipped: r.skipped.length };

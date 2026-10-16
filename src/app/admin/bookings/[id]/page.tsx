@@ -18,6 +18,7 @@ import { BookingCheckoutButton } from "@/components/admin/booking-checkout-butto
 import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { PrepaidBalance } from "@/components/admin/prepaid-balance";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
+import { BookingSyncNotice } from "@/components/admin/booking-sync-notice";
 
 import { unitDisplayName } from "@/lib/utils";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
@@ -120,6 +121,8 @@ export default async function BookingDetailPage({
           </p>
         </div>
       </div>
+
+      <BookingSyncNotice session={session} />
 
       {/* ═══ TOP: booking details + statement actions ═══ */}
       <div className="space-y-5">

@@ -445,7 +445,11 @@ function parseBookings(html: string): BookingEntry[] {
     const langMatch = row.match(/data-language="([^"]*)"/);
 
     const bookingNumMatch = row.match(/<a[^>]*href="\/Booking\/Edit\/[^"]+"[^>]*>[\s\S]*?<\/i>\s*(\d+)\s*<\/a>/);
-    const placeMatch = row.match(/<td[^>]*data-sort="[^"]*"[^>]*>\s*<a[^>]*>\s*<span>([^<]+)<\/span>/);
+    const placeMatch = row.match(/<td[^>]*data-sort="[^"]*"[^>]*>\s*<a([^>]*)>\s*<span>([^<]+)<\/span>/);
+    // The resource id, if the place link or row carries one — matched against
+    // the ids syncBookingResources stored on units, before falling back to name.
+    const resourceIdMatch = (placeMatch?.[1] || "").match(/(?:data-resource-?id="|[?&]resource-?id=|\/Resource\/\w+\/)(\d+)/i)
+      || row.match(/data-resource-?id="(\d+)"/i);
     const customerNameMatch = row.match(/<a\s+class="truncate"[^>]*>[\s\S]*?<\/i>\s*([^<]+?)\s*<\/a>/);
     const guestNamesMatch = row.match(/<td>\s*<span>([^<]+)<\/span>\s*<\/td>/);
     const countryMatch = row.match(/title="([^"]+)"/);
@@ -478,7 +482,8 @@ function parseBookings(html: string): BookingEntry[] {
       externalBookingId: bookingIdMatch[1],
       externalCustomerId: customerIdMatch?.[1] || "",
       bookingNumber: bookingNumMatch?.[1]?.trim() || bookingIdMatch[1],
-      unitName: decodeHtmlEntities(placeMatch[1].trim()),
+      unitName: decodeHtmlEntities(placeMatch[2].trim()),
+      unitExternalId: resourceIdMatch?.[1],
       customerName: decodeHtmlEntities((customerNameMatch?.[1] || "").trim()),
       guestNames: decodeHtmlEntities((guestNamesMatch?.[1] || "").trim()),
       email: decodeHtmlEntities((emailMatch?.[1] || "").trim()),

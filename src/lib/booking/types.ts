@@ -15,6 +15,8 @@ export interface BookingEntry {
   externalCustomerId: string;
   bookingNumber: string;
   unitName: string;
+  /** The booked resource's id in the booking system, when the feed shows it. */
+  unitExternalId?: string;
   customerName: string;
   guestNames: string;
   email: string;
