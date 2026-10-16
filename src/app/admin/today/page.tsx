@@ -7,11 +7,9 @@ import { TodayBoard } from "@/components/admin/today-board";
 import { getGlobalSettings } from "@/lib/actions";
 import { getTodayOverview } from "@/lib/today-actions";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
-import { SITE_TIME_ZONE } from "@/lib/format";
+import { fmtDateWith } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
-
-const longDate = new Intl.DateTimeFormat("da-DK", { timeZone: SITE_TIME_ZONE, weekday: "long", day: "numeric", month: "long" });
 
 export default async function TodayPage() {
   const [overview, settings] = await Promise.all([getTodayOverview(), getGlobalSettings()]);
@@ -21,7 +19,7 @@ export default async function TodayPage() {
   };
   const siteBase = getBaseUrl(settings);
   const siteUrl = isPlaceholderBaseUrl(siteBase) ? "" : siteBase;
-  const date = longDate.format(new Date(overview.generatedAt));
+  const date = fmtDateWith(overview.generatedAt, { weekday: "long", day: "numeric", month: "long" });
 
   return (
     <PageShell width="5xl">

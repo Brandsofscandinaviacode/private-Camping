@@ -118,7 +118,7 @@ export function DashboardKpis({ total, occupied, arrived = 0, reserved, vacant, 
         <div className="flex items-center justify-between gap-2">
           <Label icon={CalendarDays} tint="bg-blue-500/10 text-blue-600">I dag</Label>
           <Link href="/admin/today" className="text-xs font-medium text-muted-foreground hover:text-foreground inline-flex items-center">
-            Dagsliste<ChevronRight className="h-3.5 w-3.5" />
+            Se alle<ChevronRight className="h-3.5 w-3.5" />
           </Link>
         </div>
         <div className="flex mt-2.5">

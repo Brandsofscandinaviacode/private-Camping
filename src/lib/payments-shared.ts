@@ -2,7 +2,7 @@
 // parsing and the till summary ("Kasse i dag"). Plain module without prisma,
 // safe on server and client. The database side lives in payments.ts.
 
-import { SITE_TIME_ZONE, siteDayKey } from "./format";
+import { siteDayKey, siteDayStart } from "./format";
 import { PAYMENT_METHOD_LABELS, roundOre } from "./settlement-shared";
 
 /** Ways money is taken at the desk. QUICKPAY (online card) only comes from the callback. */
@@ -125,34 +125,8 @@ export function amountInput(v: number | null | undefined): string {
 // ──────────────────────────────────────────────
 // Days in the site's time zone
 // ──────────────────────────────────────────────
-const offsetFmt = new Intl.DateTimeFormat("en-US", {
-  timeZone: SITE_TIME_ZONE,
-  hourCycle: "h23",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
-
-function siteOffsetMs(at: number): number {
-  const parts = offsetFmt.formatToParts(new Date(at));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
-  return asUtc - Math.floor(at / 1000) * 1000;
-}
-
 export function isDayKey(v: unknown): v is string {
   return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
-}
-
-/** Midnight of a "YYYY-MM-DD" day at the campsite, as an instant. */
-export function siteMidnight(key: string): Date {
-  const guess = Date.parse(`${key}T00:00:00Z`);
-  let t = guess - siteOffsetMs(guess);
-  t = guess - siteOffsetMs(t);
-  return new Date(t);
 }
 
 export function shiftDayKey(key: string, days: number): string {
@@ -163,7 +137,7 @@ export function shiftDayKey(key: string, days: number): string {
 
 /** [start, end) of a site day. */
 export function siteDayRange(key: string): { start: Date; end: Date } {
-  return { start: siteMidnight(key), end: siteMidnight(shiftDayKey(key, 1)) };
+  return { start: siteDayStart(key), end: siteDayStart(key, 1) };
 }
 
 export function todaySiteKey(now: Date = new Date()): string {

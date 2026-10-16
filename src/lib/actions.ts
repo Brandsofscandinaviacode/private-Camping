@@ -33,9 +33,9 @@ import {
 import { isProviderBookingRef, parseBookingRef } from "./booking-ref";
 import { fmtDate, fmtDateTime, fmtDateWith, siteDayKey, siteDayStart, siteHour } from "./format";
 import { isDeskPaymentMethod, methodLabel } from "./payments-shared";
-import { PaymentError, depositToBalance, invoiceRemaining, recordInvoicePayment } from "./payments";
+import { PaymentError, depositToBalance, invoiceRemaining } from "./payments";
 import { findUnitConflicts } from "./stay-conflicts";
-import { conflictSentence, conflictText, parseSiteDateTime, MAX_MANUAL_KWH, type StayInvoicePreview } from "./stay-corrections";
+import { conflictSentence, conflictText, dayKeyDate, parseSiteDateTime, MAX_MANUAL_KWH, type StayInvoicePreview } from "./stay-corrections";
 import {
   checkOutDateError,
   describeWelcomeMessage,
@@ -951,12 +951,10 @@ async function depositReceipt(sessionId: number, deposit: ReturnType<typeof depo
   };
 }
 
-// A planned date ("YYYY-MM-DD") is stored at noon UTC, like the booking sync
-// does (bookingDayToDate), so it is the same calendar day in Denmark
-// whatever the server's time zone.
-function plannedDate(key: string): Date {
-  return new Date(`${key}T12:00:00Z`);
-}
+// A planned date ("YYYY-MM-DD") is stored at noon UTC (dayKeyDate), like the
+// booking sync does (bookingDayToDate), so it is the same calendar day in
+// Denmark whatever the server's time zone.
+const plannedDate = dayKeyDate;
 
 const WELCOME_TIMEOUT_MS = 15_000;
 
@@ -3198,24 +3196,6 @@ export async function getInvoiceByPaymentToken(token: string) {
   });
 }
 
-/**
- * Pays what is left on an invoice through the payments ledger (method
- * "Andet"). The desk uses "Registrér betaling" with amount and method instead.
- */
-export async function markInvoicePaid(invoiceId: number, paymentId?: string): Promise<{ ok: true } | { ok: false; message: string }> {
-  const auth = await requireAuth();
-  try {
-    const note = paymentId ? `Markeret som betalt (reference ${paymentId})` : "Markeret som betalt";
-    const res = await recordInvoicePayment(invoiceId, "REST", "OTHER", note, auth.username || "admin");
-    if (res.sessionId) revalidatePath(`/admin/bookings/${res.sessionId}`);
-  } catch (e) {
-    if (e instanceof PaymentError) return { ok: false, message: e.message };
-    throw e;
-  }
-  revalidatePath("/admin", "layout");
-  return { ok: true };
-}
-
 export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): Promise<{ ok: boolean; message: string }> {
   await requireAuth();
   return sendInvoiceToCustomerInternal(invoiceId, unitId);
@@ -3530,82 +3510,10 @@ export async function getSessionCharges(sessionId: number): Promise<{
 }
 
 /**
- * "Markér som betalt": records what the guest owes as paid at the desk, so the
- * statement, badge and Økonomi all show it. Open invoices of the stay are
- * paid with it — left open they would keep sending reminders and could cut
- * the power as overdue. Only after check-out: while a stay runs, more
- * consumption is still coming.
- */
-export async function markSessionPaid(
-  sessionId: number,
-  paymentId?: string,
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  const auth = await requireAuth();
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    select: { status: true, billingMode: true },
-  });
-  if (!session) return { ok: false, message: "Opholdet findes ikke." };
-  if (session.status === "PENDING") return { ok: false, message: "Gæsten er ikke tjekket ind." };
-  if (session.status === "ACTIVE") {
-    return {
-      ok: false,
-      message: session.billingMode === "PREPAID"
-        ? "Gæsten er stadig tjekket ind — brug 'Tilføj indbetaling' på saldoen."
-        : "Opholdet er stadig i gang. Betalingen registreres, når gæsten er tjekket ud.",
-    };
-  }
-
-  const settlement = await computeSettlement(sessionId);
-  if (!settlement) return { ok: false, message: "Opholdet findes ikke." };
-  const username = auth.username || "admin";
-  const now = new Date();
-  const openInvoices = settlement.invoices.filter((i) => i.status !== "PAID");
-  const openInvoiceTotal = openInvoices.reduce((t, i) => t + i.totalAmount, 0);
-  // Pays exactly what is owed; under 1 kr there's nothing to record.
-  const rest = settlement.owed > 0 ? roundOre(settlement.owed - openInvoiceTotal) : 0;
-  if (rest < 0.005 && openInvoices.length === 0) {
-    await syncPaymentStatus(sessionId);
-    revalidatePath(`/admin/bookings/${sessionId}`);
-    return { ok: true };
-  }
-
-  const ALREADY = "Betalingen er allerede registreret. Genindlæs siden.";
-  try {
-    await prisma.$transaction(async (tx) => {
-      // A double click or a second screen must not record the payment twice.
-      const fresh = await tx.payment.aggregate({ where: { sessionId, kind: "SETTLEMENT" }, _sum: { amount: true } });
-      if (Math.abs((fresh._sum.amount ?? 0) - settlement.paid) > 0.005) throw new Error(ALREADY);
-      for (const inv of openInvoices) {
-        await tx.invoice.update({ where: { id: inv.id }, data: { status: "PAID", paidAt: now } });
-        await tx.payment.create({
-          data: { sessionId, invoiceId: inv.id, amount: inv.totalAmount, method: "OTHER", kind: "INVOICE", createdBy: username, note: "Betalt sammen med opholdet" },
-        });
-      }
-      if (rest >= 0.005) {
-        await tx.payment.create({
-          data: { sessionId, amount: rest, method: "OTHER", kind: "SETTLEMENT", createdBy: username, externalId: paymentId ?? null, note: "Markeret som betalt" },
-        });
-      }
-      await tx.session.update({
-        where: { id: sessionId },
-        data: { paymentStatus: "PAID", paidAt: now, ...(paymentId ? { paymentId } : {}) },
-      });
-    });
-  } catch (e) {
-    if (e instanceof Error && e.message === ALREADY) return { ok: false, message: ALREADY };
-    throw e;
-  }
-  logger.info("payment", `Ophold ${sessionId} markeret betalt af ${username}: ${fmtMoney(settlement.owed, settlement.currency)}`);
-
-  revalidatePath("/admin", "layout");
-  revalidatePath(`/admin/bookings/${sessionId}`);
-  return { ok: true };
-}
-
-/**
- * "Fortryd betaling": books counter-entries for what markSessionPaid
- * recorded (nothing is deleted) and reopens the stay.
+ * "Fortryd markering som betalt": for stays marked paid by the old
+ * "Markér som betalt" (removed — the desk registers payments with amount and
+ * method now). Books counter-entries for what it recorded (nothing is
+ * deleted) and reopens the stay.
  */
 export async function markSessionUnpaid(sessionId: number): Promise<{ ok: true } | { ok: false; message: string }> {
   const auth = await requireAuth();
@@ -3759,7 +3667,7 @@ export async function updateSessionDetails(
       } else {
         // Noon UTC, like imported bookings — a date-only value at UTC
         // midnight lands on the previous evening in Denmark.
-        const d = new Date(`${v}T12:00:00Z`);
+        const d = plannedDate(v);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(d.getTime())) {
           return { ok: false, message: "Ugyldig dato for forventet checkout." };
         }

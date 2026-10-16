@@ -282,7 +282,7 @@ export async function invoiceRemaining(invoice: { id: number; totalAmount: numbe
   return roundOre(invoice.totalAmount - (await invoiceNet(prisma, invoice.id)));
 }
 
-/** A desk payment on one invoice ("REST" = whatever is left, for "Markér som betalt"). */
+/** A desk payment on one invoice ("REST" = whatever is left). */
 export async function recordInvoicePayment(
   invoiceId: number,
   amount: number | "REST",

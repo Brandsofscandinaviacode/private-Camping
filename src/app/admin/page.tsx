@@ -13,7 +13,7 @@ import { DashboardKpis } from "@/components/admin/dashboard-kpis";
 import { BookingSyncStatus } from "@/components/admin/booking-sync-status";
 import { MeteringStoppedBanner } from "@/components/admin/metering-stopped-banner";
 import { Button } from "@/components/ui/button";
-import { Tent, AlertCircle, AlertTriangle, LogIn, LogOut } from "lucide-react";
+import { Tent, AlertCircle, AlertTriangle, CalendarCheck, LogIn, LogOut } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -59,7 +59,7 @@ export default async function AdminDashboard() {
         activeCheckOut: active?.expectedCheckOut ? active.expectedCheckOut.toISOString() : null,
         pendingCheckIn: !active && pending ? pending.checkInTime.toISOString() : null,
         pendingCheckOut: !active && pending?.expectedCheckOut ? pending.expectedCheckOut.toISOString() : null,
-        // On site per the booking but not checked in (server clock = site time)
+        // On site per the booking but not checked in (site day)
         pendingArrived: !active && !!pending && hasArrivedNotCheckedIn(pending),
       };
     })
@@ -88,7 +88,7 @@ export default async function AdminDashboard() {
         <div className="flex items-center gap-2">
           {/* Reception devices (phone/tablet): the day's work first, setup on desktop */}
           <Link href="/admin/today" className="lg:hidden">
-            <Button><LogIn className="h-4 w-4 mr-2" />Ankomster i dag</Button>
+            <Button><CalendarCheck className="h-4 w-4 mr-2" />I dag</Button>
           </Link>
           <div className={units.length > 0 ? "hidden lg:block" : ""}>
             <AddUnitDialog />

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AutoPrint, PrintButton } from "@/components/admin/print-button";
 import { getGlobalSettings } from "@/lib/actions";
 import { getTodayOverview } from "@/lib/today-actions";
-import { SITE_TIME_ZONE, fmtDateTime, fmtRelativeDay, fmtShortDate, fmtTime } from "@/lib/format";
+import { fmtDateTime, fmtDateWith, fmtRelativeDay, fmtShortDate, fmtTime } from "@/lib/format";
 import { fmtMoney } from "@/lib/settlement-shared";
 import { dayKeyDate } from "@/lib/stay-corrections";
 import type { TodayRow } from "@/lib/today";
@@ -16,8 +16,6 @@ const PRINT_CSS = `@media print {
   @page { size: A4 portrait; margin: 1cm; }
   html { font-size: 13px; }
 }`;
-
-const longDate = new Intl.DateTimeFormat("da-DK", { timeZone: SITE_TIME_ZONE, weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
 function day(key: string | null): string {
   return key ? fmtRelativeDay(dayKeyDate(key)) : "åben";
@@ -106,7 +104,7 @@ export default async function TodayPrintPage({
   const { print } = await searchParams;
   const [o, settings] = await Promise.all([getTodayOverview(), getGlobalSettings()]);
   const camp = settings.camp_name?.trim() || null;
-  const date = longDate.format(new Date(o.generatedAt));
+  const date = fmtDateWith(o.generatedAt, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 print:p-0">
