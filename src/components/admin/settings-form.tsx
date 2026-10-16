@@ -53,6 +53,9 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
   const [invoiceTestLoading, setInvoiceTestLoading] = useState(false);
   const [invoiceTestResult, setInvoiceTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [values, setValues] = useState({
+    camp_name: settings.camp_name || "",
+    camp_address: settings.camp_address || "",
+    camp_cvr: settings.camp_cvr || "",
     site_url: settings.site_url || "",
     price_per_kwh: settings.price_per_kwh || "2.50",
     price_per_liter_water: settings.price_per_liter_water || "0.05",
@@ -87,6 +90,36 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
 
   return (
     <div className="space-y-5">
+      {/* Campsite details — printed on statements and receipts */}
+      <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold">Campingplads</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="camp_name" className="text-sm text-muted-foreground">Navn</Label>
+              <Input id="camp_name" value={values.camp_name} onChange={(e) => h("camp_name", e.target.value)} placeholder="Solskin Camping" className="mt-1" />
+            </div>
+            <div>
+              <Label htmlFor="camp_cvr" className="text-sm text-muted-foreground">CVR-nr.</Label>
+              <Input id="camp_cvr" value={values.camp_cvr} onChange={(e) => h("camp_cvr", e.target.value)} placeholder="12345678" className="mt-1" />
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="camp_address" className="text-sm text-muted-foreground">Adresse</Label>
+            <textarea
+              id="camp_address"
+              value={values.camp_address}
+              onChange={(e) => h("camp_address", e.target.value)}
+              placeholder={"Strandvejen 1\n1234 Byen"}
+              className="w-full h-16 text-sm border rounded-lg px-3 py-2 mt-1 bg-background text-foreground resize-none border-border"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">Vises øverst og nederst på opgørelser og kvitteringer til gæsten.</p>
+        </div>
+      </div>
+
       {/* Site URL */}
       <div className="rounded-xl border border-border/60 bg-card shadow-sm">
         <div className="px-5 py-4 border-b border-border">

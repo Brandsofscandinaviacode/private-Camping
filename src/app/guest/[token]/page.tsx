@@ -4,6 +4,7 @@ import { readGlobalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 import { GuestPortalClient } from "@/components/guest/guest-portal-client";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
+import { computeSettlement } from "@/lib/settlement";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,23 @@ export default async function GuestPortalPage({
     const prepaidDeposited =
       session.billingMode === "PREPAID" ? await resolvePrepaidDeposited(session) : null;
 
+    // A finished stay shows the same settlement as the admin statement. Only
+    // the figures go to the browser — payment rows carry staff names/notes.
+    const settlement = session.status === "COMPLETED" ? await computeSettlement(session.id) : null;
+    const settlementSummary = settlement
+      ? {
+          state: settlement.state,
+          electricityCost: settlement.totals.electricityCost,
+          waterCost: settlement.totals.waterCost,
+          servicesCost: settlement.totals.servicesCost,
+          stayPrice: settlement.totals.stayPrice,
+          totalCost: settlement.totals.totalCost,
+          owed: settlement.owed,
+          prepaidDeposited: settlement.prepaid?.deposited ?? null,
+          prepaidRemaining: settlement.prepaid?.remaining ?? null,
+        }
+      : null;
+
     return (
       <GuestPortalClient
         token={token}
@@ -110,6 +128,7 @@ export default async function GuestPortalPage({
         laundryCredit={session.laundryCredit ?? 0}
         nextInvoiceDay={isFastligger ? invoiceDay : null}
         servicesOnAccount={session.billingMode === "POSTPAID" && postpaidServicesMode === "ON_ACCOUNT"}
+        settlement={settlementSummary}
       />
     );
   }

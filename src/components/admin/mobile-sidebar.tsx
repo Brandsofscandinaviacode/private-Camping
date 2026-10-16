@@ -41,7 +41,7 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
   return (
     <>
       {/* Mobile top bar */}
-      <div className="md:hidden flex items-center justify-between px-4 py-3 bg-sidebar text-sidebar-foreground border-b border-sidebar-border">
+      <div className="md:hidden print:hidden flex items-center justify-between px-4 py-3 bg-sidebar text-sidebar-foreground border-b border-sidebar-border">
         <Link href="/admin" className="flex items-center gap-2.5">
           <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-sidebar-primary to-sidebar-primary/80 flex items-center justify-center">
             <Tent className="h-3.5 w-3.5 text-white" />

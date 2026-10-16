@@ -89,6 +89,20 @@ interface GuestPortalClientProps {
   showers: { id: number; name: string; location: string | null; pricePerMinute: number; minMinutes: number; maxMinutes: number; available: boolean; minutesLeft: number }[];
   nextInvoiceDay: number | null; // 1-31 or null
   servicesOnAccount?: boolean;
+  /** Completed stays: the settlement figures (same as the admin statement). */
+  settlement?: GuestSettlementSummary | null;
+}
+
+interface GuestSettlementSummary {
+  state: string;
+  electricityCost: number;
+  waterCost: number;
+  servicesCost: number;
+  stayPrice: number;
+  totalCost: number;
+  owed: number;
+  prepaidDeposited: number | null;
+  prepaidRemaining: number | null;
 }
 
 interface ConsumptionData {
@@ -168,6 +182,7 @@ export function GuestPortalClient({
   showers,
   nextInvoiceDay,
   servicesOnAccount,
+  settlement,
 }: GuestPortalClientProps) {
   const [locale, setLocale] = useState<Locale>(() => {
     if (typeof window !== "undefined") {
@@ -412,6 +427,74 @@ export function GuestPortalClient({
                   </p>
                 )}
               </div>
+              {settlement ? (() => {
+                // Same figures as the admin statement (src/lib/settlement.ts).
+                const lbl = {
+                  services: locale === "en" ? "Laundry & showers" : locale === "de" ? "Wäsche & Duschen" : "Vask og bad",
+                  deposited: locale === "en" ? "Prepaid" : locale === "de" ? "Vorauszahlung" : "Forudbetalt",
+                  used: locale === "en" ? "Used" : locale === "de" ? "Verbraucht" : "Forbrugt",
+                  remaining: locale === "en" ? "Unused balance" : locale === "de" ? "Restguthaben" : "Ubrugt saldo",
+                  owed: locale === "en" ? "Amount due" : locale === "de" ? "Offener Betrag" : "Skyldigt beløb",
+                  settled: locale === "en" ? "Consumption settled from your prepayment." : locale === "de" ? "Verbrauch mit der Vorauszahlung verrechnet." : "Forbruget er trukket fra din forudbetaling.",
+                  stayNote: locale === "en" ? "The stay price is settled separately with the campsite." : locale === "de" ? "Der Aufenthaltspreis wird separat mit dem Campingplatz abgerechnet." : "Opholdsprisen afregnes separat med campingpladsen.",
+                  nothing: locale === "en" ? "Nothing to pay — thank you for your stay!" : locale === "de" ? "Nichts zu bezahlen — vielen Dank für Ihren Aufenthalt!" : "Intet at betale — tak for dit ophold!",
+                };
+                const deposited = settlement.prepaidDeposited;
+                const remaining = settlement.prepaidRemaining;
+                return (
+                  <>
+                    {settlement.totalCost > 0.005 && (
+                      <div className="space-y-1 text-sm">
+                        {settlement.electricityCost > 0.005 && <p>{tx.electricity}: {formatDKK(settlement.electricityCost)}</p>}
+                        {settlement.waterCost > 0.005 && <p>{tx.water}: {formatDKK(settlement.waterCost)}</p>}
+                        {settlement.servicesCost > 0.005 && <p>{lbl.services}: {formatDKK(settlement.servicesCost)}</p>}
+                        {settlement.stayPrice > 0.005 && <p>{externalDescription || tx.stay}: {formatDKK(settlement.stayPrice)}</p>}
+                        <Separator className="my-2" />
+                        <p className="text-xl font-bold">{tx.total}: {formatDKK(settlement.totalCost)}</p>
+                      </div>
+                    )}
+                    {deposited != null && remaining != null && (
+                      <div className="space-y-2 text-sm text-left">
+                        <div className="flex justify-between"><span className="text-muted-foreground">{lbl.deposited}</span><span>{formatDKK(deposited)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">{lbl.used}</span><span>-{formatDKK(Math.min(deposited, deposited - remaining))}</span></div>
+                        {remaining >= 0 && (
+                          <>
+                            <div className="flex justify-between font-semibold border-t pt-2"><span>{lbl.remaining}</span><span>{formatDKK(remaining)}</span></div>
+                            <p className="text-xs text-muted-foreground">{lbl.settled}</p>
+                            {externalPrice !== null && externalPrice > 0 && (
+                              <p className="text-xs text-muted-foreground">{lbl.stayNote}</p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {settlement.owed > 0 ? (
+                      <div className="space-y-2">
+                        <div className="flex justify-between font-semibold text-red-700 bg-red-50 rounded-lg p-3 text-sm">
+                          <span>{lbl.owed}</span><span>{formatDKK(settlement.owed)}</span>
+                        </div>
+                        {quickpayEnabled ? (
+                          <Button onClick={handlePaySession} disabled={payingSession} className="w-full min-h-11">
+                            <CreditCard className="h-4 w-4 mr-2" />
+                            {payingSession ? tx.creatingPayment : tx.payOnline}
+                          </Button>
+                        ) : (
+                          <p className="text-xs text-muted-foreground text-center">{tx.contactCampsite}</p>
+                        )}
+                        {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
+                      </div>
+                    ) : settlement.state === "PAID" ? (
+                      <div className="bg-green-50 text-green-700 rounded-lg p-3 text-sm font-medium">
+                        {tx.thankYou}
+                      </div>
+                    ) : deposited == null ? (
+                      <div className="bg-green-50 text-green-700 rounded-lg p-3 text-sm font-medium">
+                        {lbl.nothing}
+                      </div>
+                    ) : null}
+                  </>
+                );
+              })() : (<>
               {totalCost !== null && (
                 <div className="space-y-1 text-sm">
                   {totalElectricityCost !== null && totalElectricityCost > 0 && <p>{tx.electricity}: {formatDKK(totalElectricityCost)}</p>}
@@ -485,6 +568,7 @@ export function GuestPortalClient({
                   {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
                 </div>
               )}
+              </>)}
             </CardContent>
           </Card>
         )}
