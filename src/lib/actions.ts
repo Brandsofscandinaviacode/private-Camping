@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
-import { openReservationWhere, startOfToday } from "./booking-status";
+import { arrivedNotCheckedInWhere, openReservationWhere, overdueStayWhere, startOfToday } from "./booking-status";
 import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
@@ -2694,12 +2694,16 @@ async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number):
 // ──────────────────────────────────────────────
 // BOOKINGS — Session management
 // ──────────────────────────────────────────────
-export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "active" | "pending", search?: string) {
+export type BookingListFilter = "all" | "unpaid" | "paid" | "active" | "pending" | "arrived" | "overdue";
+
+export async function getAllSessions(filter?: BookingListFilter, search?: string) {
   await requireAuth();
   const filterWhere = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
     : filter === "active" ? { OR: [{ status: "ACTIVE" as const }, openReservationWhere()] }
     : filter === "pending" ? openReservationWhere()
+    : filter === "arrived" ? arrivedNotCheckedInWhere()
+    : filter === "overdue" ? overdueStayWhere()
     : {};
 
   const searchWhere = search && search.trim()

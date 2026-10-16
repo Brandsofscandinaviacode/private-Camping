@@ -8,6 +8,8 @@ import { Search, X } from "lucide-react";
 interface BookingFiltersProps {
   activeFilter: string;
   unpaidCount: number;
+  arrivedCount?: number;
+  overdueCount?: number;
   searchQuery: string;
 }
 
@@ -15,6 +17,8 @@ const filters = [
   { value: "all", label: "Alle" },
   { value: "active", label: "Aktive", dot: "bg-blue-500" },
   { value: "pending", label: "Reserveret", dot: "bg-amber-500" },
+  { value: "arrived", label: "Ankommet, ikke tjekket ind", dot: "bg-amber-500" },
+  { value: "overdue", label: "Overskredet", dot: "bg-red-500" },
   { value: "unpaid", label: "Ubetalt", dot: "bg-red-500" },
   { value: "paid", label: "Betalt", dot: "bg-emerald-500" },
 ];
@@ -27,7 +31,7 @@ function buildUrl(filter: string, search: string): string {
   return `/admin/bookings${qs ? `?${qs}` : ""}`;
 }
 
-export function BookingFilters({ activeFilter, unpaidCount, searchQuery }: BookingFiltersProps) {
+export function BookingFilters({ activeFilter, unpaidCount, arrivedCount = 0, overdueCount = 0, searchQuery }: BookingFiltersProps) {
   const router = useRouter();
   const [search, setSearch] = useState(searchQuery);
 
@@ -59,11 +63,16 @@ export function BookingFilters({ activeFilter, unpaidCount, searchQuery }: Booki
             >
               {f.dot && <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} />}
               {f.label}
-              {f.value === "unpaid" && unpaidCount > 0 && (
-                <span className={`inline-flex items-center justify-center h-4 min-w-4 px-1 text-[10px] font-bold rounded-full ${active ? "bg-background/25 text-background" : "bg-red-500 text-white"}`}>
-                  {unpaidCount}
-                </span>
-              )}
+              {(() => {
+                const count = f.value === "unpaid" ? unpaidCount : f.value === "arrived" ? arrivedCount : f.value === "overdue" ? overdueCount : 0;
+                if (count <= 0) return null;
+                const badge = f.value === "arrived" ? "bg-amber-500 text-white" : "bg-red-500 text-white";
+                return (
+                  <span className={`inline-flex items-center justify-center h-4 min-w-4 px-1 text-[10px] font-bold rounded-full ${active ? "bg-background/25 text-background" : badge}`}>
+                    {count}
+                  </span>
+                );
+              })()}
             </Link>
           );
         })}

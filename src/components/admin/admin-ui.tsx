@@ -201,10 +201,16 @@ export function StatusBadge({ tone, children, pulse = false }: { tone: BadgeTone
 }
 
 // Booking status → tone + label (shared by bookings list, economy, booking detail)
-export function bookingTone(status: string, paymentStatus?: string, expired?: boolean): { tone: BadgeTone; label: string; pulse?: boolean } {
+export function bookingTone(
+  status: string,
+  paymentStatus?: string,
+  flags: { expired?: boolean; overdue?: boolean } = {},
+): { tone: BadgeTone; label: string; pulse?: boolean } {
   // A reservation whose stay ended without a check-in
-  if (status === "PENDING" && expired) return { tone: "muted", label: "Udløbet" };
+  if (status === "PENDING" && flags.expired) return { tone: "muted", label: "Udløbet" };
   if (status === "PENDING") return { tone: "amber", label: "Reserveret" };
+  // Still checked in after the planned checkout day
+  if (status === "ACTIVE" && flags.overdue) return { tone: "red", label: "Overskredet", pulse: true };
   if (status === "ACTIVE" && paymentStatus === "PAID") return { tone: "blue", label: "Aktiv · Betalt", pulse: true };
   if (status === "ACTIVE") return { tone: "blue", label: "Aktiv", pulse: true };
   if (status === "COMPLETED" && paymentStatus === "UNPAID") return { tone: "red", label: "Ubetalt" };

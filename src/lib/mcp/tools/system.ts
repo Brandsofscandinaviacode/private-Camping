@@ -5,7 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { prisma } from "@/lib/prisma";
 import { readGlobalSettings } from "@/lib/settings";
 import { getBaseUrl } from "@/lib/base-url";
-import { openReservationWhere } from "@/lib/booking-status";
+import { arrivedNotCheckedInWhere, openReservationWhere, overdueStayWhere } from "@/lib/booking-status";
 import { mqttClient } from "@/lib/mqtt-client";
 import { isHiddenSetting, maskSettingValue } from "@/lib/mcp/redact";
 import { readLogTail } from "@/lib/mcp/tools/logs";
@@ -62,6 +62,8 @@ export function registerSystemTools(server: McpServer, ctx: McpToolContext): voi
         activeSessions,
         openReservations,
         expiredReservations,
+        arrivedNotCheckedIn,
+        overdueStays,
         unpaidCompletedSessions,
         invoicesByStatus,
         logCount,
@@ -74,6 +76,8 @@ export function registerSystemTools(server: McpServer, ctx: McpToolContext): voi
         prisma.session.count({ where: { status: "ACTIVE" } }),
         prisma.session.count({ where: openReservationWhere(now) }),
         prisma.session.count({ where: expiredReservationWhere(now) }),
+        prisma.session.count({ where: arrivedNotCheckedInWhere(now) }),
+        prisma.session.count({ where: overdueStayWhere(now) }),
         prisma.session.count({ where: { status: "COMPLETED", paymentStatus: "UNPAID" } }),
         prisma.invoice.groupBy({ by: ["status"], _count: { _all: true }, _sum: { totalAmount: true } }),
         prisma.consumptionLog.count(),
@@ -118,6 +122,10 @@ export function registerSystemTools(server: McpServer, ctx: McpToolContext): voi
           activeSessions,
           openReservations,
           expiredReservations,
+          // Open reservations whose arrival day has come but nobody checked in.
+          arrivedNotCheckedIn,
+          // ACTIVE stays past their planned checkout day.
+          overdueStays,
           unpaidCompletedSessions,
           invoicesByStatus: Object.fromEntries(
             invoicesByStatus.map((g) => [g.status, { count: g._count._all, totalAmount: g._sum.totalAmount ?? 0 }]),

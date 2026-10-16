@@ -55,3 +55,39 @@ export function expiredReservationWhere(now: Date = new Date()) {
     ],
   };
 }
+
+/** Midnight at the end of the current day. */
+function endOfToday(now: Date): Date {
+  const d = startOfToday(now);
+  d.setDate(d.getDate() + 1);
+  return d;
+}
+
+/**
+ * Open reservations whose arrival day has come: Danplanner lists the guest as
+ * on site (or arriving today), but nobody has checked them in in CampSense,
+ * so the unit isn't marked occupied and no meter is running.
+ */
+export function arrivedNotCheckedInWhere(now: Date = new Date()) {
+  return { AND: [openReservationWhere(now), { checkInTime: { lt: endOfToday(now) } }] };
+}
+
+/** ACTIVE stays whose planned checkout day has passed without a check-out. */
+export function overdueStayWhere(now: Date = new Date()) {
+  return { status: "ACTIVE" as const, expectedCheckOut: { lt: startOfToday(now) } };
+}
+
+export function isStayOverdue(
+  s: { status: string; expectedCheckOut: Date | string | null },
+  now: Date = new Date(),
+): boolean {
+  return s.status === "ACTIVE" && !!s.expectedCheckOut && new Date(s.expectedCheckOut) < startOfToday(now);
+}
+
+/** A still-open reservation whose arrival day has come (see arrivedNotCheckedInWhere). */
+export function hasArrivedNotCheckedIn(
+  s: { status: string; checkInTime: Date | string; expectedCheckOut: Date | string | null },
+  now: Date = new Date(),
+): boolean {
+  return s.status === "PENDING" && !isReservationExpired(s, now) && new Date(s.checkInTime) < endOfToday(now);
+}

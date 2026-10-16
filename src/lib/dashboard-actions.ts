@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
+import { arrivedNotCheckedInWhere, overdueStayWhere } from "@/lib/booking-status";
 
 /**
  * Today's guest movements for the dashboard "I dag" KPI.
@@ -46,4 +47,19 @@ export async function getDashboardMovements() {
         }
       : null,
   };
+}
+
+/**
+ * Bookings that need a hand: guests Danplanner shows as arrived but who were
+ * never checked in here (no occupancy, no metering), and stays whose planned
+ * checkout has passed without a check-out.
+ */
+export async function getBookingAttentionCounts() {
+  await requireAuth();
+  const now = new Date();
+  const [arrived, overdue] = await Promise.all([
+    prisma.session.count({ where: arrivedNotCheckedInWhere(now) }),
+    prisma.session.count({ where: overdueStayWhere(now) }),
+  ]);
+  return { arrived, overdue };
 }

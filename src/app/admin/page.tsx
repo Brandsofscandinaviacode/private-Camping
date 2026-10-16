@@ -3,16 +3,16 @@ import {
   getUnits, getResourceTypes, getUnitHAStates, getActiveSession, getPendingSession,
   getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing, getTotalConsumptionHistory,
 } from "@/lib/actions";
-import { getDashboardMovements } from "@/lib/dashboard-actions";
+import { getBookingAttentionCounts, getDashboardMovements } from "@/lib/dashboard-actions";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
 import { DashboardKpis } from "@/components/admin/dashboard-kpis";
-import { Tent, AlertCircle, AlertTriangle } from "lucide-react";
+import { Tent, AlertCircle, AlertTriangle, LogIn, LogOut } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, history] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, history, attention] = await Promise.all([
     getUnits(),
     getResourceTypes(),
     getUnpaidCount(),
@@ -21,6 +21,7 @@ export default async function AdminDashboard() {
     getEffectiveElPricing().catch(() => null),
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
     getTotalConsumptionHistory("week", 8).catch(() => []),
+    getBookingAttentionCounts().catch(() => ({ arrived: 0, overdue: 0 })),
   ]);
 
   const unitData = await Promise.all(
@@ -86,8 +87,36 @@ export default async function AdminDashboard() {
       />
 
       {/* Consolidated alerts */}
-      {(unpaidCount > 0 || alarmResult.alerts.length > 0) && (
+      {(unpaidCount > 0 || alarmResult.alerts.length > 0 || attention.arrived > 0 || attention.overdue > 0) && (
         <div className="space-y-2.5">
+          {attention.arrived > 0 && (
+            <Link href="/admin/bookings?filter=arrived">
+              <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
+                <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                  <LogIn className="h-[18px] w-[18px] text-amber-600" />
+                </div>
+                <p className="text-sm text-amber-800 flex-1">
+                  <span className="font-bold">{attention.arrived}</span> {attention.arrived === 1 ? "gæst er" : "gæster er"} ankommet ifølge bookingsystemet, men ikke tjekket ind — pladsen står ikke som optaget, og forbruget måles ikke
+                </p>
+                <span className="text-xs font-semibold text-amber-700 border border-amber-200 rounded-lg px-3 py-1.5 shrink-0">Se liste</span>
+              </div>
+            </Link>
+          )}
+
+          {attention.overdue > 0 && (
+            <Link href="/admin/bookings?filter=overdue">
+              <div className="flex items-center gap-3.5 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3 hover:bg-red-100/80 transition-all cursor-pointer">
+                <div className="h-9 w-9 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                  <LogOut className="h-[18px] w-[18px] text-red-500" />
+                </div>
+                <p className="text-sm text-red-700 flex-1">
+                  <span className="font-bold">{attention.overdue}</span> {attention.overdue === 1 ? "ophold er stadig aktivt" : "ophold er stadig aktive"} efter planlagt udtjek — tjek ud eller ret udtjeksdatoen
+                </p>
+                <span className="text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-3 py-1.5 shrink-0">Se liste</span>
+              </div>
+            </Link>
+          )}
+
           {unpaidCount > 0 && (
             <Link href="/admin/bookings?filter=unpaid">
               <div className="flex items-center gap-3.5 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3 hover:bg-red-100/80 transition-all cursor-pointer">

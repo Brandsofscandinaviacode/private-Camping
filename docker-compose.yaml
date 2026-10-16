@@ -6,6 +6,9 @@ services:
       DATABASE_URL: "file:/app/data/campsense.db"
       SESSION_SECRET: "${SESSION_SECRET}"
       FORCE_HTTPS: "true"
+      # App log on the persistent volume, so it survives redeploys (and the
+      # history is readable via Claude / MCP get_recent_logs).
+      LOG_DIR: "/app/data/logs"
     volumes:
       - campsense-data:/app/data
     ports:

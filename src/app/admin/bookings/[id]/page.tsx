@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { isReservationExpired } from "@/lib/booking-status";
+import { isReservationExpired, isStayOverdue } from "@/lib/booking-status";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, Receipt, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,15 @@ export default async function BookingDetailPage({
               <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
                 Aktiv
+              </span>
+            )}
+            {isStayOverdue(session) && (
+              <span
+                className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium inline-flex items-center gap-1.5"
+                title="Planlagt udtjek er passeret, men opholdet er ikke tjekket ud"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                Overskredet
               </span>
             )}
             {isUnpaid && (

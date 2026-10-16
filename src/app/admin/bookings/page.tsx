@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { isReservationExpired } from "@/lib/booking-status";
-import { getAllSessions, getUnpaidCount } from "@/lib/actions";
+import { isReservationExpired, isStayOverdue } from "@/lib/booking-status";
+import { getAllSessions, getUnpaidCount, type BookingListFilter } from "@/lib/actions";
+import { getBookingAttentionCounts } from "@/lib/dashboard-actions";
 import { BookingFilters } from "@/components/admin/booking-filters";
 import { Calendar, ChevronRight, ArrowRight } from "lucide-react";
 import { unitDisplayName } from "@/lib/utils";
@@ -14,11 +15,13 @@ export default async function BookingsPage({
   searchParams: Promise<{ filter?: string; q?: string }>;
 }) {
   const { filter, q } = await searchParams;
-  const activeFilter = (filter as "all" | "unpaid" | "paid" | "active" | "pending") || "all";
+  const known: BookingListFilter[] = ["all", "unpaid", "paid", "active", "pending", "arrived", "overdue"];
+  const activeFilter: BookingListFilter = known.includes(filter as BookingListFilter) ? (filter as BookingListFilter) : "all";
   const searchQuery = q?.trim() || "";
-  const [sessions, unpaidCount] = await Promise.all([
+  const [sessions, unpaidCount, attention] = await Promise.all([
     getAllSessions(activeFilter, searchQuery || undefined),
     getUnpaidCount(),
+    getBookingAttentionCounts(),
   ]);
 
   // Left accent colour by status (matches the badge tone)
@@ -43,7 +46,7 @@ export default async function BookingsPage({
         }
       />
 
-      <BookingFilters activeFilter={activeFilter} unpaidCount={unpaidCount} searchQuery={searchQuery} />
+      <BookingFilters activeFilter={activeFilter} unpaidCount={unpaidCount} arrivedCount={attention.arrived} overdueCount={attention.overdue} searchQuery={searchQuery} />
 
       {sessions.length === 0 ? (
         <Surface className="py-4">
@@ -52,7 +55,10 @@ export default async function BookingsPage({
       ) : (
         <Surface className="divide-y divide-border/60 overflow-hidden">
           {sessions.map((s) => {
-            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, isReservationExpired(s));
+            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, {
+              expired: isReservationExpired(s),
+              overdue: isStayOverdue(s),
+            });
             return (
               <Link key={s.id} href={`/admin/bookings/${s.id}`} aria-label={`${s.guestName}${label ? ` — ${label}` : ""}`}>
                 <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer border-l-[3px] ${accent[tone]}`}>

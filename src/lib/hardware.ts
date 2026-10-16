@@ -119,6 +119,28 @@ export async function readEnergyKwh(ep: HardwareEndpoint): Promise<number | null
  * sees "wrong MQTT prefix" or "HA entity unavailable" instead of a bare
  * "no reading". Used by the cron's meter logging.
  */
+/**
+ * Why a Shelly gave no answer, from its retained last-will ({prefix}/online):
+ * never seen (wrong prefix or never connected), reported offline, or online
+ * but the component didn't answer. Waits briefly for the retained message.
+ */
+async function shellyNoReplyReason(prefix: string, component: string): Promise<string> {
+  const topic = `${prefix}/online`;
+  await mqttClient.subscribe(topic);
+  let lwt = mqttClient.getCached(topic);
+  if (!lwt) {
+    await new Promise((r) => setTimeout(r, 300));
+    lwt = mqttClient.getCached(topic);
+  }
+  if (!lwt) {
+    return `${prefix} har aldrig meldt sig på brokeren — tjek prefixet og enhedens MQTT-indstillinger (server, port 8883, TLS, bruger)`;
+  }
+  if (lwt.payload.trim() === "false") {
+    return `${prefix} er offline — brokeren har registreret, at enheden mistede forbindelsen. Tjek strøm, WiFi og enhedens MQTT-indstillinger`;
+  }
+  return `${prefix} er online, men svarede ikke på ${component} — tjek komponenten (f.eks. switch:0) og at "RPC over MQTT" er slået til på enheden`;
+}
+
 export async function readEnergyKwhWithReason(
   ep: HardwareEndpoint,
 ): Promise<{ kwh: number | null; reason: string | null }> {
@@ -132,7 +154,7 @@ export async function readEnergyKwhWithReason(
     return {
       kwh: null,
       reason: mqttClient.isConnected()
-        ? `MQTT: ${ep.mqttPrefix} svarede ikke på ${ep.mqttComponent} — enheden er offline, eller prefix/komponent er forkert (se "Forbundne enheder")`
+        ? `MQTT: ${await shellyNoReplyReason(ep.mqttPrefix, ep.mqttComponent)}`
         : "MQTT: CampSense er ikke forbundet til brokeren",
     };
   }
