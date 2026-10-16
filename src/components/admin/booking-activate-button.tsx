@@ -14,7 +14,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { activateBookingSession } from "@/lib/actions";
-import { checkOutDateError, formatBookingRef, isProviderBookingRef, prepaidAmountError } from "@/lib/check-in";
+import { checkOutDateError, prepaidAmountError } from "@/lib/check-in";
+import { bookingRefLabel, isProviderBookingRef } from "@/lib/booking-ref";
 import { fmtRelativeDay, fmtShortDate } from "@/lib/format";
 import {
   BillingModeField,
@@ -41,6 +42,8 @@ interface Props {
   initialPhone?: string | null;
   initialBookingRef?: string | null;
   initialExpectedCheckOut?: string | null;
+  /** Linked to a booking-system booking (externalBookingId) — number is read-only, as in "Redigér booking". */
+  externallyLinked?: boolean;
 }
 
 export function BookingActivateButton({
@@ -57,6 +60,7 @@ export function BookingActivateButton({
   initialPhone,
   initialBookingRef,
   initialExpectedCheckOut,
+  externallyLinked = false,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -72,7 +76,7 @@ export function BookingActivateButton({
   const [error, setError] = useState<string | null>(null);
 
   // "danplanner:227359" is the sync key: shown read-only, never sent back.
-  const refLocked = isProviderBookingRef(initialBookingRef);
+  const refLocked = externallyLinked || isProviderBookingRef(initialBookingRef);
   const arrival = `${arrivalDate}T12:00:00Z`;
 
   // Start from the booking's current data each time (a sync may have changed it).
@@ -165,7 +169,7 @@ export function BookingActivateButton({
                 <>
                   <dt className="text-muted-foreground">Booking</dt>
                   <dd title="Bookingnummeret kommer fra booking-systemet og kan ikke ændres her">
-                    {formatBookingRef(initialBookingRef)}
+                    {bookingRefLabel(initialBookingRef) ?? "—"}
                   </dd>
                 </>
               )}

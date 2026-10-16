@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
-import { arrivedNotCheckedInWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, startOfToday, hasArrivedNotCheckedIn } from "./booking-status";
+import { arrivedNotCheckedInWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, hasArrivedNotCheckedIn } from "./booking-status";
 import { BOOKING_MAX_LIMIT, BOOKING_PAGE_SIZE, BOOKING_SEARCH_SCAN, compareBookingRows, rankBookingSearch, type BookingListFilter as ListFilter } from "./booking-list";
 import { hasAnyHardware, unitStateKey, METER_FRESH_MS } from "./unit-state";
 import * as ha from "./homeassistant";
@@ -30,12 +30,11 @@ import {
   type Settlement,
   type UpdateSessionResult,
 } from "./settlement-shared";
-import { parseBookingRef } from "./booking-ref";
+import { isProviderBookingRef, parseBookingRef } from "./booking-ref";
 import { fmtDateTime } from "./format";
 import {
   checkOutDateError,
   describeWelcomeMessage,
-  isProviderBookingRef,
   prepaidAmountError,
   receiptMessage,
   type CheckInResult,
@@ -68,6 +67,7 @@ import {
 const PENDING_PAYMENT_TTL_MS = 15 * 60 * 1000;
 import { danplannerLogin, danplannerVerify2FA, getBookingProvider } from "./booking";
 import { claimBookingSyncSlot, resolveSyncConflictInternal, syncBookingsWithProvider } from "./booking/sync";
+import { addLockedFields } from "./booking/sync-merge";
 
 // Read a numeric meter via the hardware abstraction (HA or MQTT). Logs the
 // failure with context instead of swallowing it silently and returns null on
@@ -2289,8 +2289,10 @@ export async function activateBookingSession(
   const finalGuestName = updates?.guestName?.trim() || session.guestName;
   const finalGuestEmail = updates?.guestEmail !== undefined ? (updates.guestEmail?.trim() || null) : session.guestEmail;
   const finalGuestPhone = updates?.guestPhone !== undefined ? (updates.guestPhone?.trim() || null) : session.guestPhone;
-  // A booking-system ref ("danplanner:…") is the sync key and stays as it is.
-  const finalBookingRef = updates?.bookingRef !== undefined && !isProviderBookingRef(session.bookingRef)
+  // A booking-system ref ("danplanner:…") is the sync key and stays as it is —
+  // same rule as updateSessionDetails.
+  const refLocked = !!session.externalBookingId || isProviderBookingRef(session.bookingRef);
+  const finalBookingRef = updates?.bookingRef !== undefined && !refLocked
     ? (updates.bookingRef?.trim() || null)
     : session.bookingRef;
   const finalExpectedCheckOut = updates?.expectedCheckOut !== undefined
@@ -2304,15 +2306,7 @@ export async function activateBookingSession(
   if (finalGuestEmail !== session.guestEmail) changed.push("guestEmail");
   if (finalGuestPhone !== session.guestPhone) changed.push("guestPhone");
   if ((finalExpectedCheckOut?.getTime() ?? null) !== (session.expectedCheckOut?.getTime() ?? null)) changed.push("expectedCheckOut");
-  let lockedFields = session.lockedFields;
-  if (changed.length > 0) {
-    let locked: string[] = [];
-    try {
-      const parsed = JSON.parse(session.lockedFields || "[]");
-      if (Array.isArray(parsed)) locked = parsed.filter((f): f is string => typeof f === "string");
-    } catch { /* corrupt value — start over */ }
-    lockedFields = JSON.stringify([...new Set([...locked, ...changed])]);
-  }
+  const lockedFields = changed.length > 0 ? addLockedFields(session.lockedFields, changed) : session.lockedFields;
 
   // Claim the unit atomically so a double-click can't activate twice.
   const claimed = await prisma.unit.updateMany({
@@ -3577,12 +3571,7 @@ export async function updateSessionDetails(
   // booking-system sync, so the next sync doesn't silently undo them.
   const lockable = changedGuestFields.filter((f) => SYNC_LOCKABLE_FIELDS.includes(f));
   if (lockable.length > 0 && (session.externalBookingId || parseBookingRef(session.bookingRef))) {
-    let locked: string[] = [];
-    try {
-      const parsed = JSON.parse(session.lockedFields || "[]");
-      if (Array.isArray(parsed)) locked = parsed.filter((x): x is string => typeof x === "string");
-    } catch { /* malformed — start over */ }
-    updateData.lockedFields = JSON.stringify([...new Set([...locked, ...lockable])]);
+    updateData.lockedFields = addLockedFields(session.lockedFields, lockable);
   }
 
   await prisma.session.update({ where: { id: sessionId }, data: updateData });

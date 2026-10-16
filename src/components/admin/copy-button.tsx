@@ -41,7 +41,7 @@ export function CopyButton({ text, label = "Kopiér", baseUrl }: CopyButtonProps
       }
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
+    } catch {
       // Last resort: show the URL in a prompt
       window.prompt("Kopiér dette link:", fullUrl);
     }

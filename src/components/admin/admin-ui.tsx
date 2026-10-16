@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
+import { UNIT_STATE } from "@/lib/unit-state";
 
 /**
  * Shared admin UI kit — codifies the redesigned dashboard ("front page") style
@@ -204,10 +205,12 @@ export function StatusBadge({ tone, children, pulse = false }: { tone: BadgeTone
 export function bookingTone(
   status: string,
   paymentStatus?: string,
-  flags: { expired?: boolean; overdue?: boolean } = {},
+  flags: { expired?: boolean; overdue?: boolean; arrived?: boolean } = {},
 ): { tone: BadgeTone; label: string; pulse?: boolean } {
   // A reservation whose stay ended without a check-in
   if (status === "PENDING" && flags.expired) return { tone: "muted", label: "Udløbet" };
+  // Arrival day has come, guest not checked in yet — same wording as the dashboard
+  if (status === "PENDING" && flags.arrived) return { tone: "amber", label: UNIT_STATE.arr.short, pulse: true };
   if (status === "PENDING") return { tone: "amber", label: "Reserveret" };
   // Still checked in after the planned checkout day
   if (status === "ACTIVE" && flags.overdue) return { tone: "red", label: "Overskredet", pulse: true };

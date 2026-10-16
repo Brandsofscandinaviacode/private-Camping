@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { isReservationExpired, isStayOverdue } from "@/lib/booking-status";
+import { hasArrivedNotCheckedIn, isReservationExpired, isStayOverdue } from "@/lib/booking-status";
 import { getAllSessions, getBookingListCounts, getUnpaidCount } from "@/lib/actions";
 import { BOOKING_MAX_LIMIT, BOOKING_PAGE_SIZE, BOOKING_SEARCH_SCAN, bookingListUrl, parseBookingListFilter, parseBookingListLimit } from "@/lib/booking-list";
 import { fmtDate, fmtRelativeDay, siteDayKey } from "@/lib/format";
+import { bookingRefLabel } from "@/lib/booking-ref";
 import { getBookingAttentionCounts } from "@/lib/dashboard-actions";
 import { BookingFilters } from "@/components/admin/booking-filters";
 import { BookingSyncStatus } from "@/components/admin/booking-sync-status";
@@ -71,7 +72,8 @@ export default async function BookingsPage({
           {sessions.map((s) => {
             const expired = isReservationExpired(s, now);
             const overdue = isStayOverdue(s, now);
-            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, { expired, overdue });
+            const arrived = hasArrivedNotCheckedIn(s, now);
+            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, { expired, overdue, arrived });
             // El/vand so far — zero (and hidden) on units without meters
             const running = s.status === "ACTIVE" ? s.accumulatedElCost + s.accumulatedWaterCost : 0;
             return (
@@ -81,7 +83,7 @@ export default async function BookingsPage({
                     <div className="flex items-center gap-2">
                       <span className="font-semibold truncate">{s.guestName}</span>
                       {s.bookingRef && (
-                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">{s.bookingRef}</span>
+                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">{bookingRefLabel(s.bookingRef)}</span>
                       )}
                       <BookingSyncBadges session={s} />
                     </div>

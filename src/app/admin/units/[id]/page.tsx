@@ -21,6 +21,7 @@ import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { unitDisplayName as formatUnitName } from "@/lib/utils";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
 import { siteDayKey } from "@/lib/format";
+import { bookingRefLabel } from "@/lib/booking-ref";
 import { unitHardwareSummary } from "@/lib/check-in-hardware";
 import { hasArrivedNotCheckedIn } from "@/lib/booking-status";
 import { hasAnyHardware, unitStateKey, UNIT_STATE } from "@/lib/unit-state";
@@ -132,7 +133,7 @@ export default async function UnitDetailPage({
                 {pendingSession.bookingRef && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground inline-flex items-center gap-2"><Hash className="h-3.5 w-3.5" />Booking nr.</span>
-                    <span>{pendingSession.bookingRef}</span>
+                    <span>{bookingRefLabel(pendingSession.bookingRef)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm">
@@ -160,6 +161,7 @@ export default async function UnitDetailPage({
                   initialPhone={pendingSession.guestPhone}
                   initialBookingRef={pendingSession.bookingRef}
                   initialExpectedCheckOut={siteDayKey(pendingSession.expectedCheckOut)}
+                  externallyLinked={!!pendingSession.externalBookingId}
                 />
               </div>
             </div>

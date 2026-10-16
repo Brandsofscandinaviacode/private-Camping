@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { isReservationExpired, isStayOverdue } from "@/lib/booking-status";
+import { hasArrivedNotCheckedIn, isReservationExpired, isStayOverdue } from "@/lib/booking-status";
+import { UNIT_STATE } from "@/lib/unit-state";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { CheckInReceiptHost } from "@/components/admin/check-in-receipt";
 import { GuestPortalCard } from "@/components/admin/guest-portal-handover";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
-import { siteDayKey } from "@/lib/format";
+import { fmtDate, fmtDateTime, siteDayKey } from "@/lib/format";
 import { unitHardwareSummary } from "@/lib/check-in-hardware";
 import { BookingSyncNotice } from "@/components/admin/booking-sync-notice";
 
@@ -62,6 +63,7 @@ export default async function BookingDetailPage({
   // and can no longer be activated.
   const isExpiredReservation = isReservationExpired(session);
   const isPendingSession = session.status === "PENDING" && !isExpiredReservation;
+  const hasArrived = hasArrivedNotCheckedIn(session);
   const isActive = session.status === "ACTIVE";
   const isCompleted = session.status === "COMPLETED";
   // Payment badges follow the settlement — a 0-kr stay is not "Ubetalt".
@@ -108,9 +110,12 @@ export default async function BookingDetailPage({
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">{session.guestName}</h1>
             {isPendingSession && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium inline-flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                Reserveret
+              <span
+                className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium inline-flex items-center gap-1.5"
+                title={hasArrived ? UNIT_STATE.arr.label : undefined}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full bg-amber-500 ${hasArrived ? "animate-pulse" : ""}`} />
+                {hasArrived ? UNIT_STATE.arr.short : "Reserveret"}
               </span>
             )}
             {isExpiredReservation && (
@@ -191,8 +196,9 @@ export default async function BookingDetailPage({
               <div className="space-y-2.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Ophold</p>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">Check-in</span>
-                  <span className="text-right">{new Date(session.checkInTime).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                  {/* A reservation only has an arrival day — its stored time is a placeholder */}
+                  <span className="text-muted-foreground">{session.status === "PENDING" ? "Ankomst" : "Check-in"}</span>
+                  <span className="text-right">{session.status === "PENDING" ? fmtDate(session.checkInTime) : fmtDateTime(session.checkInTime)}</span>
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">Check-out</span>
@@ -272,6 +278,7 @@ export default async function BookingDetailPage({
                   initialPhone={session.guestPhone}
                   initialBookingRef={session.bookingRef}
                   initialExpectedCheckOut={siteDayKey(session.expectedCheckOut)}
+                  externallyLinked={!!session.externalBookingId}
                 />
               ) : isActive && !session.unit.isLongTerm ? (
                 <BookingCheckoutButton

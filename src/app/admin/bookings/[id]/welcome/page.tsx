@@ -5,7 +5,7 @@ import DOMPurify from "isomorphic-dompurify";
 import { Button } from "@/components/ui/button";
 import { getGlobalSettings, getSessionById } from "@/lib/actions";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
-import { formatBookingRef } from "@/lib/check-in";
+import { bookingRefLabel } from "@/lib/booking-ref";
 import { fmtDate } from "@/lib/format";
 import { unitDisplayName } from "@/lib/utils";
 import { PrintButton } from "@/components/admin/print-button";
@@ -46,7 +46,7 @@ export default async function WelcomeSlipPage({
         ALLOWED_ATTR: ["href"],
       })
     : "";
-  const bookingRef = formatBookingRef(session.bookingRef);
+  const bookingRef = bookingRefLabel(session.bookingRef);
 
   return (
     <div className="p-4 sm:p-6 lg:p-10">

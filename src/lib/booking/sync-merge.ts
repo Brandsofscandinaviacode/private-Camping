@@ -72,6 +72,13 @@ export function parseLockedFields(raw: string | null | undefined): SyncField[] {
   }
 }
 
+/** lockedFields with `fields` added — desk corrections the sync must not undo. */
+export function addLockedFields(raw: string | null | undefined, fields: readonly string[]): string | null {
+  const locked = new Set<string>(parseLockedFields(raw));
+  for (const f of fields) if (isSyncField(f)) locked.add(f);
+  return locked.size > 0 ? JSON.stringify([...locked]) : null;
+}
+
 // ── Normalisation ────────────────────────────
 // Strings trimmed (empty = no value), dates as the site-local day
 // "YYYY-MM-DD" (imported dates carry no real time), unit as its id.

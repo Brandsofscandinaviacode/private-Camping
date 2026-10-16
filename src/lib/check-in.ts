@@ -87,29 +87,6 @@ export function prepaidAmountError(amount: number | null | undefined): string | 
 }
 
 // ──────────────────────────────────────────────
-// Booking numbers from a booking system
-// ──────────────────────────────────────────────
-// Imported bookings carry "<provider>:<id>" — the sync key. Staff must not
-// edit it, or the next sync no longer finds the booking and imports it again.
-const PROVIDER_LABELS: Record<string, string> = { danplanner: "Danplanner" };
-
-function parseProviderRef(ref: string | null | undefined): { provider: string; id: string } | null {
-  const m = ref?.match(/^([a-z]+):(.+)$/);
-  if (!m || !PROVIDER_LABELS[m[1]]) return null;
-  return { provider: PROVIDER_LABELS[m[1]], id: m[2] };
-}
-
-export function isProviderBookingRef(ref: string | null | undefined): boolean {
-  return parseProviderRef(ref) !== null;
-}
-
-/** "danplanner:227359" → "Danplanner #227359"; anything else unchanged. */
-export function formatBookingRef(ref: string | null | undefined): string | null {
-  const p = parseProviderRef(ref);
-  return p ? `${p.provider} #${p.id}` : ref || null;
-}
-
-// ──────────────────────────────────────────────
 // Welcome message (portal link by e-mail/SMS)
 // ──────────────────────────────────────────────
 export const HAND_OVER_HINT = "Giv gæsten portal-linket eller QR-koden ved skranken.";

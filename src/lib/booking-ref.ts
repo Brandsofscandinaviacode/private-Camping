@@ -16,6 +16,11 @@ export function parseBookingRef(ref: string | null | undefined): { provider: str
   return { provider, label, id: m[2] };
 }
 
+/** Imported bookings carry "<provider>:<id>" — the sync key, never edited at the desk. */
+export function isProviderBookingRef(ref: string | null | undefined): boolean {
+  return parseBookingRef(ref) !== null;
+}
+
 /** "Danplanner #227359" for imported bookings, the ref itself otherwise. */
 export function bookingRefLabel(ref: string | null | undefined): string | null {
   if (!ref) return null;

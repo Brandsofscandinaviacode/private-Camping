@@ -9,6 +9,7 @@ import { readGlobalSettings } from "../settings";
 import { logger } from "../logger";
 import { arrivedNotCheckedInWhere, startOfToday } from "../booking-status";
 import type { BookingEntry, BookingProvider } from "./types";
+import { parseBookingRef } from "../booking-ref";
 import {
   SYNC_FIELD_LABELS,
   bookingDayToDate,
@@ -396,7 +397,7 @@ export async function readBookingSyncStatus(): Promise<BookingSyncStatus> {
 
 /** "Danplanner" for a stay linked as "danplanner:…". */
 export function bookingSystemLabel(externalBookingId: string | null | undefined): string {
-  return externalBookingId?.startsWith("danplanner:") ? "Danplanner" : "bookingsystemet";
+  return parseBookingRef(externalBookingId)?.label ?? "bookingsystemet";
 }
 
 /**
