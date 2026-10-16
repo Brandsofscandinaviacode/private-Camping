@@ -2,7 +2,7 @@
 // parsing and the till summary ("Kasse i dag"). Plain module without prisma,
 // safe on server and client. The database side lives in payments.ts.
 
-import { siteDayKey, siteDayStart } from "./format";
+import { siteDayStart } from "./format";
 import { PAYMENT_METHOD_LABELS, roundOre } from "./settlement-shared";
 
 /** Ways money is taken at the desk. QUICKPAY (online card) only comes from the callback. */
@@ -129,19 +129,9 @@ export function isDayKey(v: unknown): v is string {
   return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
 }
 
-export function shiftDayKey(key: string, days: number): string {
-  const d = new Date(`${key}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 /** [start, end) of a site day. */
 export function siteDayRange(key: string): { start: Date; end: Date } {
   return { start: siteDayStart(key), end: siteDayStart(key, 1) };
-}
-
-export function todaySiteKey(now: Date = new Date()): string {
-  return siteDayKey(now)!;
 }
 
 // ──────────────────────────────────────────────

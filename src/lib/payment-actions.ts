@@ -13,16 +13,15 @@ import { logger } from "./logger";
 import { unitDisplayName } from "./utils";
 import { computeSettlement } from "./settlement";
 import { PaymentError, invoiceNet, registerPaymentCore, reversePaymentCore } from "./payments";
+import { addDaysToKey, todayKey } from "./check-in";
 import {
   isDayKey,
   paymentBasePurpose,
   paymentGroupKey,
   paymentPurposeLabel,
   reverseBlock,
-  shiftDayKey,
   siteDayRange,
   summarizeTill,
-  todaySiteKey,
   type PaymentActionResult,
   type PaymentFilter,
   type PaymentListRow,
@@ -179,7 +178,7 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<PaymentL
 /** "Kasse i dag": one site day's payments, totalled per method, user and purpose. */
 export async function getTillReport(date?: string): Promise<TillReport> {
   await requireAuth();
-  const today = todaySiteKey();
+  const today = todayKey();
   const day = date && isDayKey(date) && date <= today ? date : today;
   const { start, end } = siteDayRange(day);
   const [payments, settings] = await Promise.all([
@@ -189,8 +188,8 @@ export async function getTillReport(date?: string): Promise<TillReport> {
   const rows = await toListRows(payments);
   return {
     date: day,
-    prev: shiftDayKey(day, -1),
-    next: day < today ? shiftDayKey(day, 1) : null,
+    prev: addDaysToKey(day, -1),
+    next: day < today ? addDaysToKey(day, 1) : null,
     isToday: day === today,
     rows,
     summary: summarizeTill(rows),

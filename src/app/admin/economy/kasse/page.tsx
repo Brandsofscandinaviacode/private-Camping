@@ -10,7 +10,7 @@ import { TillRows } from "@/components/admin/till-rows";
 import { getTillReport } from "@/lib/payment-actions";
 import { fmtMoney } from "@/lib/settlement-shared";
 import { fmtDate, fmtDateTime } from "@/lib/format";
-import { todaySiteKey } from "@/lib/payments-shared";
+import { todayKey } from "@/lib/check-in";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +43,7 @@ export default async function TillPage({
           <Button variant="outline" size="sm"><ChevronLeft className="h-4 w-4" /></Button>
         </Link>
         <Form action="/admin/economy/kasse" className="flex items-center gap-2">
-          <Input type="date" name="date" defaultValue={report.date} max={todaySiteKey()} className="w-auto h-8" aria-label="Dato" />
+          <Input type="date" name="date" defaultValue={report.date} max={todayKey()} className="w-auto h-8" aria-label="Dato" />
           <Button type="submit" variant="outline" size="sm">Vis</Button>
         </Form>
         {report.next && (
