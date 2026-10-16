@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Save, Send, Loader2, ChevronDown, ChevronRight, Pencil } from "lucide-react";
+import { Save, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateSessionDetails, resendGuestNotification } from "@/lib/actions";
+import { updateSessionDetails } from "@/lib/actions";
 
 interface SessionEditFormProps {
   sessionId: number;
@@ -54,8 +54,6 @@ export function SessionEditForm({
 }: SessionEditFormProps) {
   const [isPending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
-  const [resending, setResending] = useState(false);
-  const [resendMsg, setResendMsg] = useState("");
   // Collapsed by default — editing is a secondary action, and the full form
   // dominated the page when always open.
   const [expanded, setExpanded] = useState(false);
@@ -99,20 +97,6 @@ export function SessionEditForm({
     });
   }
 
-  async function handleResend() {
-    setResending(true);
-    setResendMsg("");
-    try {
-      await resendGuestNotification(sessionId);
-      setResendMsg("Sendt!");
-      setTimeout(() => setResendMsg(""), 4000);
-    } catch (e) {
-      setResendMsg(e instanceof Error ? e.message : "Fejl ved afsendelse");
-    } finally {
-      setResending(false);
-    }
-  }
-
   function h(key: string, value: string) {
     setValues((v) => ({ ...v, [key]: value }));
   }
@@ -138,16 +122,7 @@ export function SessionEditForm({
             </span>
           )}
         </button>
-        <Button variant="outline" size="sm" onClick={handleResend} disabled={resending}>
-          {resending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-          {resending ? "Sender..." : "Gensend"}
-        </Button>
       </div>
-      {resendMsg && (
-        <div className={`mx-5 mb-3 text-sm p-2 rounded-lg ${resendMsg === "Sendt!" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-          {resendMsg}
-        </div>
-      )}
       {expanded && (
       <div className="p-5 pt-0 space-y-4 border-t border-border mt-1">
         <div>

@@ -15,6 +15,16 @@ import { logger } from "./logger";
 import { getBaseUrl } from "./base-url";
 import { cleanupMcpOAuth } from "./mcp/oauth";
 import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "./prepaid";
+import {
+  checkOutDateError,
+  describeWelcomeMessage,
+  isProviderBookingRef,
+  prepaidAmountError,
+  receiptMessage,
+  type CheckInResult,
+  type ReceiptLine,
+} from "./check-in";
+import { checkInHardwarePrecheck, startStayHardware } from "./check-in-hardware";
 
 // How long a PENDING laundry/shower row waits for its card payment before it
 // is auto-cancelled. Must comfortably exceed the time a guest can spend on the
@@ -740,60 +750,68 @@ export async function updateMultipleSettings(
 // ──────────────────────────────────────────────
 // CHECK-IN FLOW
 // ──────────────────────────────────────────────
-export async function checkIn(unitId: number, guestName: string, guestEmail?: string, guestPhone?: string, bookingRef?: string, expectedCheckOut?: string, billingMode?: "PREPAID" | "POSTPAID", prepaidAmount?: number) {
+export async function checkIn(
+  unitId: number,
+  guestName: string,
+  guestEmail?: string,
+  guestPhone?: string,
+  bookingRef?: string,
+  expectedCheckOut?: string,
+  billingMode?: "PREPAID" | "POSTPAID",
+  prepaidAmount?: number,
+  options?: { requireExpectedCheckOut?: boolean },
+): Promise<CheckInResult> {
   await requireAuth();
+  const name = guestName?.trim();
+  if (!name) return { ok: false, message: "Gæstens navn er påkrævet." };
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
   });
+  if (!unit) return { ok: false, message: "Enheden findes ikke." };
+  // Long-term tenants may have an open stay; the desk dialog requires a date
+  // for everyone else (the API keeps it optional).
+  const dateError = checkOutDateError(expectedCheckOut, {
+    required: !!options?.requireExpectedCheckOut && !unit.isLongTerm,
+  });
+  if (dateError) return { ok: false, message: dateError };
+  const mode = billingMode === "PREPAID" ? "PREPAID" : "POSTPAID";
+  if (mode === "PREPAID") {
+    const amountError = prepaidAmountError(prepaidAmount);
+    if (amountError) return { ok: false, message: amountError };
+  }
 
-  if (!unit) throw new Error("Enhed ikke fundet");
   // Claim the unit atomically so a double-click can't open two stays on it.
   const claimed = await prisma.unit.updateMany({
     where: { id: unitId, status: { not: "OCCUPIED" } },
     data: { status: "OCCUPIED" },
   });
-  if (claimed.count === 0) throw new Error("Enheden er allerede optaget");
-
-  const hw = unit.hardware;
-  const pricing = await getPricing();
-
-  let startKwh: number | null = null;
-  let startHeatingKwh: number | null = null;
-  let startWaterLiters: number | null = null;
-
-  if (hardware.hasElectricityMeter(hw)) {
-    startKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `checkIn:el unit=${unitId}`);
-  }
-  if (hardware.hasHeatingMeter(hw)) {
-    startHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `checkIn:heat unit=${unitId}`);
-  }
-  if (hardware.hasWaterMeter(hw)) {
-    startWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `checkIn:water unit=${unitId}`);
-  }
-
-  // Turn on electricity
-  if (hardware.hasElectricitySwitch(hw)) {
-    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { logger.error("hardware", "checkIn el on", e); }
-  }
-  // Turn on heating relay
-  if (hardware.hasHeatingSwitch(hw)) {
-    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { logger.error("hardware", "checkIn heat on", e); }
-  }
-  // Set climate (HA only)
-  if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { logger.error("hardware", "HA climate set occupied temp", e); }
-  }
-  // Unlock door (HA only)
-  if (hw?.hasSmartLock && hw.lockEntityId) {
-    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { logger.error("hardware", "HA unlock", e); }
-  }
+  if (claimed.count === 0) return { ok: false, message: "Enheden er allerede optaget – tjek den nuværende gæst ud først." };
 
   const guestPortalToken = uuidv4();
   let session: Awaited<ReturnType<typeof prisma.session.create>>;
+  let hwLines: ReceiptLine[];
   try {
+    const pricing = await getPricing();
+    const hw = await startStayHardware(unit.hardware, `checkIn unit=${unitId}`, pricing.defaultOccupiedTemp);
+    hwLines = hw.lines;
     session = await prisma.session.create({
-    data: { unitId, guestName, guestEmail: guestEmail || null, guestPhone: guestPhone || null, bookingRef: bookingRef || null, expectedCheckOut: expectedCheckOut ? new Date(expectedCheckOut) : null, billingMode: billingMode || "POSTPAID", prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, prepaidDeposited: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null, guestPortalToken, startKwh, startHeatingKwh, startWaterLiters, status: "ACTIVE" },
+      data: {
+        unitId,
+        guestName: name,
+        guestEmail: guestEmail?.trim() || null,
+        guestPhone: guestPhone?.trim() || null,
+        bookingRef: bookingRef?.trim() || null,
+        expectedCheckOut: expectedCheckOut ? plannedDate(expectedCheckOut) : null,
+        billingMode: mode,
+        prepaidAmount: mode === "PREPAID" ? prepaidAmount! : null,
+        prepaidDeposited: mode === "PREPAID" ? prepaidAmount! : null,
+        guestPortalToken,
+        startKwh: hw.startKwh,
+        startHeatingKwh: hw.startHeatingKwh,
+        startWaterLiters: hw.startWaterLiters,
+        status: "ACTIVE",
+      },
     });
   } catch (e) {
     // Release the claim so the unit isn't stuck OCCUPIED with no stay.
@@ -804,39 +822,90 @@ export async function checkIn(unitId: number, guestName: string, guestEmail?: st
   // Update unit status; for long-term units also store tenant info for invoicing/portal
   const updateData: Record<string, unknown> = { status: "OCCUPIED" };
   if (unit.isLongTerm) {
-    updateData.longTermGuestName = guestName;
-    updateData.longTermGuestEmail = guestEmail || null;
-    updateData.longTermGuestPhone = guestPhone || null;
+    updateData.longTermGuestName = session.guestName;
+    updateData.longTermGuestEmail = session.guestEmail;
+    updateData.longTermGuestPhone = session.guestPhone;
     updateData.longTermPortalToken = guestPortalToken;
   }
   await prisma.unit.update({ where: { id: unitId }, data: updateData });
 
-  // Send notifications (non-blocking)
-
   const dispName = unitDisplayName(unit.type, unit.name);
-  sendCheckInNotificationAsync(guestName, guestPhone, guestEmail, guestPortalToken, dispName);
+  const welcome = await sendWelcomeMessage(session, dispName);
+  const lines = [...hwLines, welcome.line];
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unitId}`);
-  return { session, guestPortalToken };
+  revalidatePath("/admin/bookings");
+  return {
+    ok: true,
+    message: receiptMessage(lines),
+    sessionId: session.id,
+    guestPortalToken,
+    receipt: {
+      sessionId: session.id,
+      unitId,
+      unitName: dispName,
+      guestName: session.guestName,
+      portalPath: `/guest/${guestPortalToken}`,
+      lines,
+    },
+  };
 }
 
-async function sendCheckInNotificationAsync(
-  guestName: string,
-  guestPhone?: string,
-  guestEmail?: string,
-  portalToken?: string,
-  unitName?: string,
-) {
-  try {
-    const { sendCheckInNotification } = await import("./notifications");
-    const settings = await readGlobalSettings();
-    const baseUrl = getBaseUrl(settings);
-    const portalUrl = `${baseUrl}/guest/${portalToken}`;
-    await sendCheckInNotification(guestName, guestPhone, guestEmail, portalUrl, unitName || "");
-  } catch (e) {
-    logger.error("notify", "Notification fejl", e);
+// A planned date ("YYYY-MM-DD") is stored at local noon, like the booking
+// sync does, so it stays the same calendar day in the site's time zone.
+function plannedDate(key: string): Date {
+  return new Date(`${key}T12:00:00`);
+}
+
+const WELCOME_TIMEOUT_MS = 15_000;
+
+// Sends the check-in welcome (portal link) and reports what really happened:
+// sent, switched off in settings, no address, or the provider's error.
+async function sendWelcomeMessage(
+  session: { id: number; guestName: string; guestEmail: string | null; guestPhone: string | null; guestPortalToken: string },
+  unitName: string,
+): Promise<{ sent: boolean; line: ReceiptLine }> {
+  const settings = await readGlobalSettings();
+  const base = {
+    emailEnabled: settings.notifications_email_enabled === "true",
+    smsEnabled: settings.notifications_sms_enabled === "true",
+    guestEmail: session.guestEmail,
+    guestPhone: session.guestPhone,
+  };
+  let outcome: { sent: boolean; line: ReceiptLine };
+  if ((base.emailEnabled && session.guestEmail) || (base.smsEnabled && session.guestPhone)) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const { sendCheckInNotification } = await import("./notifications");
+      const portalUrl = `${getBaseUrl(settings)}/guest/${session.guestPortalToken}`;
+      const sending = sendCheckInNotification(session.guestName, session.guestPhone, session.guestEmail, portalUrl, unitName);
+      sending.catch(() => {});
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), WELCOME_TIMEOUT_MS);
+      });
+      const result = await Promise.race([sending, timeout]);
+      outcome = result
+        ? describeWelcomeMessage({ ...base, result })
+        : describeWelcomeMessage({ ...base, error: "intet svar fra e-mail/SMS-udbyderen inden for 15 sek. – det er uvist, om beskeden kom frem" });
+    } catch (e) {
+      outcome = describeWelcomeMessage({ ...base, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      clearTimeout(timer);
+    }
+  } else {
+    outcome = describeWelcomeMessage(base);
   }
+  if (outcome.line.tone === "error") logger.error("notify", `Velkomstbesked ophold ${session.id}: ${outcome.line.text}`);
+  else logger.info("notify", `Velkomstbesked ophold ${session.id}: ${outcome.line.text}`);
+  return outcome;
+}
+
+/** Live meter/relay status before a check-in (only units with hardware). */
+export async function getCheckInHardwareStatus(unitId: number): Promise<{ lines: ReceiptLine[]; problem: boolean }> {
+  await requireAuth();
+  const hw = await prisma.unitHardware.findUnique({ where: { unitId } });
+  return checkInHardwarePrecheck(hw);
 }
 
 // ──────────────────────────────────────────────
@@ -2027,81 +2096,97 @@ export async function activateBookingSession(
     bookingRef?: string | null;
     expectedCheckOut?: string | null;
   },
-) {
+): Promise<CheckInResult> {
   await requireAuth();
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
   });
-  if (!session) throw new Error("Booking ikke fundet");
-  if (session.status !== "PENDING") throw new Error("Booking er allerede aktiveret");
-  // Claim the unit atomically so a double-click can't activate twice.
-  const claimed = await prisma.unit.updateMany({
-    where: { id: session.unit.id, status: { not: "OCCUPIED" } },
-    data: { status: "OCCUPIED" },
-  });
-  if (claimed.count === 0) throw new Error("Enheden er allerede optaget");
+  if (!session) return { ok: false, message: "Bookingen findes ikke." };
+  if (session.status === "ACTIVE") return { ok: false, message: "Gæsten er allerede tjekket ind." };
+  if (session.status !== "PENDING") return { ok: false, message: "Opholdet er afsluttet og kan ikke tjekkes ind igen." };
+  if (session.cancelledAt) return { ok: false, message: "Reservationen er annulleret og kan ikke tjekkes ind." };
 
   const unit = session.unit;
-  const hw = unit.hardware;
-  const pricing = await getPricing();
-
-  let startKwh: number | null = null;
-  let startHeatingKwh: number | null = null;
-  let startWaterLiters: number | null = null;
-
-  if (hardware.hasElectricityMeter(hw)) {
-    startKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `activate:el unit=${unit.id}`);
+  const mode = billingMode === "PREPAID" ? "PREPAID" : "POSTPAID";
+  if (mode === "PREPAID") {
+    const amountError = prepaidAmountError(prepaidAmount);
+    if (amountError) return { ok: false, message: amountError };
   }
-  if (hardware.hasHeatingMeter(hw)) {
-    startHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `activate:heat unit=${unit.id}`);
-  }
-  if (hardware.hasWaterMeter(hw)) {
-    startWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `activate:water unit=${unit.id}`);
-  }
-
-  if (hardware.hasElectricitySwitch(hw)) {
-    try { await hardware.setSwitch(hardware.electricitySwitchEp(hw!), true); } catch (e) { logger.error("hardware", "activate el on", e); }
-  }
-  if (hardware.hasHeatingSwitch(hw)) {
-    try { await hardware.setSwitch(hardware.heatingSwitchEp(hw!), true); } catch (e) { logger.error("hardware", "activate heat on", e); }
-  }
-  if (hw?.hasClimate && hw.climateEntityId) {
-    try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultOccupiedTemp); } catch (e) { logger.error("hardware", "activate climate", e); }
-  }
-  if (hw?.hasSmartLock && hw.lockEntityId) {
-    try { await ha.unlockDoor(hw.lockEntityId); } catch (e) { logger.error("hardware", "activate unlock", e); }
+  if (updates?.expectedCheckOut !== undefined) {
+    const dateError = checkOutDateError(updates.expectedCheckOut, { required: !unit.isLongTerm });
+    if (dateError) return { ok: false, message: dateError };
   }
 
   const finalGuestName = updates?.guestName?.trim() || session.guestName;
-  const finalGuestEmail = updates?.guestEmail !== undefined ? (updates.guestEmail || null) : session.guestEmail;
-  const finalGuestPhone = updates?.guestPhone !== undefined ? (updates.guestPhone || null) : session.guestPhone;
-  const finalBookingRef = updates?.bookingRef !== undefined ? (updates.bookingRef || null) : session.bookingRef;
+  const finalGuestEmail = updates?.guestEmail !== undefined ? (updates.guestEmail?.trim() || null) : session.guestEmail;
+  const finalGuestPhone = updates?.guestPhone !== undefined ? (updates.guestPhone?.trim() || null) : session.guestPhone;
+  // A booking-system ref ("danplanner:…") is the sync key and stays as it is.
+  const finalBookingRef = updates?.bookingRef !== undefined && !isProviderBookingRef(session.bookingRef)
+    ? (updates.bookingRef?.trim() || null)
+    : session.bookingRef;
   const finalExpectedCheckOut = updates?.expectedCheckOut !== undefined
-    ? (updates.expectedCheckOut ? new Date(updates.expectedCheckOut) : null)
+    ? (updates.expectedCheckOut ? plannedDate(updates.expectedCheckOut) : null)
     : session.expectedCheckOut;
 
-  const activated = await prisma.session.updateMany({
-    where: { id: sessionId, status: "PENDING" },
-    data: {
-      status: "ACTIVE",
-      billingMode,
-      prepaidAmount: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null,
-      prepaidDeposited: billingMode === "PREPAID" ? (prepaidAmount ?? null) : null,
-      guestName: finalGuestName,
-      guestEmail: finalGuestEmail,
-      guestPhone: finalGuestPhone,
-      bookingRef: finalBookingRef,
-      expectedCheckOut: finalExpectedCheckOut,
-      checkInTime: new Date(),
-      startKwh,
-      startHeatingKwh,
-      startWaterLiters,
-    },
+  // Contact details and dates corrected at the desk must survive the next
+  // booking sync, so they are recorded as locked fields.
+  const changed: string[] = [];
+  if (finalGuestName !== session.guestName) changed.push("guestName");
+  if (finalGuestEmail !== session.guestEmail) changed.push("guestEmail");
+  if (finalGuestPhone !== session.guestPhone) changed.push("guestPhone");
+  if ((finalExpectedCheckOut?.getTime() ?? null) !== (session.expectedCheckOut?.getTime() ?? null)) changed.push("expectedCheckOut");
+  let lockedFields = session.lockedFields;
+  if (changed.length > 0) {
+    let locked: string[] = [];
+    try {
+      const parsed = JSON.parse(session.lockedFields || "[]");
+      if (Array.isArray(parsed)) locked = parsed.filter((f): f is string => typeof f === "string");
+    } catch { /* corrupt value — start over */ }
+    lockedFields = JSON.stringify([...new Set([...locked, ...changed])]);
+  }
+
+  // Claim the unit atomically so a double-click can't activate twice.
+  const claimed = await prisma.unit.updateMany({
+    where: { id: unit.id, status: { not: "OCCUPIED" } },
+    data: { status: "OCCUPIED" },
   });
+  if (claimed.count === 0) {
+    return { ok: false, message: "Enheden er allerede optaget af en anden gæst – tjek den gæst ud først." };
+  }
+
+  let hwLines: ReceiptLine[];
+  let activated: { count: number };
+  try {
+    const pricing = await getPricing();
+    const hw = await startStayHardware(unit.hardware, `activate unit=${unit.id}`, pricing.defaultOccupiedTemp);
+    hwLines = hw.lines;
+    activated = await prisma.session.updateMany({
+      where: { id: sessionId, status: "PENDING" },
+      data: {
+        status: "ACTIVE",
+        billingMode: mode,
+        prepaidAmount: mode === "PREPAID" ? prepaidAmount! : null,
+        prepaidDeposited: mode === "PREPAID" ? prepaidAmount! : null,
+        guestName: finalGuestName,
+        guestEmail: finalGuestEmail,
+        guestPhone: finalGuestPhone,
+        bookingRef: finalBookingRef,
+        expectedCheckOut: finalExpectedCheckOut,
+        lockedFields,
+        checkInTime: new Date(),
+        startKwh: hw.startKwh,
+        startHeatingKwh: hw.startHeatingKwh,
+        startWaterLiters: hw.startWaterLiters,
+      },
+    });
+  } catch (e) {
+    await prisma.unit.updateMany({ where: { id: unit.id, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
+    throw e;
+  }
   if (activated.count === 0) {
     await prisma.unit.updateMany({ where: { id: unit.id, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
-    throw new Error("Booking er allerede aktiveret");
+    return { ok: false, message: "Gæsten er allerede tjekket ind." };
   }
 
   const updateData: Record<string, unknown> = { status: "OCCUPIED" };
@@ -2113,15 +2198,31 @@ export async function activateBookingSession(
   }
   await prisma.unit.update({ where: { id: unit.id }, data: updateData });
 
-
   const dispName = unitDisplayName(unit.type, unit.name);
-  sendCheckInNotificationAsync(finalGuestName, finalGuestPhone ?? undefined, finalGuestEmail ?? undefined, session.guestPortalToken, dispName);
+  const welcome = await sendWelcomeMessage(
+    { id: sessionId, guestName: finalGuestName, guestEmail: finalGuestEmail, guestPhone: finalGuestPhone, guestPortalToken: session.guestPortalToken },
+    dispName,
+  );
+  const lines = [...hwLines, welcome.line];
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unit.id}`);
   revalidatePath(`/admin/bookings/${sessionId}`);
   revalidatePath("/admin/bookings");
-  return { success: true };
+  return {
+    ok: true,
+    message: receiptMessage(lines),
+    sessionId,
+    guestPortalToken: session.guestPortalToken,
+    receipt: {
+      sessionId,
+      unitId: unit.id,
+      unitName: dispName,
+      guestName: finalGuestName,
+      portalPath: `/guest/${session.guestPortalToken}`,
+      lines,
+    },
+  };
 }
 
 // ──────────────────────────────────────────────
@@ -3014,31 +3115,21 @@ export async function updateSessionDetails(
   revalidatePath(`/admin/bookings/${sessionId}`);
 }
 
-export async function resendGuestNotification(sessionId: number) {
+export async function resendGuestNotification(sessionId: number): Promise<{ ok: boolean; message: string }> {
   await requireAuth();
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: true },
   });
-  if (!session) throw new Error("Session ikke fundet");
-
+  if (!session) return { ok: false, message: "Bookingen findes ikke." };
+  // The template says "du er checket ind" — only true for an active stay.
+  if (session.status !== "ACTIVE") {
+    return { ok: false, message: "Portal-linket kan kun sendes til en gæst, der er tjekket ind." };
+  }
 
   const dispName = unitDisplayName(session.unit.type, session.unit.name);
-
-  const { sendCheckInNotification } = await import("./notifications");
-  const settings = await readGlobalSettings();
-  const baseUrl = getBaseUrl(settings);
-  const portalUrl = `${baseUrl}/guest/${session.guestPortalToken}`;
-
-  await sendCheckInNotification(
-    session.guestName,
-    session.guestPhone || undefined,
-    session.guestEmail || undefined,
-    portalUrl,
-    dispName,
-  );
-
-  return { ok: true };
+  const { sent, line } = await sendWelcomeMessage(session, dispName);
+  return { ok: sent, message: line.text };
 }
 
 export async function getUnpaidCount() {

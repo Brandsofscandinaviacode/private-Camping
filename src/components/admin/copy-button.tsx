@@ -7,16 +7,20 @@ import { Button } from "@/components/ui/button";
 interface CopyButtonProps {
   text: string;
   label?: string;
+  /** Public base URL (Site URL); falls back to the address the desk is on. */
+  baseUrl?: string;
 }
 
-export function CopyButton({ text, label = "Kopiér" }: CopyButtonProps) {
+export function CopyButton({ text, label = "Kopiér", baseUrl }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
     const fullUrl =
-      typeof window !== "undefined"
-        ? `${window.location.origin}${text}`
-        : text;
+      baseUrl
+        ? `${baseUrl}${text}`
+        : typeof window !== "undefined"
+          ? `${window.location.origin}${text}`
+          : text;
 
     try {
       // Try modern clipboard API first (works on HTTPS)
@@ -41,7 +45,7 @@ export function CopyButton({ text, label = "Kopiér" }: CopyButtonProps) {
       // Last resort: show the URL in a prompt
       window.prompt("Kopiér dette link:", fullUrl);
     }
-  }, [text]);
+  }, [text, baseUrl]);
 
   return (
     <Button variant="ghost" size="sm" onClick={handleCopy}>
