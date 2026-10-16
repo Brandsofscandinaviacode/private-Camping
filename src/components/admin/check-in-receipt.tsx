@@ -35,10 +35,13 @@ function dismissReceipt() {
   emit();
 }
 
-/** Shows the receipt of a check-in of this booking until the desk closes it. */
-export function CheckInReceiptHost({ sessionId, siteUrl }: { sessionId: number; siteUrl: string }) {
+/**
+ * Shows the receipt of a check-in of this booking until the desk closes it.
+ * Without a sessionId (a list page such as "I dag"), any check-in's receipt.
+ */
+export function CheckInReceiptHost({ sessionId, siteUrl }: { sessionId?: number; siteUrl: string }) {
   const receipt = useSyncExternalStore(subscribe, () => current, () => null);
-  if (!receipt || receipt.sessionId !== sessionId) return null;
+  if (!receipt || (sessionId !== undefined && receipt.sessionId !== sessionId)) return null;
 
   const problem = receipt.lines.some((l) => l.tone === "error");
   return (

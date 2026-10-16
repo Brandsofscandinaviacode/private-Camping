@@ -1,6 +1,8 @@
-import { Users, CalendarDays, LogIn, LogOut, Zap, Droplets, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { Users, CalendarDays, LogIn, LogOut, Zap, Droplets, TrendingUp, ChevronRight } from "lucide-react";
 import { UNIT_STATE } from "@/lib/unit-state";
-import { fmtShortDate, fmtTime, siteDayKey } from "@/lib/format";
+import { fmtRelativeDay, fmtShortDate, fmtTime, siteDayKey } from "@/lib/format";
+import { todayHref } from "@/lib/today";
 
 // da-DK number helpers
 const kr = (n: number) => n.toFixed(2).replace(".", ",");
@@ -22,7 +24,8 @@ interface KpiProps {
   movements: {
     arrivals: number;
     departures: number;
-    nextCheckIn: { time: string; unitName: string } | null;
+    /** time is the booking's arrival — only a date for imported bookings. */
+    nextCheckIn: { time: string; unitName: string; guestName?: string } | null;
   };
   /** Weekly kWh totals (oldest first) for the sparkline under "Forbrug nu". */
   history?: { period: string; el: number; water: number }[];
@@ -82,9 +85,8 @@ export function DashboardKpis({ total, occupied, arrived = 0, reserved, vacant, 
   const answering = totalUsage?.unitCount ?? 0;
   // Nothing fresh to show: "—", never an old rate as "now"
   const usageLive = !!totalUsage && answering > 0;
-  const nextTime = movements.nextCheckIn
-    ? new Intl.DateTimeFormat("da-DK", { hour: "2-digit", minute: "2-digit" }).format(new Date(movements.nextCheckIn.time))
-    : null;
+  // Imported bookings carry no real arrival time: the day, never a clock time.
+  const nextDay = movements.nextCheckIn ? fmtRelativeDay(movements.nextCheckIn.time) : null;
   const showPrice = elPricing && elPricing.mode !== "fixed";
 
   return (
@@ -113,25 +115,32 @@ export function DashboardKpis({ total, occupied, arrived = 0, reserved, vacant, 
 
       {/* I dag */}
       <Card>
-        <Label icon={CalendarDays} tint="bg-blue-500/10 text-blue-600">I dag</Label>
+        <div className="flex items-center justify-between gap-2">
+          <Label icon={CalendarDays} tint="bg-blue-500/10 text-blue-600">I dag</Label>
+          <Link href="/admin/today" className="text-xs font-medium text-muted-foreground hover:text-foreground inline-flex items-center">
+            Dagsliste<ChevronRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
         <div className="flex mt-2.5">
-          <div className="flex-1">
+          <Link href={todayHref("arrivals")} className="flex-1 rounded-lg -m-1 p-1 hover:bg-muted/50 transition-colors">
             <p className="text-[28px] font-bold tracking-tight tabular-nums leading-none">{movements.arrivals}</p>
             <p className="text-xs text-muted-foreground mt-1.5 inline-flex items-center gap-1.5">
               <LogIn className="h-3.5 w-3.5 text-emerald-500" />Ankomster
             </p>
-          </div>
+          </Link>
           <div className="flex-1 border-l border-border pl-4">
-            <p className="text-[28px] font-bold tracking-tight tabular-nums leading-none">{movements.departures}</p>
-            <p className="text-xs text-muted-foreground mt-1.5 inline-flex items-center gap-1.5">
-              <LogOut className="h-3.5 w-3.5 text-muted-foreground" />Afrejser
-            </p>
+            <Link href={todayHref("departures")} className="block rounded-lg -m-1 p-1 hover:bg-muted/50 transition-colors">
+              <p className="text-[28px] font-bold tracking-tight tabular-nums leading-none">{movements.departures}</p>
+              <p className="text-xs text-muted-foreground mt-1.5 inline-flex items-center gap-1.5">
+                <LogOut className="h-3.5 w-3.5 text-muted-foreground" />Afrejser
+              </p>
+            </Link>
           </div>
         </div>
-        <p className="text-[12.5px] text-muted-foreground mt-3">
+        <p className="text-[12.5px] text-muted-foreground mt-3 truncate">
           {movements.nextCheckIn
-            ? <>Næste check-in <b className="text-foreground font-semibold">{nextTime}</b> · {movements.nextCheckIn.unitName}</>
-            : "Ingen flere ankomster i dag"}
+            ? <>Næste check-in <b className="text-foreground font-semibold">{nextDay}</b> · {movements.nextCheckIn.unitName}{movements.nextCheckIn.guestName && <> · {movements.nextCheckIn.guestName}</>}</>
+            : "Ingen kommende ankomster"}
         </p>
       </Card>
 

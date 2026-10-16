@@ -44,7 +44,7 @@ import {
   type CheckInResult,
   type ReceiptLine,
 } from "./check-in";
-import { checkInHardwarePrecheck, startStayHardware } from "./check-in-hardware";
+import { checkInHardwarePrecheck, startStayHardware, unitHardwareSummary } from "./check-in-hardware";
 import {
   planGuestFunding,
   fundingPaymentFields,
@@ -2349,6 +2349,12 @@ export async function activateBookingSession(
     expectedCheckOut?: string | null;
   },
   payment?: { method?: string; note?: string },
+  /**
+   * keepArrivalDate: a guest who came on an earlier day keeps the booked
+   * arrival as check-in time (units without meters only). sendWelcome: false
+   * skips the portal-link message (default: send, as before).
+   */
+  opts?: { keepArrivalDate?: boolean; sendWelcome?: boolean },
 ): Promise<CheckInResult> {
   const auth = await requireAuth();
   const session = await prisma.session.findUnique({
@@ -2396,6 +2402,19 @@ export async function activateBookingSession(
   if ((finalExpectedCheckOut?.getTime() ?? null) !== (session.expectedCheckOut?.getTime() ?? null)) changed.push("expectedCheckOut");
   const lockedFields = changed.length > 0 ? addLockedFields(session.lockedFields, changed) : session.lockedFields;
 
+  // Catching up on a guest who arrived days ago: the stay keeps its booked
+  // arrival. Not on metered units — their stay starts at the start reading
+  // (taken now), and the tick's plausibility cap counts from check-in.
+  const now = new Date();
+  const arrivedEarlier = siteDayKey(session.checkInTime)! < siteDayKey(now)!;
+  const metered = unitHardwareSummary(unit.hardware).meters;
+  const keepArrival = !!opts?.keepArrivalDate && arrivedEarlier && !metered;
+  const arrivalLine: ReceiptLine | null = opts?.keepArrivalDate && arrivedEarlier
+    ? keepArrival
+      ? { label: "Check-in-tid", tone: "info", text: `Ankomstdatoen ${fmtDate(session.checkInTime)} er beholdt` }
+      : { label: "Check-in-tid", tone: "info", text: "Nu – enheden har målere, så opholdet starter ved startaflæsningen" }
+    : null;
+
   // Claim the unit atomically so a double-click can't activate twice.
   const claimed = await prisma.unit.updateMany({
     where: { id: unit.id, status: { not: "OCCUPIED" } },
@@ -2433,8 +2452,8 @@ export async function activateBookingSession(
           bookingRef: finalBookingRef,
           expectedCheckOut: finalExpectedCheckOut,
           lockedFields,
-          checkInTime: new Date(),
-          checkInRecordedAt: new Date(),
+          checkInTime: keepArrival ? session.checkInTime : now,
+          checkInRecordedAt: now,
           startKwh: hw.startKwh,
           startHeatingKwh: hw.startHeatingKwh,
           startWaterLiters: hw.startWaterLiters,
@@ -2462,12 +2481,14 @@ export async function activateBookingSession(
   await prisma.unit.update({ where: { id: unit.id }, data: updateData });
 
   const dispName = unitDisplayName(unit.type, unit.name);
-  const welcome = await sendWelcomeMessage(
-    { id: sessionId, guestName: finalGuestName, guestEmail: finalGuestEmail, guestPhone: finalGuestPhone, guestPortalToken: session.guestPortalToken },
-    dispName,
-  );
+  const welcome = opts?.sendWelcome === false
+    ? { sent: false, line: { label: "Velkomstbesked", tone: "info", text: "Ikke sendt – fravalgt ved check-in" } satisfies ReceiptLine }
+    : await sendWelcomeMessage(
+        { id: sessionId, guestName: finalGuestName, guestEmail: finalGuestEmail, guestPhone: finalGuestPhone, guestPortalToken: session.guestPortalToken },
+        dispName,
+      );
   const depositInfo = await depositReceipt(sessionId, deposit);
-  const lines = [...hwLines, ...(depositInfo ? [depositInfo.line] : []), welcome.line];
+  const lines = [...(arrivalLine ? [arrivalLine] : []), ...hwLines, ...(depositInfo ? [depositInfo.line] : []), welcome.line];
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unit.id}`);

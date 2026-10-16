@@ -33,12 +33,14 @@ interface BookingCheckoutButtonProps {
   expectedCheckOut?: string | null;
   /** Long-term unit: offer to end the tenancy as well. */
   isLongTerm?: boolean;
+  /** Small "Tjek ud" button for list rows. */
+  compact?: boolean;
 }
 
 /**
- * The one check-out flow (booking page and unit page): shows what the stay
- * settles to and how fresh each meter reading is before the operator confirms,
- * then opens the printable statement.
+ * The one check-out flow (booking page, unit page, "I dag"): shows what the
+ * stay settles to and how fresh each meter reading is before the operator
+ * confirms, then opens the printable statement.
  */
 export function BookingCheckoutButton({
   sessionId,
@@ -46,6 +48,7 @@ export function BookingCheckoutButton({
   unitName,
   expectedCheckOut = null,
   isLongTerm = false,
+  compact = false,
 }: BookingCheckoutButtonProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -183,9 +186,9 @@ export function BookingCheckoutButton({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button variant="destructive" className="w-full" />}>
-        <LogOut className="h-4 w-4 mr-2" />
-        Check-out &amp; opgørelse
+      <DialogTrigger render={compact ? <Button size="sm" /> :<Button variant="destructive" className="w-full" />}>
+        <LogOut className={compact ? "h-3.5 w-3.5 mr-1" : "h-4 w-4 mr-2"} />
+        {compact ? "Tjek ud" : <>Check-out &amp; opgørelse</>}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>

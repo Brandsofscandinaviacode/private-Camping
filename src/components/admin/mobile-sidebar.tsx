@@ -15,12 +15,14 @@ import {
   X,
   Tent,
   Map,
+  CalendarCheck,
 } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { ThemeToggle } from "@/components/admin/theme-toggle";
 
 const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt", exact: true },
+  { href: "/admin/today", label: "I dag", icon: CalendarCheck, section: "Oversigt" },
   { href: "/admin/map", label: "Pladskort", icon: Map, section: "Oversigt" },
   { href: "/admin/bookings", label: "Bookinger", icon: BookOpen, section: "Oversigt", badge: true },
   { href: "/admin/elpriser", label: "Elpriser", icon: Zap, section: "Oversigt" },
