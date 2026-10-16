@@ -554,3 +554,59 @@ model PrepaidTopUp {
   @@index([sessionId])
   @@map("prepaid_topups")
 }
+
+// ──────────────────────────────────────────────
+// MCP access (Claude connector) — OAuth 2.1 clients, codes and tokens.
+// Only SHA-256 hashes of codes/tokens/secrets are stored.
+// ──────────────────────────────────────────────
+model McpOAuthClient {
+  id                      Int       @id @default(autoincrement())
+  clientId                String    @unique
+  clientSecretHash        String?                       // null for public clients (PKCE only)
+  clientName              String?
+  redirectUris            String                        // JSON array of exact redirect URIs
+  tokenEndpointAuthMethod String    @default("none")    // none | client_secret_post | client_secret_basic
+  createdAt               DateTime  @default(now())
+  lastUsedAt              DateTime?
+
+  codes  McpOAuthCode[]
+  tokens McpOAuthToken[]
+
+  @@map("mcp_oauth_clients")
+}
+
+model McpOAuthCode {
+  id            Int            @id @default(autoincrement())
+  codeHash      String         @unique
+  clientId      String
+  client        McpOAuthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  userId        Int
+  redirectUri   String
+  codeChallenge String                                  // S256
+  scope         String
+  resource      String?
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime       @default(now())
+
+  @@index([clientId])
+  @@map("mcp_oauth_codes")
+}
+
+model McpOAuthToken {
+  id         Int            @id @default(autoincrement())
+  tokenHash  String         @unique
+  kind       String                                     // access | refresh
+  clientId   String
+  client     McpOAuthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  userId     Int
+  scope      String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime       @default(now())
+
+  @@index([clientId])
+  @@index([expiresAt])
+  @@map("mcp_oauth_tokens")
+}
