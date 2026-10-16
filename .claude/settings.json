@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc --noEmit -p .)",
+      "mcp__campsense__list_sessions",
+      "mcp__campsense__get_system_status"
+    ]
+  }
+}
