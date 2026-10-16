@@ -11,7 +11,7 @@ import { readGlobalSettings } from "./settings";
 import { logger } from "./logger";
 import { unitDisplayName } from "./utils";
 import { activateBookingSession } from "./actions";
-import { hasArrivedNotCheckedIn, overdueStayWhere } from "./booking-status";
+import { hasArrivedNotCheckedIn, overdueStayWhere, isReservationExpired } from "./booking-status";
 import { isProviderBookingRef } from "./booking-ref";
 import { bookingSystemLabel } from "./booking/sync";
 import { unitHardwareSummary } from "./check-in-hardware";
@@ -145,6 +145,10 @@ export async function activateBookingSessions(sessionIds: number[], opts: BulkCh
     // Same rules as the dialog, checked up front for a clear reason per row.
     if (s.status === "PENDING" && siteDayKey(s.checkInTime)! > siteDayKey(now)!) {
       results.push({ ...base, ok: false, message: `Ankommer først ${fmtDate(s.checkInTime)}.` });
+      continue;
+    }
+    if (s.status === "PENDING" && (s.cancelledAt || isReservationExpired(s, now))) {
+      results.push({ ...base, ok: false, message: s.cancelledAt ? "Reservationen er annulleret/udeblevet." : "Reservationen er udløbet – opholdet er slut." });
       continue;
     }
     if (s.status === "PENDING" && !s.expectedCheckOut && !s.unit.isLongTerm) {

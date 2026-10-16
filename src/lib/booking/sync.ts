@@ -170,10 +170,24 @@ async function applyBookings(
       if (existing.status !== "PENDING" && existing.status !== "ACTIVE") continue;
       const m = mergeBookingIntoStay(existing, incoming);
       if (!m.dirty) continue;
-      await prisma.session.update({
-        where: { id: existing.id },
+      // Optimistic write: the merge was computed from the row as read at the
+      // start of the run. If the desk checked in, moved, edited or cancelled
+      // it meanwhile (updatedAt changed), skip — the next run merges again
+      // from the fresh row instead of writing stale arrival/unit values over it.
+      const written = await prisma.session.updateMany({
+        where: {
+          id: existing.id,
+          status: existing.status,
+          cancelledAt: null,
+          unitId: existing.unitId,
+          updatedAt: existing.updatedAt,
+        },
         data: { ...m.data, lastSyncedValues: m.lastSyncedValues, syncConflicts: m.syncConflicts },
       });
+      if (written.count === 0) {
+        logger.info("danplanner", "Booking changed at the desk during sync — merged next run", { sessionId: existing.id });
+        continue;
+      }
       if (m.applied.length > 0) updated++;
       if (m.newConflicts.length > 0) conflicts++;
       if (m.applied.length > 0 || m.newConflicts.length > 0) {

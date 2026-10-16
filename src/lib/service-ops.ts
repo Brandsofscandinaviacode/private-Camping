@@ -199,8 +199,16 @@ export async function cancelAndRefundService(
     return { ok: false, message: "Annulleringen kunne ikke gemmes — prøv igen" };
   }
 
+  // Only cut the relay if this row is really what's running on the device:
+  // once its end time has passed, a new guest may already have started
+  // (new starts are allowed then), and refunding the previous one must not
+  // turn off the next guest's water or wash.
   let relayNote = "";
-  if (wasRunning) {
+  const stillItsTurn = row.status === "PAUSED" || (row.endsAt != null && new Date(row.endsAt) > now);
+  const someoneElseRunning = !wasRunning ? false : kind === "LAUNDRY"
+    ? (await prisma.laundrySess.count({ where: { machineId: device.id, id: { not: row.id }, status: { in: ["ACTIVE", "PENDING"] } } })) > 0
+    : (await prisma.showerSess.count({ where: { showerId: device.id, id: { not: row.id }, status: { in: ["ACTIVE", "PAUSED", "PENDING"] } } })) > 0;
+  if (wasRunning && stillItsTurn && !someoneElseRunning) {
     try {
       await hardware.setSwitch(hardware.switchRowEp(device), false);
     } catch (e) {

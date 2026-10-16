@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
+import { scrubText } from "./mcp/redact";
 import { arrivedNotCheckedInWhere, cancelledReservationWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, hasArrivedNotCheckedIn } from "./booking-status";
 import { BOOKING_MAX_LIMIT, BOOKING_PAGE_SIZE, BOOKING_SEARCH_SCAN, compareBookingRows, rankBookingSearch, type BookingListFilter as ListFilter } from "./booking-list";
 import { hasAnyHardware, unitStateKey, METER_FRESH_MS } from "./unit-state";
@@ -44,7 +45,7 @@ import {
   type CheckInResult,
   type ReceiptLine,
 } from "./check-in";
-import { checkInHardwarePrecheck, startStayHardware, unitHardwareSummary } from "./check-in-hardware";
+import { checkInHardwarePrecheck, startStayHardware, undoStayHardware, unitHardwareSummary } from "./check-in-hardware";
 import {
   planGuestFunding,
   fundingPaymentFields,
@@ -994,8 +995,10 @@ async function sendWelcomeMessage(
   } else {
     outcome = describeWelcomeMessage(base);
   }
-  if (outcome.line.tone === "error") logger.error("notify", `Velkomstbesked ophold ${session.id}: ${outcome.line.text}`);
-  else logger.info("notify", `Velkomstbesked ophold ${session.id}: ${outcome.line.text}`);
+  // The receipt text names the recipient; the log keeps only a masked form.
+  const logText = scrubText(outcome.line.text).replace(/\b(?:\d{2} ?){3}\d{2}\b/g, (m) => `***${m.replace(/\D/g, "").slice(-3)}`);
+  if (outcome.line.tone === "error") logger.error("notify", `Velkomstbesked ophold ${session.id}: ${logText}`);
+  else logger.info("notify", `Velkomstbesked ophold ${session.id}: ${logText}`);
   return outcome;
 }
 
@@ -1290,12 +1293,14 @@ async function checkOutInternal(sessionId: number, options: CheckoutOptions, use
   // (concurrent checkOut call, admin double-click, etc.). Prevents double
   // check-out and ensures concurrent cron ticks can no longer mutate this
   // session via tickSessionConsumption's own status=ACTIVE guard.
+  // Also guarded on the unit: a concurrent "Skift enhed" moves meters and
+  // relays, so readings taken on the old unit must not close the stay.
   const res = await prisma.session.updateMany({
-    where: { id: sessionId, status: "ACTIVE" },
+    where: { id: sessionId, status: "ACTIVE", unitId: session.unitId },
     data: updateData,
   });
   if (res.count === 0) {
-    return { ok: false, message: "Opholdet er allerede tjekket ud eller blev ændret samtidig. Genindlæs siden." };
+    return { ok: false, message: "Opholdet er allerede tjekket ud, eller det blev flyttet/ændret samtidig. Genindlæs siden." };
   }
   if (noteLine) logger.info("checkout", `Ophold ${sessionId}: ${noteParts.join(". ")}`);
 
@@ -2438,8 +2443,11 @@ export async function activateBookingSession(
     hwLines = hw.lines;
     // The deposit's ledger row is written with the activation, or not at all.
     activated = await prisma.$transaction(async (tx) => {
+      // Guarded on everything read above: a reservation cancelled, or moved to
+      // another unit (desk or sync), while the hardware was being switched
+      // must not go ACTIVE on this unit.
       const res = await tx.session.updateMany({
-        where: { id: sessionId, status: "PENDING" },
+        where: { id: sessionId, status: "PENDING", cancelledAt: null, unitId: unit.id },
         data: {
           status: "ACTIVE",
           billingMode: mode,
@@ -2462,12 +2470,20 @@ export async function activateBookingSession(
       return res;
     });
   } catch (e) {
+    await undoStayHardware(unit.hardware, `activate unit=${unit.id}`);
     await prisma.unit.updateMany({ where: { id: unit.id, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
     throw e;
   }
   if (activated.count === 0) {
+    await undoStayHardware(unit.hardware, `activate unit=${unit.id}`);
     await prisma.unit.updateMany({ where: { id: unit.id, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
-    return { ok: false, message: "Gæsten er allerede tjekket ind." };
+    const now2 = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true, cancelledAt: true, unitId: true } });
+    const message = !now2 ? "Bookingen findes ikke længere."
+      : now2.status === "ACTIVE" ? "Gæsten er allerede tjekket ind."
+      : now2.cancelledAt ? "Reservationen er netop blevet annulleret eller markeret som udeblevet."
+      : now2.unitId !== unit.id ? "Reservationen er netop flyttet til en anden enhed — åbn bookingen igen."
+      : "Bookingen blev ændret undervejs — prøv igen.";
+    return { ok: false, message };
   }
 
   const updateData: Record<string, unknown> = { status: "OCCUPIED" };
@@ -2714,9 +2730,27 @@ async function createMonthlyInvoiceInternal(unitId: number, opts: { manualEl?: M
         orderBy: { id: "desc" },
       });
 
+  // A stay on this unit that ended since the last invoice was settled at its
+  // own check-out, remainder included. A later unit invoice must continue
+  // from that check-out (period and meter readings), or it bills the last
+  // stretch a second time and lands on the finished stay's bill.
+  const lastClosedStay = activeSessionForPeriod
+    ? null
+    : await prisma.session.findFirst({
+        where: {
+          unitId,
+          status: "COMPLETED",
+          checkOutTime: { not: null, ...(lastUnitInvoice ? { gt: lastUnitInvoice.periodEnd } : {}) },
+        },
+        orderBy: { checkOutTime: "desc" },
+        select: { checkOutTime: true, endKwh: true, endHeatingKwh: true, endWaterLiters: true, lastTickKwh: true, lastTickHeatingKwh: true, lastTickWaterLiters: true },
+      });
+
   const periodStart = activeSessionForPeriod
     ? await stayInvoicePeriodStart(unitId, activeSessionForPeriod)
-    : (lastUnitInvoice?.periodEnd ?? new Date(now.getFullYear(), now.getMonth() - (now.getDate() <= 7 ? 1 : 0), 1));
+    : (lastClosedStay?.checkOutTime
+      ?? lastUnitInvoice?.periodEnd
+      ?? new Date(now.getFullYear(), now.getMonth() - (now.getDate() <= 7 ? 1 : 0), 1));
   // Without a session (long-term tenant) the invoice covers the time since
   // the last invoice up to now. A calendar-month period labelled the day-1
   // run as the month just starting and excluded last month's services.
@@ -2784,6 +2818,14 @@ async function createMonthlyInvoiceInternal(unitId: number, opts: { manualEl?: M
     } else {
       startWaterLiters = activeSession?.startWaterLiters ?? endWaterLiters;
     }
+  }
+  if (lastClosedStay && !activeSession) {
+    const closedEl = lastClosedStay.endKwh ?? lastClosedStay.lastTickKwh;
+    const closedHeat = lastClosedStay.endHeatingKwh ?? lastClosedStay.lastTickHeatingKwh;
+    const closedWater = lastClosedStay.endWaterLiters ?? lastClosedStay.lastTickWaterLiters;
+    if (closedEl != null) startKwh = closedEl;
+    if (closedHeat != null) startHeatingKwh = closedHeat;
+    if (closedWater != null) startWaterLiters = closedWater;
   }
 
   // Tick the active session first so the accumulator is current right up
@@ -2857,8 +2899,10 @@ async function createMonthlyInvoiceInternal(unitId: number, opts: { manualEl?: M
   let servicesCost = 0;
   if (activeSession) {
     const [laundryAgg, showerAgg] = await Promise.all([
+      // A metered wash still running has no final price yet — it is billed
+      // when it finishes (on the next invoice or at checkout), not now at 0 kr.
       prisma.laundrySess.aggregate({
-        where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", createdAt: { gte: periodStart, lte: periodEnd } },
+        where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", createdAt: { gte: periodStart, lte: periodEnd }, NOT: { status: "ACTIVE", billingMode: "METERED" } },
         _sum: { pricePaid: true },
       }),
       prisma.showerSess.aggregate({
@@ -2874,60 +2918,72 @@ async function createMonthlyInvoiceInternal(unitId: number, opts: { manualEl?: M
     throw new Error("Beløbet skal være mindst 1 DKK — intet nyt forbrug siden sidste faktura");
   }
 
-  const invoice = await prisma.invoice.create({
-    data: {
-      unitId,
-      // The stay it bills, so it follows the stay if the guest changes unit.
-      sessionId: activeSession?.id ?? null,
-      periodStart,
-      periodEnd,
-      startKwh: manualEl ? manualEl.startKwh : startKwh,
-      endKwh: manualEl ? manualEl.endKwh : endKwh,
-      startHeatingKwh,
-      endHeatingKwh,
-      startWaterLiters,
-      endWaterLiters,
-      electricityCost,
-      waterCost,
-      servicesCost,
-      totalAmount,
-      status: "PENDING",
-      paymentToken: uuidv4(),
-    },
-  });
-
-  // Services just billed on this invoice must not be billed again at checkout.
-  if (activeSession && servicesCost > 0) {
-    await Promise.all([
-      prisma.laundrySess.updateMany({
-        where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", createdAt: { gte: periodStart, lte: periodEnd } },
-        data: { paymentStatus: "INVOICED" },
-      }),
-      prisma.showerSess.updateMany({
-        where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", startedAt: { gte: periodStart, lte: periodEnd } },
-        data: { paymentStatus: "INVOICED" },
-      }),
-    ]);
-  }
-
-  // Subtract exactly what was billed — a tick that committed between our
-  // read and this write keeps its (unbilled) contribution instead of being
-  // wiped by a reset to 0. lastTick* stay so the next tick's delta is right.
-  if (sessionForBilling && (useElAccumulator || useWaterAccumulator)) {
-    await prisma.session.update({
-      where: { id: sessionForBilling.id },
+  // One transaction for the invoice, the services it marks and the
+  // accumulator it drains — and abort if another invoice for this unit was
+  // created after we read the previous ones (two screens, or the cron and the
+  // desk at once), which would bill the same consumption twice.
+  const latestPrevInvoiceId = allPrevInvoices[0]?.id ?? 0;
+  const invoice = await prisma.$transaction(async (tx) => {
+    const newer = await tx.invoice.count({ where: { unitId, id: { gt: latestPrevInvoiceId } } });
+    if (newer > 0) {
+      throw new Error("Der er netop oprettet en anden faktura for enheden — genindlæs siden og prøv igen");
+    }
+    const created = await tx.invoice.create({
       data: {
-        ...(useElAccumulator ? {
-          accumulatedElCost: { decrement: sessionForBilling.accumulatedElCost },
-          accumulatedElKwh: { decrement: sessionForBilling.accumulatedElKwh },
-        } : {}),
-        ...(useWaterAccumulator ? {
-          accumulatedWaterCost: { decrement: sessionForBilling.accumulatedWaterCost },
-          accumulatedWaterLiters: { decrement: sessionForBilling.accumulatedWaterLiters },
-        } : {}),
+        unitId,
+        // The stay it bills, so it follows the stay if the guest changes unit.
+        sessionId: activeSession?.id ?? null,
+        periodStart,
+        periodEnd,
+        startKwh: manualEl ? manualEl.startKwh : startKwh,
+        endKwh: manualEl ? manualEl.endKwh : endKwh,
+        startHeatingKwh,
+        endHeatingKwh,
+        startWaterLiters,
+        endWaterLiters,
+        electricityCost,
+        waterCost,
+        servicesCost,
+        totalAmount,
+        status: "PENDING",
+        paymentToken: uuidv4(),
       },
     });
-  }
+
+    // Services just billed on this invoice must not be billed again at checkout.
+    if (activeSession && servicesCost > 0) {
+      await Promise.all([
+        tx.laundrySess.updateMany({
+          where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", createdAt: { gte: periodStart, lte: periodEnd }, NOT: { status: "ACTIVE", billingMode: "METERED" } },
+          data: { paymentStatus: "INVOICED" },
+        }),
+        tx.showerSess.updateMany({
+          where: { sessionId: activeSession.id, paymentStatus: "ON_ACCOUNT", startedAt: { gte: periodStart, lte: periodEnd } },
+          data: { paymentStatus: "INVOICED" },
+        }),
+      ]);
+    }
+
+    // Subtract exactly what was billed — a tick that committed between our
+    // read and this write keeps its (unbilled) contribution instead of being
+    // wiped by a reset to 0. lastTick* stay so the next tick's delta is right.
+    if (sessionForBilling && (useElAccumulator || useWaterAccumulator)) {
+      await tx.session.update({
+        where: { id: sessionForBilling.id },
+        data: {
+          ...(useElAccumulator ? {
+            accumulatedElCost: { decrement: sessionForBilling.accumulatedElCost },
+            accumulatedElKwh: { decrement: sessionForBilling.accumulatedElKwh },
+          } : {}),
+          ...(useWaterAccumulator ? {
+            accumulatedWaterCost: { decrement: sessionForBilling.accumulatedWaterCost },
+            accumulatedWaterLiters: { decrement: sessionForBilling.accumulatedWaterLiters },
+          } : {}),
+        },
+      });
+    }
+    return created;
+  });
 
   revalidatePath(`/admin/units/${unitId}`);
   return invoice;
@@ -3524,6 +3580,11 @@ export async function markSessionUnpaid(sessionId: number): Promise<{ ok: true }
     (p) => (p.kind === "SETTLEMENT" || (p.kind === "INVOICE" && p.note === "Betalt sammen med opholdet"))
       && p.amount > 0 && p.reversesId == null && !p.reversed,
   );
+  // Money taken online can't be "un-marked" at the desk — it has to be
+  // refunded in QuickPay (same rule as 'Fortryd' on a single payment).
+  if (open.some((p) => p.method === "QUICKPAY")) {
+    return { ok: false, message: "Opholdet er betalt med kort online — betalingen skal refunderes i QuickPay, den kan ikke fortrydes her." };
+  }
 
   await prisma.$transaction(async (tx) => {
     for (const p of open) {
@@ -3579,8 +3640,9 @@ export async function addPrepaidAmount(sessionId: number, delta: number): Promis
 
 /** Set the prepaid balance to an absolute amount (corrections). Prefer addPrepaidAmount for top-ups. */
 export async function adjustPrepaidAmount(sessionId: number, newAmount: number) {
-  await requireAuth();
-  if (newAmount < 0) throw new Error("Beløb kan ikke være negativt");
+  const auth = await requireAuth();
+  if (!Number.isFinite(newAmount) || newAmount < 0) throw new Error("Beløb kan ikke være negativt");
+  if (newAmount > 100_000) throw new Error("Beløbet er urealistisk stort — tjek tastningen");
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     select: { id: true, prepaidAmount: true, prepaidDeposited: true },
@@ -3593,6 +3655,10 @@ export async function adjustPrepaidAmount(sessionId: number, newAmount: number) 
   await prisma.session.update({
     where: { id: sessionId },
     data: { prepaidAmount: newAmount, prepaidDeposited: deposited },
+  });
+  // A correction, not money taken — so no ledger row, but leave a trace.
+  logger.info("payments", `Saldo rettet manuelt på ophold ${sessionId}`, {
+    by: auth.username, from: session.prepaidAmount, to: newAmount,
   });
   if (delta > 0) await restorePrepaidPowerIfFunded(sessionId);
   revalidatePath(`/admin/bookings/${sessionId}`);
@@ -4794,7 +4860,7 @@ export async function getEconomySummary(): Promise<{
       select: serviceSelect,
     }),
     // Money taken/refunded at the desk for laundry, showers and service credit
-    prisma.payment.findMany({ where: { kind: "SERVICE" }, select: { amount: true, createdAt: true } }),
+    prisma.payment.findMany({ where: { kind: "SERVICE" }, select: { amount: true, createdAt: true, reversesId: true } }),
   ]);
 
   // Group by month
@@ -4880,6 +4946,11 @@ export async function getEconomySummary(): Promise<{
     }
   }
   for (const p of deskServicePayments) {
+    // A refund that reverses a desk payment cancels that payment here. A cash
+    // refund of a use paid from the balance or by card has no desk payment to
+    // cancel — its revenue already left with the cancelled use above, so
+    // subtracting it too would take it out twice.
+    if (p.amount < 0 && p.reversesId == null) continue;
     const m = getOrCreate(monthOf(p.createdAt));
     m.servicesRevenue += p.amount;
     m.totalRevenue += p.amount;

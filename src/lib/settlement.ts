@@ -254,17 +254,27 @@ export function buildSettlement(input: SettlementInput, opts: SettlementOptions 
       remaining: roundOre(remaining),
       refunded: roundOre(refunded),
     };
-    due = roundOre(Math.max(0, -remaining) + servicesOnAccount);
+    // Money already paid back counts against the balance: if the meter is
+    // corrected upwards (or the deposit reversed) after a payout, the guest
+    // owes the difference — it must not vanish because "remaining" was > 0.
+    const net = remaining - refunded;
+    due = roundOre(Math.max(0, -net) + servicesOnAccount);
   } else {
     due = roundOre(invoicesOpen + remEl + remWater + servicesOnAccount + stayPrice);
   }
 
+  // A bare PAID flag with no payment on file only counts for stays paid
+  // before the ledger existed (those carry paidAt). Since then the flag is
+  // derived from the ledger by syncPaymentStatus, which leaves paidAt empty
+  // when a stay was simply settled at 0 kr — so a later correction or
+  // reversal that creates a debt is not hidden behind "Betalt".
   const paidWithoutRecord =
-    !opts.ignorePaidFlag && status === "COMPLETED" && s.paymentStatus === "PAID" && Math.abs(paid) < 0.005 && due >= 1;
+    !opts.ignorePaidFlag && status === "COMPLETED" && s.paymentStatus === "PAID" && s.paidAt != null
+    && Math.abs(paid) < 0.005 && due >= 1;
   const effectivePaid = paidWithoutRecord ? due : paid;
   const owed = dueOrZero(due - effectivePaid);
   const overpaid = effectivePaid - due > 0.005 ? roundOre(effectivePaid - due) : 0;
-  const refundDue = prepaid ? roundOre(Math.max(0, Math.max(0, prepaid.remaining) - prepaid.refunded)) : 0;
+  const refundDue = prepaid ? roundOre(Math.max(0, prepaid.remaining - prepaid.refunded)) : 0;
 
   let state: SettlementState;
   if (status === "ACTIVE" && !isPrepaid) state = "RUNNING";
@@ -437,7 +447,9 @@ export async function syncPaymentStatus(sessionId: number, opts: SettlementOptio
   if (settled && current.paymentStatus !== "PAID") {
     await prisma.session.update({
       where: { id: sessionId },
-      data: { paymentStatus: "PAID", paidAt: settlement.lastPayment?.at ?? new Date() },
+      // paidAt only when money actually changed hands; a stay with nothing
+      // due gets PAID without it (see paidWithoutRecord in buildSettlement).
+      data: { paymentStatus: "PAID", paidAt: settlement.lastPayment?.at ?? null },
     });
   } else if (!settled && current.paymentStatus === "PAID") {
     await prisma.session.update({ where: { id: sessionId }, data: { paymentStatus: "UNPAID", paidAt: null } });

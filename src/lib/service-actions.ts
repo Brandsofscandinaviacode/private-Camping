@@ -11,6 +11,7 @@ import { readGlobalSettings } from "./settings";
 import * as hardware from "./hardware";
 import { logger } from "./logger";
 import { startOfToday } from "./booking-status";
+import { siteDayStart } from "./format";
 import { unitDisplayName } from "./utils";
 import {
   DESK_PAY_METHODS,
@@ -456,7 +457,8 @@ export async function getServiceHistory(opts: { days?: number; kind?: "ALL" | Se
   const days = [1, 7, 30].includes(Number(opts.days)) ? Number(opts.days) : 7;
   const kind = opts.kind === "LAUNDRY" || opts.kind === "SHOWER" ? opts.kind : "ALL";
   const today = startOfToday();
-  const since = days === 1 ? today : new Date(today.getTime() - (days - 1) * 86_400_000);
+  // Site-calendar days, so the window doesn't shift an hour across DST.
+  const since = days === 1 ? today : siteDayStart(today, -(days - 1));
   // Card payments abandoned on the payment page never started anything.
   const notAbandoned = { NOT: { status: "CANCELLED", cancelledAt: null, paymentStatus: "UNPAID" } };
 

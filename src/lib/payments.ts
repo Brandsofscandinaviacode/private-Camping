@@ -90,6 +90,9 @@ function cleanNote(note: string | null | undefined): string | null {
   return n ? n.slice(0, 500) : null;
 }
 
+/** Largest single amount accepted at the desk (typo guard). */
+export const MAX_DESK_AMOUNT = 100_000;
+
 /** Validates and writes one desk registration. */
 export async function registerPaymentCore(
   input: RegisterPaymentInput,
@@ -97,6 +100,10 @@ export async function registerPaymentCore(
 ): Promise<RegisteredPayment> {
   const amount = roundOre(Number(input.amount));
   if (!Number.isFinite(amount) || Math.abs(amount) < 0.005) throw new PaymentError("Skriv et beløb større end 0 kr.");
+  // A typo guard, not a business rule: 5000 instead of 500 is fine, 10.000.000 isn't.
+  if (Math.abs(amount) > MAX_DESK_AMOUNT) {
+    throw new PaymentError(`Beløbet er urealistisk stort (over ${MAX_DESK_AMOUNT.toLocaleString("da-DK")} kr.) — tjek tastningen.`);
+  }
   if (!isDeskPaymentMethod(input.method)) throw new PaymentError("Vælg hvordan der er betalt.");
   const note = cleanNote(input.note);
   const method = input.method;

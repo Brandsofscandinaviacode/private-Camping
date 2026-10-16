@@ -181,6 +181,26 @@ export async function startStayHardware(
 }
 
 /**
+ * Best-effort reversal of startStayHardware when the check-in didn't go
+ * through after all (lost a race with a cancel/move): switch the relays off
+ * again so a unit nobody is staying in doesn't keep drawing power.
+ */
+export async function undoStayHardware(hw: CheckInHardwareRow | null | undefined, context: string): Promise<void> {
+  if (!hw) return;
+  const eps = [
+    hardware.hasElectricitySwitch(hw) ? hardware.electricitySwitchEp(hw) : null,
+    hardware.hasHeatingSwitch(hw) ? hardware.heatingSwitchEp(hw) : null,
+  ].filter((ep): ep is HardwareEndpoint => ep !== null);
+  for (const ep of eps) {
+    try {
+      await hardware.setSwitch(ep, false);
+    } catch (e) {
+      logger.error("hardware", `${context} undo: relay off failed`, e);
+    }
+  }
+}
+
+/**
  * Live status before check-in, for the few units with hardware: can the
  * meters be read and do the relays answer? Reads only, switches nothing.
  */
