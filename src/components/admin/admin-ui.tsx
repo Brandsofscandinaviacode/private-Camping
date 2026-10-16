@@ -205,8 +205,10 @@ export function StatusBadge({ tone, children, pulse = false }: { tone: BadgeTone
 export function bookingTone(
   status: string,
   paymentStatus?: string,
-  flags: { expired?: boolean; overdue?: boolean; arrived?: boolean } = {},
+  flags: { expired?: boolean; overdue?: boolean; arrived?: boolean; cancelReason?: string | null } = {},
 ): { tone: BadgeTone; label: string; pulse?: boolean } {
+  // Closed by the desk without a stay
+  if (status === "PENDING" && flags.cancelReason) return { tone: "muted", label: flags.cancelReason === "NO_SHOW" ? "Udeblevet" : "Annulleret" };
   // A reservation whose stay ended without a check-in
   if (status === "PENDING" && flags.expired) return { tone: "muted", label: "Udløbet" };
   // Arrival day has come, guest not checked in yet — same wording as the dashboard

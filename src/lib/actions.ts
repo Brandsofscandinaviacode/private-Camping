@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
-import { arrivedNotCheckedInWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, hasArrivedNotCheckedIn } from "./booking-status";
+import { arrivedNotCheckedInWhere, cancelledReservationWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, hasArrivedNotCheckedIn } from "./booking-status";
 import { BOOKING_MAX_LIMIT, BOOKING_PAGE_SIZE, BOOKING_SEARCH_SCAN, compareBookingRows, rankBookingSearch, type BookingListFilter as ListFilter } from "./booking-list";
 import { hasAnyHardware, unitStateKey, METER_FRESH_MS } from "./unit-state";
 import * as ha from "./homeassistant";
@@ -31,7 +31,9 @@ import {
   type UpdateSessionResult,
 } from "./settlement-shared";
 import { isProviderBookingRef, parseBookingRef } from "./booking-ref";
-import { fmtDateTime } from "./format";
+import { fmtDate, fmtDateTime, siteDayKey } from "./format";
+import { findUnitConflicts } from "./stay-conflicts";
+import { conflictSentence, conflictText, parseSiteDateTime, MAX_MANUAL_KWH, type StayInvoicePreview } from "./stay-corrections";
 import {
   checkOutDateError,
   describeWelcomeMessage,
@@ -796,7 +798,12 @@ export async function checkIn(
   expectedCheckOut?: string,
   billingMode?: "PREPAID" | "POSTPAID",
   prepaidAmount?: number,
-  options?: { requireExpectedCheckOut?: boolean },
+  options?: {
+    requireExpectedCheckOut?: boolean;
+    /** Desk walk-in: an open reservation on the unit in the period needs the desk's OK. */
+    checkReservations?: boolean;
+    allowReservationConflict?: boolean;
+  },
 ): Promise<CheckInResult> {
   await requireAuth();
   const name = guestName?.trim();
@@ -816,6 +823,18 @@ export async function checkIn(
   if (mode === "PREPAID") {
     const amountError = prepaidAmountError(prepaidAmount);
     if (amountError) return { ok: false, message: amountError };
+  }
+  if (options?.checkReservations && !options.allowReservationConflict) {
+    const today = siteDayKey(new Date())!;
+    const reserved = (await findUnitConflicts(unitId, unitDisplayName(unit.type, unit.name), { from: today, to: expectedCheckOut || null }))
+      .filter((c) => c.status === "PENDING");
+    if (reserved.length > 0) {
+      return {
+        ok: false,
+        message: `${conflictSentence(reserved)} Bekræft for at checke walk-in-gæsten ind alligevel.`,
+        reservationConflicts: reserved.map(conflictText),
+      };
+    }
   }
 
   // Claim the unit atomically so a double-click can't open two stays on it.
@@ -848,6 +867,7 @@ export async function checkIn(
         startHeatingKwh: hw.startHeatingKwh,
         startWaterLiters: hw.startWaterLiters,
         status: "ACTIVE",
+        checkInRecordedAt: new Date(),
       },
     });
   } catch (e) {
@@ -1007,6 +1027,19 @@ async function checkOutInternal(sessionId: number, options: CheckoutOptions, use
   const hw = session.unit.hardware;
   const pricing = await getPricing();
   const now = new Date();
+
+  // "Faktisk afrejse": an overdue guest who left days ago is checked out as
+  // of that time. Only the dates change — el/water follow the meters.
+  let departedAt = now;
+  if (options.departedAt) {
+    const d = parseSiteDateTime(options.departedAt);
+    if (!d) return { ok: false, message: "Ugyldigt tidspunkt for faktisk afrejse." };
+    if (d.getTime() > now.getTime() + 5 * 60_000) return { ok: false, message: "Faktisk afrejse kan ikke ligge i fremtiden." };
+    if (d < session.checkInTime) {
+      return { ok: false, message: `Faktisk afrejse kan ikke ligge før check-in (${fmtDateTime(session.checkInTime)}).` };
+    }
+    if (d < now) departedAt = d;
+  }
 
   // End-of-session meter readings come from the latest tick — guaranteed
   // in-sync with the accumulator because tick just ran. Fall back to a
@@ -1185,12 +1218,15 @@ async function checkOutInternal(sessionId: number, options: CheckoutOptions, use
   }
   if (mode === "MANUAL") noteParts.push(`Manuel slutaflæsning: ${manualNotes.join(", ")}`);
   if (mode === "NONE") noteParts.push("Ingen yderligere el/vand-afregning");
+  if (now.getTime() - departedAt.getTime() > 15 * 60_000) noteParts.push(`Faktisk afrejse ${fmtDateTime(departedAt)}`);
+  if (session.unit.isLongTerm && options.endTenancy) noteParts.push("Lejemålet er afsluttet");
   if (extraNote) noteParts.push(extraNote);
   const noteLine = noteParts.length > 0 ? `[Udtjek ${fmtDateTime(now)} · ${username}] ${noteParts.join(". ")}` : null;
 
   const updateData: Record<string, unknown> = {
     status: "COMPLETED",
-    checkOutTime: now,
+    checkOutTime: departedAt,
+    checkOutRecordedAt: now,
     endKwh,
     endHeatingKwh,
     endWaterLiters,
@@ -1253,9 +1289,15 @@ async function checkOutInternal(sessionId: number, options: CheckoutOptions, use
     try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { logger.error("checkout", "HA climate set vacant temp", e); }
   }
 
-  // Only mark vacant for non-long-term
+  // A long-term unit stays the tenant's (monthly invoices) unless the desk
+  // ends the tenancy at check-out.
   if (!session.unit.isLongTerm) {
     await prisma.unit.update({ where: { id: session.unitId }, data: { status: "VACANT" } });
+  } else if (options.endTenancy) {
+    await prisma.unit.update({
+      where: { id: session.unitId },
+      data: { status: "VACANT", longTermGuestName: null, longTermGuestEmail: null, longTermGuestPhone: null, longTermPortalToken: null },
+    });
   }
 
   revalidatePath("/admin");
@@ -2314,7 +2356,14 @@ export async function activateBookingSession(
     data: { status: "OCCUPIED" },
   });
   if (claimed.count === 0) {
-    return { ok: false, message: "Enheden er allerede optaget af en anden gæst – tjek den gæst ud først." };
+    const holder = await prisma.session.findFirst({
+      where: { unitId: unit.id, status: "ACTIVE" },
+      select: { guestName: true, expectedCheckOut: true },
+    });
+    const who = holder
+      ? `${unitDisplayName(unit.type, unit.name)} er optaget af ${holder.guestName}${holder.expectedCheckOut ? ` (planlagt afrejse ${fmtDate(holder.expectedCheckOut)})` : ""}`
+      : `${unitDisplayName(unit.type, unit.name)} står som optaget`;
+    return { ok: false, message: `${who}. Tjek den gæst ud først, eller brug 'Skift enhed' på denne booking.` };
   }
 
   let hwLines: ReceiptLine[];
@@ -2337,6 +2386,7 @@ export async function activateBookingSession(
         expectedCheckOut: finalExpectedCheckOut,
         lockedFields,
         checkInTime: new Date(),
+        checkInRecordedAt: new Date(),
         startKwh: hw.startKwh,
         startHeatingKwh: hw.startHeatingKwh,
         startWaterLiters: hw.startWaterLiters,
@@ -2421,8 +2471,147 @@ export async function createMonthlyInvoice(
   }
 }
 
+/** Why a stay can't get an interim invoice, or null. */
+function stayInvoiceBlocker(s: { status: string; billingMode: string }): string | null {
+  if (s.status !== "ACTIVE") return "Kun en indtjekket gæst kan få en mellemfaktura. Et afsluttet ophold afregnes på opgørelsen.";
+  if (s.billingMode === "PREPAID") return "En forudbetalt gæst betaler af saldoen og faktureres ikke.";
+  return null;
+}
+
+/**
+ * "Lav mellemfaktura": what an interim invoice for this stay would contain.
+ * Ticks first, so metered el/water are as fresh as the meters allow. On a
+ * unit without an el meter the desk enters a reading (the previous one comes
+ * from the stay's last invoice).
+ */
+export async function getStayInvoicePreview(
+  sessionId: number,
+): Promise<{ ok: true; preview: StayInvoicePreview } | { ok: false; message: string }> {
+  await requireAuth();
+  const initial = await prisma.session.findUnique({ where: { id: sessionId }, include: { unit: { include: { hardware: true } } } });
+  if (!initial) return { ok: false, message: "Opholdet findes ikke." };
+  const blocker = stayInvoiceBlocker(initial);
+  if (blocker) return { ok: false, message: blocker };
+
+  const hw = initial.unit.hardware;
+  const metered = hardware.hasElectricityMeter(hw) || hardware.hasHeatingMeter(hw);
+  let session = initial;
+  if (metered || hardware.hasWaterMeter(hw)) {
+    try {
+      await tickSessionConsumptionInternal(sessionId);
+      session = (await prisma.session.findUnique({ where: { id: sessionId }, include: { unit: { include: { hardware: true } } } })) ?? initial;
+    } catch (e) {
+      logger.error("invoice", "getStayInvoicePreview: tick fejlede", e);
+    }
+  }
+
+  const now = new Date();
+  const periodStart = await stayInvoicePeriodStart(session.unitId, session);
+  const [laundryAgg, showerAgg, invoices, pricing] = await Promise.all([
+    prisma.laundrySess.aggregate({
+      where: { sessionId, paymentStatus: "ON_ACCOUNT", createdAt: { gte: periodStart, lte: now } },
+      _sum: { pricePaid: true },
+    }),
+    prisma.showerSess.aggregate({
+      where: { sessionId, paymentStatus: "ON_ACCOUNT", startedAt: { gte: periodStart, lte: now } },
+      _sum: { pricePaid: true },
+    }),
+    prisma.invoice.findMany({ where: { sessionId }, orderBy: { periodEnd: "desc" }, select: { unitId: true, endKwh: true, createdAt: true } }),
+    getPricing(),
+  ]);
+  let effective: number | null = null;
+  try { effective = (await getEffectiveElPricing()).pricePerKwh; } catch { /* fixed price only */ }
+
+  // The previous hand reading must be from this unit's meter.
+  const lastOnUnit = invoices.find((i) => i.unitId === session.unitId && i.endKwh != null);
+  const previousKwh = metered ? null : lastOnUnit?.endKwh ?? session.startKwh ?? null;
+  return {
+    ok: true,
+    preview: {
+      periodStart,
+      periodEnd: now,
+      metered,
+      electricityCost: roundOre(session.accumulatedElCost),
+      waterCost: roundOre(session.accumulatedWaterCost),
+      servicesCost: roundOre((laundryAgg._sum.pricePaid ?? 0) + (showerAgg._sum.pricePaid ?? 0)),
+      previousKwh,
+      previousKwhSource: previousKwh == null ? null : lastOnUnit ? "invoice" : "stay",
+      fixedPricePerKwh: pricing.pricePerKwh,
+      effectivePricePerKwh: effective,
+      priceOverride: session.pricePerKwhOverride,
+      currency: pricing.currency,
+      invoiceCount: invoices.length,
+      lastInvoiceAt: invoices[0]?.createdAt ?? null,
+    },
+  };
+}
+
+/** Create the interim invoice previewed above. */
+export async function createStayInvoice(
+  sessionId: number,
+  input: { manualEl?: { startKwh: number; endKwh: number; pricePerKwh: number } } = {},
+): Promise<{ ok: true; invoiceId: number; totalAmount: number; message: string } | { ok: false; message: string }> {
+  await requireAuth();
+  const session = await prisma.session.findUnique({ where: { id: sessionId }, include: { unit: { include: { hardware: true } } } });
+  if (!session) return { ok: false, message: "Opholdet findes ikke." };
+  const blocker = stayInvoiceBlocker(session);
+  if (blocker) return { ok: false, message: blocker };
+
+  const hw = session.unit.hardware;
+  const metered = hardware.hasElectricityMeter(hw) || hardware.hasHeatingMeter(hw);
+  let manualEl: ManualElReading | undefined;
+  if (input.manualEl && !metered) {
+    const { startKwh, endKwh, pricePerKwh } = input.manualEl;
+    if (![startKwh, endKwh, pricePerKwh].every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) {
+      return { ok: false, message: "Aflæsninger og pris skal være positive tal." };
+    }
+    if (endKwh < startKwh) return { ok: false, message: "Den nye aflæsning er lavere end den forrige." };
+    if (endKwh - startKwh > MAX_MANUAL_KWH) return { ok: false, message: `Forbruget (${roundOre(endKwh - startKwh)} kWh) er urimeligt stort – tjek aflæsningen.` };
+    if (pricePerKwh <= 0 || pricePerKwh > 50) return { ok: false, message: "Prisen pr. kWh skal være mellem 0 og 50 kr." };
+    manualEl = { startKwh, endKwh, pricePerKwh };
+  }
+
+  try {
+    const invoice = await createMonthlyInvoiceInternal(session.unitId, { manualEl });
+    logger.info("invoice", `Mellemfaktura ${invoice.id} for ophold ${sessionId}: ${roundOre(invoice.totalAmount)} kr${manualEl ? ` (aflæst ${manualEl.startKwh}→${manualEl.endKwh} kWh à ${manualEl.pricePerKwh})` : ""}`);
+    revalidatePath(`/admin/bookings/${sessionId}`);
+    revalidatePath("/admin/bookings");
+    return {
+      ok: true,
+      invoiceId: invoice.id,
+      totalAmount: invoice.totalAmount,
+      message: `Faktura på ${fmtMoney(invoice.totalAmount)} er oprettet.`,
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    if (EXPECTED_INVOICE_ERRORS.some((m) => message.startsWith(m))) return { ok: false, message };
+    logger.error("invoice", `createStayInvoice fejl (ophold ${sessionId})`, e);
+    return { ok: false, message: "Fakturaen kunne ikke oprettes. Prøv igen." };
+  }
+}
+
+/**
+ * Where the next invoice for a checked-in stay starts: check-in, or the end
+ * of the last invoice — the stay's own (it may have changed unit) or one on
+ * the unit raised during the stay.
+ */
+async function stayInvoicePeriodStart(unitId: number, stay: { id: number; checkInTime: Date }): Promise<Date> {
+  const [lastUnitInvoice, lastStayInvoice] = await Promise.all([
+    prisma.invoice.findFirst({ where: { unitId }, orderBy: { id: "desc" }, select: { periodEnd: true } }),
+    prisma.invoice.findFirst({ where: { sessionId: stay.id }, orderBy: { periodEnd: "desc" }, select: { periodEnd: true } }),
+  ]);
+  let start = stay.checkInTime;
+  for (const inv of [lastUnitInvoice, lastStayInvoice]) {
+    if (inv && inv.periodEnd > start) start = inv.periodEnd;
+  }
+  return start;
+}
+
+/** A reading taken by hand on a unit without an el meter ("Lav mellemfaktura"). */
+type ManualElReading = { startKwh: number; endKwh: number; pricePerKwh: number };
+
 // Unauthenticated core — for cron/checkout paths only (not a Server Action).
-async function createMonthlyInvoiceInternal(unitId: number) {
+async function createMonthlyInvoiceInternal(unitId: number, opts: { manualEl?: ManualElReading } = {}) {
   const unit = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { hardware: true },
@@ -2445,16 +2634,15 @@ async function createMonthlyInvoiceInternal(unitId: number) {
   // Use the last invoice's periodEnd as the start of the new period if it
   // falls after the session check-in — prevents overlapping periods when
   // multiple invoices are created for the same session.
-  const lastUnitInvoice = await prisma.invoice.findFirst({
-    where: { unitId },
-    orderBy: { id: "desc" },
-  });
-  const lastInvoiceForPeriod = activeSessionForPeriod ? lastUnitInvoice : null;
+  const lastUnitInvoice = activeSessionForPeriod
+    ? null
+    : await prisma.invoice.findFirst({
+        where: { unitId },
+        orderBy: { id: "desc" },
+      });
 
   const periodStart = activeSessionForPeriod
-    ? (lastInvoiceForPeriod && lastInvoiceForPeriod.periodEnd > activeSessionForPeriod.checkInTime
-        ? lastInvoiceForPeriod.periodEnd
-        : activeSessionForPeriod.checkInTime)
+    ? await stayInvoicePeriodStart(unitId, activeSessionForPeriod)
     : (lastUnitInvoice?.periodEnd ?? new Date(now.getFullYear(), now.getMonth() - (now.getDate() <= 7 ? 1 : 0), 1));
   // Without a session (long-term tenant) the invoice covers the time since
   // the last invoice up to now. A calendar-month period labelled the day-1
@@ -2585,6 +2773,13 @@ async function createMonthlyInvoiceInternal(unitId: number) {
     : (endWaterLiters !== null && startWaterLiters !== null)
       ? Math.max(0, endWaterLiters - startWaterLiters) * waterRate : 0;
 
+  // A unit without an el meter: the desk read the meter by hand, at the
+  // price it chose (shown in the dialog before the invoice is made).
+  const manualEl = opts.manualEl && !hardware.hasElectricityMeter(hw) && !hardware.hasHeatingMeter(hw) ? opts.manualEl : null;
+  if (manualEl) {
+    electricityCost = roundOre(electricityCost + Math.max(0, manualEl.endKwh - manualEl.startKwh) * manualEl.pricePerKwh);
+  }
+
   // Include ON_ACCOUNT services in invoice period
   let servicesCost = 0;
   if (activeSession) {
@@ -2609,10 +2804,12 @@ async function createMonthlyInvoiceInternal(unitId: number) {
   const invoice = await prisma.invoice.create({
     data: {
       unitId,
+      // The stay it bills, so it follows the stay if the guest changes unit.
+      sessionId: activeSession?.id ?? null,
       periodStart,
       periodEnd,
-      startKwh,
-      endKwh,
+      startKwh: manualEl ? manualEl.startKwh : startKwh,
+      endKwh: manualEl ? manualEl.endKwh : endKwh,
       startHeatingKwh,
       endHeatingKwh,
       startWaterLiters,
@@ -2732,6 +2929,31 @@ async function autoCreateAndSendInvoicesInternal(): Promise<{ created: number; s
     }
   }
 
+  // Long stays on ordinary units billed monthly ("Månedsafregning" on the
+  // booking). Only metered units can be invoiced unattended; the others need
+  // a reading at the desk ("Lav mellemfaktura").
+  const monthlyStays = await prisma.session.findMany({
+    where: { status: "ACTIVE", monthlyInvoicing: true, billingMode: { not: "PREPAID" }, unit: { isLongTerm: false } },
+    include: { unit: { include: { hardware: true } } },
+  });
+  for (const stay of monthlyStays) {
+    const hw = stay.unit.hardware;
+    if (!hardware.hasElectricityMeter(hw) && !hardware.hasHeatingMeter(hw) && !hardware.hasWaterMeter(hw)) {
+      logger.info("invoice", `Månedsafregning: ophold ${stay.id} (${stay.unit.name}) har ingen måler — mellemfakturaen laves i skranken med aflæsning`);
+      continue;
+    }
+    try {
+      const invoice = await createMonthlyInvoiceInternal(stay.unitId);
+      created++;
+      if (stay.guestEmail || stay.guestPhone) {
+        const res = await sendInvoiceToCustomerInternal(invoice.id, stay.unitId);
+        if (res.ok) sent++;
+      }
+    } catch (e) {
+      logger.error("invoice", `Månedsfaktura fejl for ophold ${stay.id} — opret den på bookingen`, e);
+    }
+  }
+
   return { created, sent };
 }
 
@@ -2751,11 +2973,13 @@ async function checkOverdueInvoicesInternal(): Promise<{ markedOverdue: number; 
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - deadlineDays);
 
-  // Find PENDING invoices that have passed the deadline
+  // Find PENDING invoices that have passed the deadline. The deadline runs
+  // from when the guest was sent the invoice — one nobody has received
+  // (made at the desk, e-mail off) is never overdue and never cuts power.
   const overdueInvoices = await prisma.invoice.findMany({
     where: {
       status: "PENDING",
-      createdAt: { lte: cutoffDate },
+      sentAt: { lte: cutoffDate },
     },
     include: { unit: { include: { hardware: true } } },
   });
@@ -2931,14 +3155,17 @@ async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number):
   let portalToken: string | null = unit.longTermPortalToken;
 
   if (!unit.isLongTerm) {
-    const relevantSession = await prisma.session.findFirst({
-      where: {
-        unitId,
-        billingMode: { not: "PREPAID" },
-        checkInTime: { lte: invoice.periodEnd },
-      },
-      orderBy: [{ status: "asc" }, { checkInTime: "desc" }],
-    });
+    // The stay the invoice bills; older invoices without one: the most
+    // relevant stay on the unit.
+    const relevantSession = (invoice.sessionId ? await prisma.session.findUnique({ where: { id: invoice.sessionId } }) : null)
+      ?? await prisma.session.findFirst({
+        where: {
+          unitId,
+          billingMode: { not: "PREPAID" },
+          checkInTime: { lte: invoice.periodEnd },
+        },
+        orderBy: [{ status: "asc" }, { checkInTime: "desc" }],
+      });
     if (relevantSession) {
       guestName = relevantSession.guestName || guestName;
       guestEmail = relevantSession.guestEmail || null;
@@ -2970,6 +3197,10 @@ async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number):
     if (result.email?.ok) parts.push("Email sendt");
     if (result.sms && !result.sms.ok) parts.push(`SMS fejl: ${result.sms.error}`);
     if (result.email && !result.email.ok) parts.push(`Email fejl: ${result.email.error}`);
+    // The payment deadline counts from the first time it reached the guest.
+    if ((result.sms?.ok || result.email?.ok) && !invoice.sentAt) {
+      await prisma.invoice.update({ where: { id: invoiceId }, data: { sentAt: new Date() } }).catch(() => {});
+    }
 
     return {
       ok: parts.some((p) => p.includes("sendt")),
@@ -2997,6 +3228,7 @@ export async function getAllSessions(filter: BookingListFilter = "all", search?:
     : filter === "arrived" ? arrivedNotCheckedInWhere(now)
     : filter === "overdue" ? overdueStayWhere(now)
     : filter === "expired" ? expiredReservationWhere(now)
+    : filter === "cancelled" ? cancelledReservationWhere()
     // "Alle" hides expired reservations, but a search covers them too
     : q ? {}
     : { OR: [{ status: { not: "PENDING" as const } }, openReservationWhere(now)] };
@@ -3008,7 +3240,7 @@ export async function getAllSessions(filter: BookingListFilter = "all", search?:
       where: filterWhere,
       select: {
         id: true, status: true, guestName: true, guestEmail: true, guestPhone: true,
-        bookingRef: true, externalBookingId: true, checkInTime: true, expectedCheckOut: true,
+        bookingRef: true, externalBookingId: true, checkInTime: true, expectedCheckOut: true, cancelledAt: true,
         unit: { select: { name: true, type: true } },
       },
       orderBy: { checkInTime: "desc" },
@@ -3049,12 +3281,13 @@ export async function getAllSessions(filter: BookingListFilter = "all", search?:
 export async function getBookingListCounts() {
   await requireAuth();
   const now = new Date();
-  const [active, pending, expired] = await Promise.all([
+  const [active, pending, expired, cancelled] = await Promise.all([
     prisma.session.count({ where: { status: "ACTIVE" } }),
     prisma.session.count({ where: openReservationWhere(now) }),
     prisma.session.count({ where: expiredReservationWhere(now) }),
+    prisma.session.count({ where: cancelledReservationWhere() }),
   ]);
-  return { active, pending, expired };
+  return { active, pending, expired, cancelled };
 }
 
 export async function getSessionById(sessionId: number) {
@@ -3062,6 +3295,8 @@ export async function getSessionById(sessionId: number) {
   return prisma.session.findUnique({
     where: { id: sessionId },
     include: {
+      // Invoices that bill this stay — they stay with it if it changes unit.
+      invoices: { orderBy: { periodEnd: "desc" }, take: 24 },
       unit: {
         include: {
           hardware: true,

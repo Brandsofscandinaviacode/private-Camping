@@ -1,10 +1,10 @@
 // Bookings list: filters, paging and search ranking. Plain module, safe on
 // server and client (the filter bar builds its links with bookingListUrl).
 
-import { isReservationExpired } from "./booking-status";
+import { isReservationCancelled, isReservationExpired } from "./booking-status";
 import { unitDisplayName } from "./utils";
 
-export const BOOKING_LIST_FILTERS = ["all", "active", "pending", "arrived", "overdue", "unpaid", "paid", "expired"] as const;
+export const BOOKING_LIST_FILTERS = ["all", "active", "pending", "arrived", "overdue", "unpaid", "paid", "expired", "cancelled"] as const;
 export type BookingListFilter = (typeof BOOKING_LIST_FILTERS)[number];
 
 export function parseBookingListFilter(value: string | undefined): BookingListFilter {
@@ -38,12 +38,13 @@ type SortableSession = {
   status: string;
   checkInTime: Date;
   expectedCheckOut: Date | null;
+  cancelledAt?: Date | null;
 };
 
-/** Checked-in stays first, expired reservations last, everything else in between. */
+/** Checked-in stays first, expired and cancelled reservations last, everything else in between. */
 function statusRank(s: SortableSession, now: Date): number {
   if (s.status === "ACTIVE") return 0;
-  if (isReservationExpired(s, now)) return 2;
+  if (isReservationExpired(s, now) || isReservationCancelled(s)) return 2;
   return 1;
 }
 

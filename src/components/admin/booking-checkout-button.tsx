@@ -22,12 +22,17 @@ import {
   type CheckoutOptions,
   type CheckoutPreview,
 } from "@/lib/settlement-shared";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime, fmtShortDate } from "@/lib/format";
+import { dayKeyDate, siteDateTimeInput } from "@/lib/stay-corrections";
 
 interface BookingCheckoutButtonProps {
   sessionId: number;
   guestName: string;
   unitName: string;
+  /** Planned departure "YYYY-MM-DD" — an overdue stay offers it as the actual departure. */
+  expectedCheckOut?: string | null;
+  /** Long-term unit: offer to end the tenancy as well. */
+  isLongTerm?: boolean;
 }
 
 /**
@@ -39,6 +44,8 @@ export function BookingCheckoutButton({
   sessionId,
   guestName,
   unitName,
+  expectedCheckOut = null,
+  isLongTerm = false,
 }: BookingCheckoutButtonProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -49,6 +56,11 @@ export function BookingCheckoutButton({
   const [meterMode, setMeterMode] = useState<CheckoutMeterMode | null>(null);
   const [manual, setManual] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
+  // "Faktisk afrejse": now, or earlier (an overdue guest who already left)
+  const [departedEarlier, setDepartedEarlier] = useState(false);
+  const [departedAt, setDepartedAt] = useState("");
+  const [nowInput, setNowInput] = useState("");
+  const [endTenancy, setEndTenancy] = useState(true);
 
   async function loadPreview() {
     setLoadingPreview(true);
@@ -72,6 +84,12 @@ export function BookingCheckoutButton({
       setMeterMode(null);
       setManual({});
       setNote("");
+      const now = siteDateTimeInput(new Date());
+      const overdue = !!expectedCheckOut && expectedCheckOut < now.slice(0, 10);
+      setNowInput(now);
+      setDepartedEarlier(overdue);
+      setDepartedAt(overdue ? `${expectedCheckOut}T12:00` : now);
+      setEndTenancy(true);
       void loadPreview();
     }
   }
@@ -100,6 +118,10 @@ export function BookingCheckoutButton({
   }
 
   function validationError(): string | null {
+    if (departedEarlier) {
+      if (!departedAt) return "Vælg hvornår gæsten rejste.";
+      if (departedAt > siteDateTimeInput(new Date())) return "Faktisk afrejse kan ikke ligge i fremtiden.";
+    }
     if (!needsChoice) return null;
     if (!meterMode) return "Vælg hvordan målerne skal afregnes.";
     if (meterMode === "NONE" && !note.trim()) return "Skriv en note om, hvorfor der ikke afregnes yderligere.";
@@ -126,6 +148,8 @@ export function BookingCheckoutButton({
     setSubmitting(true);
     setError("");
     const options: CheckoutOptions = { note: note.trim() || undefined };
+    if (departedEarlier && departedAt) options.departedAt = departedAt;
+    if (isLongTerm) options.endTenancy = endTenancy;
     if (needsChoice && meterMode) {
       options.meterMode = meterMode;
       if (meterMode === "MANUAL") options.manual = manualOptions();
@@ -304,6 +328,56 @@ export function BookingCheckoutButton({
                 hint="Kun det allerede målte forbrug afregnes. Kræver en note."
               />
             </div>
+          )}
+
+          {preview && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">Faktisk afrejse</p>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input type="radio" checked={!departedEarlier} onChange={() => setDepartedEarlier(false)} className="h-4 w-4 accent-primary" />
+                  Nu
+                </label>
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input type="radio" checked={departedEarlier} onChange={() => setDepartedEarlier(true)} className="h-4 w-4 accent-primary" />
+                  Tidligere
+                </label>
+                {departedEarlier && (
+                  <Input
+                    type="datetime-local"
+                    value={departedAt}
+                    max={nowInput}
+                    onChange={(e) => setDepartedAt(e.target.value)}
+                    className="h-8 w-auto"
+                    aria-label="Faktisk afrejse"
+                  />
+                )}
+              </div>
+              {departedEarlier && (
+                <p className="text-[11px] text-muted-foreground">
+                  {expectedCheckOut && `Planlagt afrejse: ${fmtShortDate(dayKeyDate(expectedCheckOut))} `}
+                  Tidspunktet står på opholdet og opgørelsen. El og vand afregnes stadig efter målerne.
+                </p>
+              )}
+            </div>
+          )}
+
+          {preview && isLongTerm && (
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-lg border border-border p-2.5">
+              <input type="checkbox" checked={endTenancy} onChange={(e) => setEndTenancy(e.target.checked)} className="mt-0.5 h-4 w-4 accent-primary" />
+              <span>
+                <span className="text-sm font-medium block">Afslut lejemålet</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Enheden bliver ledig, og lejer, gæsteportal og månedsfakturering fjernes. Slå fra, hvis fastliggeren kun er væk en periode.
+                </span>
+              </span>
+            </label>
+          )}
+
+          {s && !s.prepaid && s.invoices.length > 0 && preview && preview.meters.length === 0 && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+              Enheden har ingen elmåler: el siden sidste mellemfaktura kommer kun med, hvis du laver en sidste faktura med slutaflæsningen før udtjek.
+            </p>
           )}
 
           {preview && (

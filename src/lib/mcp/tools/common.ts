@@ -87,13 +87,16 @@ export function registerReadOnlyTool<S extends z.ZodObject>(server: McpServer, d
  * checked in (e.g. July–August) is EXPIRED_RESERVATION by October, not
  * "Reserveret". Same rule as src/lib/booking-status.ts.
  */
-export type BookingState = "ACTIVE" | "RESERVED" | "EXPIRED_RESERVATION" | "COMPLETED";
+export type BookingState = "ACTIVE" | "RESERVED" | "EXPIRED_RESERVATION" | "CANCELLED_RESERVATION" | "COMPLETED";
 
 export function bookingState(s: {
   status: string;
   checkInTime: Date | string;
   expectedCheckOut: Date | string | null;
+  cancelledAt?: Date | string | null;
 }): BookingState {
+  // Cancelled or marked as no-show at the desk
+  if (s.status === "PENDING" && s.cancelledAt) return "CANCELLED_RESERVATION";
   if (s.status === "PENDING") return isReservationExpired(s) ? "EXPIRED_RESERVATION" : "RESERVED";
   return s.status === "ACTIVE" ? "ACTIVE" : "COMPLETED";
 }

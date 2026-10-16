@@ -44,7 +44,8 @@ export function registerBookingTools(server: McpServer): void {
     description:
       "Bookings/stays (sessions) with guest name, masked contact, bookingRef, billing mode, accumulated electricity/water use and cost, last billing tick, prepaid balance, " +
       "check-in / expected checkout / checkout. Each row has `state`: ACTIVE, RESERVED (PENDING and the stay has not ended), EXPIRED_RESERVATION " +
-      "(PENDING but the planned checkout day has passed without check-in — e.g. a July–August booking seen in October is no longer reserved) or COMPLETED. " +
+      "(PENDING but the planned checkout day has passed without check-in — e.g. a July–August booking seen in October is no longer reserved), " +
+      "CANCELLED_RESERVATION (cancelled or marked as no-show at the desk) or COMPLETED. " +
       "RESERVED is listed soonest first, everything else newest first.",
     input: z.object({
       status: z.enum(SESSION_FILTERS).default("ALL"),

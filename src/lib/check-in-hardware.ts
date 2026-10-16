@@ -43,12 +43,12 @@ function errorText(e: unknown): string {
 }
 
 /** "MQTT: Camping-S001 er offline — brokeren har …" → "Camping-S001 er offline". */
-function shortReason(reason: string): string {
+export function shortReason(reason: string): string {
   return reason.replace(/^MQTT: /, "").replace(/^HA: /, "Home Assistant: ").split(" — ")[0];
 }
 
 /** The advice after " — " in a long reason, or null when the short form says it all. */
-function reasonAdvice(reason: string): string | null {
+export function reasonAdvice(reason: string): string | null {
   const i = reason.indexOf(" — ");
   if (i < 0) return null;
   const rest = reason.slice(i + 3).trim();
@@ -57,7 +57,7 @@ function reasonAdvice(reason: string): string | null {
   return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
 }
 
-async function readWithReason(ep: HardwareEndpoint): Promise<{ value: number | null; reason: string | null }> {
+export async function readWithReason(ep: HardwareEndpoint): Promise<{ value: number | null; reason: string | null }> {
   try {
     const r = await hardware.readEnergyKwhWithReason(ep);
     return { value: r.kwh, reason: r.kwh === null ? r.reason ?? "ingen værdi" : null };
@@ -80,7 +80,7 @@ async function readStart(ep: HardwareEndpoint, context: string) {
   return r;
 }
 
-function readingLine(
+export function readingLine(
   label: string,
   r: { value: number | null; reason: string | null },
   unit: "kWh" | "L",
@@ -98,7 +98,7 @@ function readingLine(
   };
 }
 
-async function switchOnLine(ep: HardwareEndpoint, label: string, context: string): Promise<ReceiptLine> {
+export async function switchOnLine(ep: HardwareEndpoint, label: string, context: string): Promise<ReceiptLine> {
   try {
     await hardware.setSwitch(ep, true);
     return { label, tone: "ok", text: "Tændt" };

@@ -50,6 +50,8 @@ interface SessionRow {
 interface InvoiceRow {
   id: number;
   unitId: number;
+  /** The stay the invoice bills; null on older and unit-level invoices. */
+  sessionId?: number | null;
   periodStart: Date;
   periodEnd: Date;
   startKwh: number | null;
@@ -94,7 +96,7 @@ export interface SettlementInput {
   isLongTerm: boolean;
   /** Prepaid only: total ever deposited (resolvePrepaidDeposited). */
   deposited: number | null;
-  /** Invoices of the unit; filtered to the stay here. */
+  /** The stay's own invoices and the unit's untagged ones; filtered to the stay here. */
   invoices: InvoiceRow[];
   services: ServiceRow[];
   payments: PaymentRow[];
@@ -135,7 +137,11 @@ export function buildSettlement(input: SettlementInput, opts: SettlementOptions 
   const invoices: SettlementInvoice[] = isPrepaid || status === "PENDING"
     ? []
     : input.invoices
-        .filter((inv) => inv.periodEnd > s.checkInTime && inv.periodStart < stayEnd)
+        // A stay's own invoice always counts (it may have changed unit, or be
+        // checked out as of an earlier departure); an untagged one by period.
+        .filter((inv) => (inv.sessionId != null
+          ? inv.sessionId === s.id
+          : inv.periodEnd > s.checkInTime && inv.periodStart < stayEnd))
         .sort((a, b) => a.periodStart.getTime() - b.periodStart.getTime())
         .map((inv) => ({
           id: inv.id,
@@ -329,7 +335,7 @@ export async function computeSettlements(
   const invoiceUnitIds = [...new Set(sessions.filter((x) => x.billingMode !== "PREPAID").map((x) => x.unitId))];
   const [invoices, laundry, showers, payments, currencySetting] = await Promise.all([
     invoiceUnitIds.length > 0
-      ? prisma.invoice.findMany({ where: { unitId: { in: invoiceUnitIds } } })
+      ? prisma.invoice.findMany({ where: { OR: [{ unitId: { in: invoiceUnitIds } }, { sessionId: { in: ids } }] } })
       : Promise.resolve([]),
     // UNPAID rows are purchases still waiting for their card payment — not a charge yet.
     prisma.laundrySess.findMany({
@@ -381,7 +387,7 @@ export async function computeSettlements(
           session: s,
           isLongTerm: s.unit.isLongTerm,
           deposited,
-          invoices: invoices.filter((i) => i.unitId === s.unitId),
+          invoices: invoices.filter((i) => i.sessionId === s.id || (i.sessionId == null && i.unitId === s.unitId)),
           services,
           payments: payments.filter((p) => p.sessionId === s.id),
           currency,
