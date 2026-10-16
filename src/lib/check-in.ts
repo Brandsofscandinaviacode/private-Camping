@@ -75,9 +75,9 @@ export function checkOutDateError(
   value: string | null | undefined,
   opts: { required: boolean; today?: string },
 ): string | null {
-  if (!value) return opts.required ? "Vælg forventet udtjek." : null;
-  if (!isDateKey(value)) return "Ugyldig dato for forventet udtjek.";
-  if (value < (opts.today ?? todayKey())) return "Forventet udtjek kan ikke ligge før i dag.";
+  if (!value) return opts.required ? "Vælg planlagt afrejse." : null;
+  if (!isDateKey(value)) return "Ugyldig dato for planlagt afrejse.";
+  if (value < (opts.today ?? todayKey())) return "Planlagt afrejse kan ikke ligge før i dag.";
   return null;
 }
 

@@ -250,7 +250,7 @@ export function SessionEditForm(props: SessionEditFormProps) {
             )}
           </div>
           <div>
-            <Label className="text-sm text-muted-foreground">Forventet checkout</Label>
+            <Label className="text-sm text-muted-foreground">Planlagt afrejse</Label>
             <Input
               type="date"
               value={guest.expectedCheckOut}

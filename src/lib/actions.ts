@@ -3669,7 +3669,7 @@ export async function updateSessionDetails(
         // midnight lands on the previous evening in Denmark.
         const d = plannedDate(v);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(d.getTime())) {
-          return { ok: false, message: "Ugyldig dato for forventet checkout." };
+          return { ok: false, message: "Ugyldig dato for planlagt afrejse." };
         }
         setGuest("expectedCheckOut", d);
       }

@@ -173,7 +173,7 @@ export default async function BookingDetailPage({
             {isStayOverdue(session) && (
               <span
                 className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium inline-flex items-center gap-1.5"
-                title="Planlagt udtjek er passeret, men opholdet er ikke tjekket ud"
+                title="Planlagt afrejse er passeret, men opholdet er ikke tjekket ud"
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                 Overskredet
@@ -238,7 +238,15 @@ export default async function BookingDetailPage({
                 <div className="flex items-center justify-between gap-2">
                   {/* A reservation only has an arrival day — its stored time is a placeholder */}
                   <span className="text-muted-foreground">{session.status === "PENDING" ? "Ankomst" : "Check-in"}</span>
-                  <span className="text-right">{session.status === "PENDING" ? fmtDate(session.checkInTime) : fmtDateTime(session.checkInTime)}</span>
+                  {session.status !== "PENDING" && session.checkInRecordedAt && siteDayKey(session.checkInRecordedAt) !== siteDayKey(session.checkInTime) ? (
+                    // Checked in later with the booked arrival kept: the arrival is a day, the desk's time is the real one
+                    <span className="text-right">
+                      {fmtDate(session.checkInTime)}
+                      <span className="block text-xs text-muted-foreground">tjekket ind {fmtDateTime(session.checkInRecordedAt)}</span>
+                    </span>
+                  ) : (
+                    <span className="text-right">{session.status === "PENDING" ? fmtDate(session.checkInTime) : fmtDateTime(session.checkInTime)}</span>
+                  )}
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">Check-out</span>
@@ -246,7 +254,7 @@ export default async function BookingDetailPage({
                 </div>
                 {session.expectedCheckOut && (
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Forventet</span>
+                    <span className="text-muted-foreground">Planlagt afrejse</span>
                     <span className="text-right">{fmtDate(session.expectedCheckOut)}</span>
                   </div>
                 )}

@@ -100,7 +100,7 @@ export default async function AdminDashboard() {
       {(unpaidCount > 0 || alarmResult.alerts.length > 0 || attention.arrived > 0 || attention.overdue > 0 || meteringStopped.length > 0) && (
         <div className="space-y-2.5">
           {attention.arrived > 0 && (
-            <Link href="/admin/bookings?filter=arrived">
+            <Link href="/admin/bookings?filter=arrived" className="block">
               <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
                 <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
                   <LogIn className="h-[18px] w-[18px] text-amber-600" />
@@ -114,13 +114,13 @@ export default async function AdminDashboard() {
           )}
 
           {attention.overdue > 0 && (
-            <Link href="/admin/bookings?filter=overdue">
+            <Link href="/admin/bookings?filter=overdue" className="block">
               <div className="flex items-center gap-3.5 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3 hover:bg-red-100/80 transition-all cursor-pointer">
                 <div className="h-9 w-9 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
                   <LogOut className="h-[18px] w-[18px] text-red-500" />
                 </div>
                 <p className="text-sm text-red-700 flex-1">
-                  <span className="font-bold">{attention.overdue}</span> {attention.overdue === 1 ? "ophold er stadig aktivt" : "ophold er stadig aktive"} efter planlagt udtjek — tjek ud eller ret udtjeksdatoen
+                  <span className="font-bold">{attention.overdue}</span> {attention.overdue === 1 ? "ophold er stadig aktivt" : "ophold er stadig aktive"} efter planlagt afrejse — tjek ud eller ret afrejsen
                 </p>
                 <span className="text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-3 py-1.5 shrink-0">Se liste</span>
               </div>
@@ -128,7 +128,7 @@ export default async function AdminDashboard() {
           )}
 
           {unpaidCount > 0 && (
-            <Link href="/admin/bookings?filter=unpaid">
+            <Link href="/admin/bookings?filter=unpaid" className="block">
               <div className="flex items-center gap-3.5 rounded-xl border border-red-200/80 bg-red-50/80 px-4 py-3 hover:bg-red-100/80 transition-all cursor-pointer">
                 <div className="h-9 w-9 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
                   <AlertCircle className="h-[18px] w-[18px] text-red-500" />
@@ -144,7 +144,7 @@ export default async function AdminDashboard() {
           <MeteringStoppedBanner stays={meteringStopped} />
 
           {alarmResult.alerts.map((alert, i) => (
-            <Link key={i} href={`/admin/units/${alert.unitId}`}>
+            <Link key={i} href={`/admin/units/${alert.unitId}`} className="block">
               <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
                 <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
                   <AlertTriangle className="h-[18px] w-[18px] text-amber-600" />

@@ -213,7 +213,7 @@ export function CheckOutDateField({
 
   return (
     <div>
-      <Label htmlFor={id}>Forventet udtjek{required ? " *" : ""}</Label>
+      <Label htmlFor={id}>Planlagt afrejse{required ? " *" : ""}</Label>
       <div className="flex flex-wrap items-center gap-2 mt-1">
         <Input
           id={id}
@@ -238,7 +238,7 @@ export function CheckOutDateField({
         <p className="text-xs text-amber-700 mt-1">Opholdet er {nightsLabel(nights)} – er datoen rigtig?</p>
       )}
       {allowOpen && !value && (
-        <p className="text-xs text-muted-foreground mt-1">Tomt felt = åbent ophold uden planlagt udtjek (fastligger).</p>
+        <p className="text-xs text-muted-foreground mt-1">Tomt felt = åbent ophold uden planlagt afrejse (fastligger).</p>
       )}
     </div>
   );

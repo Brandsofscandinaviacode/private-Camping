@@ -149,7 +149,7 @@ export default async function UnitDetailPage({
                 </div>
                 {pendingSession.expectedCheckOut && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground inline-flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Forventet checkout</span>
+                    <span className="text-muted-foreground inline-flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Planlagt afrejse</span>
                     <span>{fmtDate(pendingSession.expectedCheckOut)}</span>
                   </div>
                 )}
@@ -224,7 +224,7 @@ export default async function UnitDetailPage({
                 </div>
                 {activeSession.expectedCheckOut && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Forventet checkout</span>
+                    <span className="text-muted-foreground">Planlagt afrejse</span>
                     <span>{fmtDate(activeSession.expectedCheckOut)}</span>
                   </div>
                 )}

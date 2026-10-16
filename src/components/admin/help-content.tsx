@@ -43,7 +43,7 @@ const sections: Section[] = [
       "Når en gæst ankommer, checker du dem ind via enhedens detaljeside. Ved afrejse checker du ud, og systemet beregner automatisk det samlede forbrug og pris.",
     items: [
       "Klik på en enhed fra dashboardet og tryk 'Check ind'.",
-      "Udfyld gæstens navn, evt. email og telefon, og vælg forventet udtjek (+1/+2/+7 nætter). Fastliggere kan have et åbent ophold.",
+      "Udfyld gæstens navn, evt. email og telefon, og vælg planlagt afrejse (+1/+2/+7 nætter). Fastliggere kan have et åbent ophold.",
       "Vælg betalingsform: Efterbetaling (betaler ved check-ud) eller Forudbetalt (betaler et fast beløb ved ankomst).",
       "Ved check-ind tændes strøm automatisk hvis enheden har et relæ konfigureret (Home Assistant eller MQTT/Shelly). Kvitteringen efter check-in viser, om strømmen faktisk blev tændt, og om måleren blev aflæst.",
       "Elmåleren nulstilles ved check-ind, så forbruget starter fra 0 kWh.",
