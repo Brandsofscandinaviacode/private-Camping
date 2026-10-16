@@ -267,6 +267,9 @@ model Session {
   // overwrites them; differing booking-system values go to syncConflicts.
   lockedFields      String?
   syncConflicts     String?   // JSON { field: valueFromBookingSystem }
+  // What the booking system last sent, per field (JSON). A DB value that
+  // differs from it was changed at the desk and is kept.
+  lastSyncedValues  String?
   // A successful sync no longer lists this reservation.
   missingFromFeedAt DateTime?
   // Reservation closed without a stay (status stays PENDING): CANCELLED | NO_SHOW.

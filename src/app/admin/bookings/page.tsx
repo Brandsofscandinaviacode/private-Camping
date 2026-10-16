@@ -3,6 +3,8 @@ import { isReservationExpired, isStayOverdue } from "@/lib/booking-status";
 import { getAllSessions, getUnpaidCount, type BookingListFilter } from "@/lib/actions";
 import { getBookingAttentionCounts } from "@/lib/dashboard-actions";
 import { BookingFilters } from "@/components/admin/booking-filters";
+import { BookingSyncStatus } from "@/components/admin/booking-sync-status";
+import { BookingSyncBadges } from "@/components/admin/booking-sync-notice";
 import { Calendar, ChevronRight, ArrowRight } from "lucide-react";
 import { unitDisplayName } from "@/lib/utils";
 import { PageShell, PageHeader, Surface, EmptyState, StatusBadge, bookingTone } from "@/components/admin/admin-ui";
@@ -45,6 +47,7 @@ export default async function BookingsPage({
           </>
         }
       />
+      <BookingSyncStatus className="-mt-3" />
 
       <BookingFilters activeFilter={activeFilter} unpaidCount={unpaidCount} arrivedCount={attention.arrived} overdueCount={attention.overdue} searchQuery={searchQuery} />
 
@@ -68,6 +71,7 @@ export default async function BookingsPage({
                       {s.bookingRef && (
                         <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">{s.bookingRef}</span>
                       )}
+                      <BookingSyncBadges session={s} />
                     </div>
                     <div className="flex items-center gap-2 text-sm text-muted-foreground mt-0.5">
                       <span className="truncate">{unitDisplayName(s.unit.type, s.unit.name)}</span>

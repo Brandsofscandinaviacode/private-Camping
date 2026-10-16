@@ -7,6 +7,7 @@ import { getBookingAttentionCounts, getDashboardMovements } from "@/lib/dashboar
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
 import { DashboardKpis } from "@/components/admin/dashboard-kpis";
+import { BookingSyncStatus } from "@/components/admin/booking-sync-status";
 import { Tent, AlertCircle, AlertTriangle, LogIn, LogOut } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -70,6 +71,7 @@ export default async function AdminDashboard() {
             {reservedCount > 0 && <><span className="text-amber-600 font-medium">{reservedCount} reserveret</span> · </>}
             <span className="font-medium">{vacantCount} ledige</span>
           </p>
+          <BookingSyncStatus className="mt-2" />
         </div>
         <AddUnitDialog />
       </div>

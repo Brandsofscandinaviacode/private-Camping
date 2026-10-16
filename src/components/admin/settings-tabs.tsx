@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Settings, Wifi, Bell, MapPin, Activity, CreditCard, Users, Radio, BookOpen, CalendarDays, Bot } from "lucide-react";
 
 const tabs = [
@@ -20,7 +21,11 @@ const tabs = [
 type TabId = (typeof tabs)[number]["id"];
 
 export function SettingsTabs({ children }: { children: Record<string, React.ReactNode> }) {
-  const [activeTab, setActiveTab] = useState<TabId>("general");
+  // ?tab=booking opens a tab directly (links from the booking-sync status line)
+  const requested = useSearchParams().get("tab");
+  const [activeTab, setActiveTab] = useState<TabId>(
+    tabs.find((t) => t.id === requested)?.id ?? "general",
+  );
 
   return (
     <div>

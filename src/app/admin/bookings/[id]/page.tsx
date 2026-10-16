@@ -26,6 +26,7 @@ import { GuestPortalCard } from "@/components/admin/guest-portal-handover";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
 import { siteDayKey } from "@/lib/format";
 import { unitHardwareSummary } from "@/lib/check-in-hardware";
+import { BookingSyncNotice } from "@/components/admin/booking-sync-notice";
 
 import { unitDisplayName } from "@/lib/utils";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
@@ -152,6 +153,8 @@ export default async function BookingDetailPage({
           </p>
         </div>
       </div>
+
+      <BookingSyncNotice session={session} />
 
       {/* ═══ TOP: booking details + statement actions ═══ */}
       <div className="space-y-5">
