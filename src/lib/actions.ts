@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
-import { arrivedNotCheckedInWhere, openReservationWhere, overdueStayWhere, startOfToday } from "./booking-status";
+import { arrivedNotCheckedInWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, startOfToday } from "./booking-status";
+import { BOOKING_MAX_LIMIT, BOOKING_PAGE_SIZE, BOOKING_SEARCH_SCAN, compareBookingRows, rankBookingSearch, type BookingListFilter as ListFilter } from "./booking-list";
 import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
@@ -2694,36 +2695,78 @@ async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number):
 // ──────────────────────────────────────────────
 // BOOKINGS — Session management
 // ──────────────────────────────────────────────
-export type BookingListFilter = "all" | "unpaid" | "paid" | "active" | "pending" | "arrived" | "overdue";
+export type BookingListFilter = ListFilter;
 
-export async function getAllSessions(filter?: BookingListFilter, search?: string) {
+export async function getAllSessions(filter: BookingListFilter = "all", search?: string, limit: number = BOOKING_PAGE_SIZE) {
   await requireAuth();
+  const now = new Date();
+  const q = typeof search === "string" ? search.trim().slice(0, 100) : "";
+  const take =Math.min(Math.max(Math.floor(limit) || BOOKING_PAGE_SIZE, 1), BOOKING_MAX_LIMIT);
   const filterWhere = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
-    : filter === "active" ? { OR: [{ status: "ACTIVE" as const }, openReservationWhere()] }
-    : filter === "pending" ? openReservationWhere()
-    : filter === "arrived" ? arrivedNotCheckedInWhere()
-    : filter === "overdue" ? overdueStayWhere()
-    : {};
+    : filter === "active" ? { status: "ACTIVE" as const }
+    : filter === "pending" ? openReservationWhere(now)
+    : filter === "arrived" ? arrivedNotCheckedInWhere(now)
+    : filter === "overdue" ? overdueStayWhere(now)
+    : filter === "expired" ? expiredReservationWhere(now)
+    // "Alle" hides expired reservations, but a search covers them too
+    : q ? {}
+    : { OR: [{ status: { not: "PENDING" as const } }, openReservationWhere(now)] };
 
-  const searchWhere = search && search.trim()
-    ? {
-        OR: [
-          { guestName: { contains: search.trim() } },
-          { bookingRef: { contains: search.trim() } },
-          { guestEmail: { contains: search.trim() } },
-          { guestPhone: { contains: search.trim() } },
-        ],
-      }
-    : {};
+  if (q) {
+    // SQLite LIKE only folds ASCII case ("ørsted" misses "Ørsted") and can't
+    // rank, so match a lean projection in JS and load full rows for one page.
+    const candidates = await prisma.session.findMany({
+      where: filterWhere,
+      select: {
+        id: true, status: true, guestName: true, guestEmail: true, guestPhone: true,
+        bookingRef: true, externalBookingId: true, checkInTime: true, expectedCheckOut: true,
+        unit: { select: { name: true, type: true } },
+      },
+      orderBy: { checkInTime: "desc" },
+      take: BOOKING_SEARCH_SCAN,
+    });
+    const hits = rankBookingSearch(candidates, q, now);
+    const ids = hits.slice(0, take).map((h) => h.id);
+    const rows = await prisma.session.findMany({ where: { id: { in: ids } }, include: { unit: true } });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return {
+      sessions: ids.flatMap((id) => byId.get(id) ?? []),
+      total: hits.length,
+      searchCapped: candidates.length >= BOOKING_SEARCH_SCAN,
+    };
+  }
 
-  return prisma.session.findMany({
-    // AND, not spread: both fragments may carry their own OR.
-    where: { AND: [filterWhere, searchWhere] },
-    include: { unit: true },
-    orderBy: { checkInTime: "desc" },
-    take: 100,
-  });
+  // Checked-in stays first (overdue on top), then everything else newest
+  // first. There is at most one ACTIVE stay per unit, so that part is small.
+  const [total, checkedIn] = await Promise.all([
+    prisma.session.count({ where: filterWhere }),
+    prisma.session.findMany({ where: { AND: [filterWhere, { status: "ACTIVE" as const }] }, include: { unit: true } }),
+  ]);
+  checkedIn.sort((a, b) => compareBookingRows(a, b, now));
+  const head = checkedIn.slice(0, take);
+  const rest = head.length < take
+    ? await prisma.session.findMany({
+        // AND, not spread: both fragments may carry their own OR.
+        where: { AND: [filterWhere, { status: { not: "ACTIVE" as const } }] },
+        include: { unit: true },
+        orderBy: { checkInTime: "desc" },
+        take: take - head.length,
+      })
+    : [];
+  return { sessions: [...head, ...rest], total, searchCapped: false };
+}
+
+/** Counts for the bookings list filter chips. */
+export async function getBookingListCounts() {
+  await requireAuth();
+  const now = new Date();
+  const [active, pending, expired] = await Promise.all([
+    prisma.session.count({ where: { status: "ACTIVE" } }),
+    prisma.session.count({ where: openReservationWhere(now) }),
+    prisma.session.count({ where: expiredReservationWhere(now) }),
+  ]);
+  return { active, pending, expired };
 }
 
 export async function getSessionById(sessionId: number) {
