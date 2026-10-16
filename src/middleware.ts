@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
+import { clientIpFromHeaders } from "@/lib/client-ip";
 
 interface SessionData {
   userId?: number;
@@ -70,9 +71,7 @@ export async function middleware(request: NextRequest) {
     path.startsWith("/guest") || path.startsWith("/shower") || path.startsWith("/laundry") || path.startsWith("/services") ||
     path.startsWith("/api/oauth") || path.startsWith("/oauth")
   ) {
-    const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-      || request.headers.get("x-real-ip")
-      || "unknown";
+    const ip = clientIpFromHeaders(request.headers);
     if (!checkRateLimit(ip)) {
       return NextResponse.json(
         { error: "Too many requests" },

@@ -2,12 +2,13 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { getVerifiedAdmin } from "@/lib/auth";
 import { logger } from "@/lib/logger";
 import {
   AUTHORIZE_FIELDS,
   buildRedirect,
   createAuthorizationCode,
+  isKnownClaudeRedirect,
   isMcpEnabled,
   originFromHeaders,
   validateAuthorizeRequest,
@@ -39,14 +40,16 @@ async function decide(formData: FormData, approve: boolean): Promise<never> {
   const origin = originFromHeaders(await headers());
 
   if (!(await isMcpEnabled())) redirect(authorizePath(params));
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
+  const admin = await getVerifiedAdmin();
+  if (!admin) {
     redirect(`/login?next=${encodeURIComponent(authorizePath(params))}`);
   }
 
   const v = await validateAuthorizeRequest(params, origin);
   if (!v.ok) {
-    if (!v.redirectable) redirect(authorizePath(params)); // page renders the error
+    // The page renders the error; only Claude's own redirect URIs get it
+    // bounced back automatically (see page.tsx).
+    if (!v.redirectable || !isKnownClaudeRedirect(v.redirectUri)) redirect(authorizePath(params));
     redirect(buildRedirect(v.redirectUri, {
       error: v.error, error_description: v.description, state: v.state, iss: origin,
     }));
@@ -60,9 +63,9 @@ async function decide(formData: FormData, approve: boolean): Promise<never> {
     }));
   }
 
-  const code = await createAuthorizationCode(v.req, session.userId);
+  const code = await createAuthorizationCode(v.req, admin.userId);
   logger.info("mcp", "OAuth client approved", {
-    clientId: v.req.clientId, clientName: v.req.clientName, redirectHost, userId: session.userId,
+    clientId: v.req.clientId, clientName: v.req.clientName, redirectHost, userId: admin.userId,
   });
   redirect(buildRedirect(v.req.redirectUri, { code, state: v.req.state, iss: origin }));
 }

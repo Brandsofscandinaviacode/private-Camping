@@ -5,14 +5,24 @@ import {
   preflightResponse,
   registerClient,
 } from "@/lib/mcp/oauth";
+import { clientIpFromHeaders } from "@/lib/client-ip";
+import { rateLimit } from "@/lib/rate-limit";
 
 // POST /api/oauth/register — RFC 7591 dynamic client registration.
 // Open by design (MCP clients register themselves); registering grants
 // nothing until an admin approves the client on /oauth/authorize.
 export const dynamic = "force-dynamic";
 
+// A real connector registers once; this keeps one source from filling the
+// client table (see MAX_REGISTERED_CLIENTS).
+const REGISTRATIONS_PER_IP_PER_HOUR = 20;
+
 export async function POST(req: Request) {
   if (!(await isMcpEnabled())) return mcpDisabledResponse();
+  const ip = clientIpFromHeaders(req.headers);
+  if (!rateLimit(`oauth-register:${ip}`, REGISTRATIONS_PER_IP_PER_HOUR, 60 * 60_000).ok) {
+    return jsonResponse({ error: "temporarily_unavailable", error_description: "Too many registrations — try again later" }, 429, { "Retry-After": "3600" });
+  }
   let body: unknown;
   try {
     body = await req.json();

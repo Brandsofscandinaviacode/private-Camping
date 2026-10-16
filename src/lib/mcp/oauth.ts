@@ -17,7 +17,7 @@ export const MCP_SCOPE = "campsense:read";
 export const ACCESS_TOKEN_TTL_S = 60 * 60; // 1 hour
 export const REFRESH_TOKEN_TTL_S = 30 * 24 * 60 * 60; // 30 days
 export const AUTH_CODE_TTL_S = 5 * 60;
-export const MAX_REGISTERED_CLIENTS = 50;
+export const MAX_REGISTERED_CLIENTS = 200;
 
 const SETTING_ENABLED = "mcp_enabled";
 const SETTING_KEY_HASH = "mcp_api_key_hash";
@@ -311,7 +311,9 @@ export async function registerClient(input: Record<string, unknown>): Promise<
       ...(clientSecret ? { client_secret: clientSecret, client_secret_expires_at: 0 } : {}),
       client_name: clientName ?? undefined,
       redirect_uris: redirectUris,
-      grant_types: grantTypes.length ? grantTypes : ["authorization_code"],
+      // RFC 7591 lets the server set the effective metadata: every client
+      // gets refresh tokens (issueTokens always mints one).
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: method,
       scope: MCP_SCOPE,

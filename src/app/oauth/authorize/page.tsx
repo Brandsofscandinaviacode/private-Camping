@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { AlertTriangle, Bot, Check, Eye, ShieldCheck, Tent, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getSession } from "@/lib/auth";
+import { getVerifiedAdmin } from "@/lib/auth";
 import {
   AUTHORIZE_FIELDS,
   buildRedirect,
@@ -89,13 +89,24 @@ export default async function AuthorizePage({
     );
   }
   if (!v.ok) {
-    redirect(buildRedirect(v.redirectUri, {
-      error: v.error, error_description: v.description, state: v.state, iss: origin,
-    }));
+    // Registration is open, so a "registered" redirect URI may belong to
+    // anyone. Bounce errors back automatically only to Claude itself —
+    // otherwise this page would be an open redirector.
+    if (isKnownClaudeRedirect(v.redirectUri)) {
+      redirect(buildRedirect(v.redirectUri, {
+        error: v.error, error_description: v.description, state: v.state, iss: origin,
+      }));
+    }
+    return (
+      <Notice title="Ugyldig forespørgsel">
+        <p>{v.description} ({v.error})</p>
+        <p>Forespørgslen kom fra {new URL(v.redirectUri).host}. Der er ikke givet adgang.</p>
+      </Notice>
+    );
   }
 
-  const session = await getSession();
-  if (!session.isLoggedIn) {
+  const admin = await getVerifiedAdmin();
+  if (!admin) {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     redirect(`/login?next=${encodeURIComponent(`/oauth/authorize?${qs}`)}`);
   }
@@ -165,7 +176,7 @@ export default async function AuthorizePage({
             </Button>
           </form>
         </div>
-        <p className="text-xs text-muted-foreground text-center">Logget ind som {session.username}</p>
+        <p className="text-xs text-muted-foreground text-center">Logget ind som {admin.username}</p>
       </div>
     </Shell>
   );

@@ -12,7 +12,11 @@ export function safeNextPath(next: string | null | undefined): string | null {
     const base = "http://campsense.invalid";
     const u = new URL(next, base);
     if (u.origin !== base) return null;
-    return u.pathname + u.search + u.hash;
+    // Parsing collapses dot segments ("/.//evil.com" → "//evil.com"), so the
+    // normalised result must pass the same checks again.
+    const out = u.pathname + u.search + u.hash;
+    if (!out.startsWith("/") || out.startsWith("//") || out.startsWith("/\\")) return null;
+    return out;
   } catch {
     return null;
   }
