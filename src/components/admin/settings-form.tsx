@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useRef, useEffect } from "react";
+import { useState, useTransition, useRef, useEffect, useSyncExternalStore } from "react";
 import { Save, Wifi, WifiOff, Loader2, Upload, Trash2, Send, Cloud, ChevronDown, ChevronRight, Copy, Check, ExternalLink, Shield, Radio, RefreshCw, Search, Zap, Clock, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,7 +40,16 @@ function SaveButton({ isPending, saved, onClick }: { isPending: boolean; saved: 
 }
 
 // ─── GENERAL TAB ───
+const noSubscribe = () => () => {};
+
+/** Host of a URL, or null when it doesn't parse. */
+function hostOf(url: string): string | null {
+  try { return new URL(url).host; } catch { return null; }
+}
+
 export function GeneralSettings({ settings }: SettingsFormProps) {
+  // The address the admin is using right now (client only; null during SSR).
+  const browserOrigin = useSyncExternalStore(noSubscribe, () => window.location.origin, () => null);
   const [invoiceTestLoading, setInvoiceTestLoading] = useState(false);
   const [invoiceTestResult, setInvoiceTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [values, setValues] = useState({
@@ -103,6 +112,31 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
               </div>
             </div>
           )}
+          {(() => {
+            const siteHost = hostOf(values.site_url.trim());
+            const currentHost = browserOrigin ? hostOf(browserOrigin) : null;
+            if (!siteHost || !currentHost || siteHost === currentHost || /^(localhost|127\.)/.test(currentHost)) return null;
+            return (
+              <div className="mt-3 flex items-start gap-2.5 text-sm p-3 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
+                <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium">Site URL peger på en anden adresse end den, du bruger</p>
+                  <p className="text-xs mt-0.5">
+                    Site URL er <span className="font-mono">{siteHost}</span>, men du er på{" "}
+                    <span className="font-mono">{currentHost}</span>. Gæstelinks, QR-koder og QuickPay-betalinger
+                    (callback) sendes til Site URL — hvis den adresse ikke er denne installation, virker de ikke.
+                  </p>
+                  <button
+                    type="button"
+                    className="text-xs font-medium underline mt-1"
+                    onClick={() => h("site_url", browserOrigin!)}
+                  >
+                    Brug {browserOrigin}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 

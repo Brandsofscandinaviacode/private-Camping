@@ -102,8 +102,8 @@ function McpSettingsInner({ state }: { state: McpSettingsState }) {
   const busy = (id: string) => isPending && busyId === id;
 
   // Without a real Site-URL, fall back to the address the admin is using now.
-  const mcpUrl = state.siteUrlIsPlaceholder && state.detectedEndpointUrl ? state.detectedEndpointUrl : state.endpointUrl;
-  const urlUnreachable = state.siteUrlIsPlaceholder && !state.detectedEndpointUrl;
+  const mcpUrl = state.endpointUrl;
+  const urlUnreachable = state.urlUnreachable;
 
   function run(id: string, fn: () => Promise<void>) {
     setBusyId(id);
@@ -207,6 +207,21 @@ function McpSettingsInner({ state }: { state: McpSettingsState }) {
             <p className="text-sm text-muted-foreground">MCP-URL</p>
             <CopyField value={mcpUrl} />
           </div>
+
+          {state.siteUrlMismatch && (
+            <div className="flex items-start gap-2.5 text-sm p-3 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
+              <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Site-URL passer ikke med adressen, du bruger</p>
+                <p className="text-xs mt-0.5">
+                  Site-URL er <span className="font-mono">{state.siteUrlMismatch.siteUrl}</span>, men CampSense svarer på{" "}
+                  <span className="font-mono">{state.siteUrlMismatch.currentOrigin}</span>. Brug URL&apos;en ovenfor til Claude.
+                  Gæstelinks, QR-koder og betalings-callbacks bruger Site-URL — ret den under Generelt → Site URL, hvis den
+                  ikke peger på denne installation.
+                </p>
+              </div>
+            </div>
+          )}
 
           {state.siteUrlIsPlaceholder && (
             <div className="flex items-start gap-2.5 text-sm p-3 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">

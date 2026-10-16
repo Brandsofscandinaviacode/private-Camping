@@ -23,10 +23,17 @@ import {
 } from "./oauth";
 
 export type McpSettingsState = Awaited<ReturnType<typeof getMcpAdminOverview>> & {
+  /** MCP URL to give Claude: the address this admin is using right now. */
   endpointUrl: string;
+  /** Neither Site-URL nor the browser address is publicly reachable (localhost). */
+  urlUnreachable: boolean;
+  /**
+   * Site-URL points at a different host than the one CampSense is reached on.
+   * Guest links, QR codes and QuickPay callbacks use Site-URL, so this is
+   * worth fixing on its own — and Site-URL can't be used for Claude either.
+   */
+  siteUrlMismatch: { siteUrl: string; currentOrigin: string } | null;
   siteUrlIsPlaceholder: boolean;
-  /** MCP URL as seen from the admin's current browser address — a hint when Site-URL isn't set. */
-  detectedEndpointUrl: string | null;
 };
 
 const SETTINGS_PATH = "/admin/settings";
@@ -36,18 +43,22 @@ export async function getMcpSettingsState(): Promise<McpSettingsState> {
   const [overview, settings, h] = await Promise.all([getMcpAdminOverview(), readGlobalSettings(), headers()]);
   const baseUrl = getBaseUrl(settings);
   const siteUrlIsPlaceholder = isPlaceholderBaseUrl(baseUrl);
-
-  let detectedEndpointUrl: string | null = null;
-  if (siteUrlIsPlaceholder) {
-    const origin = originFromHeaders(h);
-    if (!isPlaceholderBaseUrl(origin)) detectedEndpointUrl = mcpResourceUrl(origin);
-  }
+  // The OAuth issuer and resource are derived from the request host, so the
+  // address the admin reached this page on is the one that answers for MCP.
+  const origin = originFromHeaders(h);
+  const originUsable = !isPlaceholderBaseUrl(origin);
+  const endpointUrl = mcpResourceUrl(originUsable ? origin : baseUrl);
+  const siteUrlMismatch =
+    originUsable && !siteUrlIsPlaceholder && new URL(baseUrl).host !== new URL(origin).host
+      ? { siteUrl: baseUrl, currentOrigin: origin }
+      : null;
 
   return {
     ...overview,
-    endpointUrl: mcpResourceUrl(baseUrl),
+    endpointUrl,
+    urlUnreachable: !originUsable && siteUrlIsPlaceholder,
+    siteUrlMismatch,
     siteUrlIsPlaceholder,
-    detectedEndpointUrl,
   };
 }
 
