@@ -31,7 +31,7 @@ import {
   type UpdateSessionResult,
 } from "./settlement-shared";
 import { isProviderBookingRef, parseBookingRef } from "./booking-ref";
-import { fmtDate, fmtDateTime, siteDayKey } from "./format";
+import { fmtDate, fmtDateTime, fmtDateWith, siteDayKey, siteDayStart, siteHour } from "./format";
 import { isDeskPaymentMethod, methodLabel } from "./payments-shared";
 import { PaymentError, depositToBalance, invoiceRemaining, recordInvoicePayment } from "./payments";
 import { findUnitConflicts } from "./stay-conflicts";
@@ -951,10 +951,11 @@ async function depositReceipt(sessionId: number, deposit: ReturnType<typeof depo
   };
 }
 
-// A planned date ("YYYY-MM-DD") is stored at local noon, like the booking
-// sync does, so it stays the same calendar day in the site's time zone.
+// A planned date ("YYYY-MM-DD") is stored at noon UTC, like the booking sync
+// does (bookingDayToDate), so it is the same calendar day in Denmark
+// whatever the server's time zone.
 function plannedDate(key: string): Date {
-  return new Date(`${key}T12:00:00`);
+  return new Date(`${key}T12:00:00Z`);
 }
 
 const WELCOME_TIMEOUT_MS = 15_000;
@@ -2949,9 +2950,10 @@ async function autoCreateAndSendInvoicesInternal(): Promise<{ created: number; s
   if (settings.invoice_email_enabled !== "true") return { created: 0, sent: 0 };
 
   const invoiceDaySetting = settings.invoice_email_day || "1";
-  const today = new Date();
-  const todayDate = today.getDate();
-  const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  // The campsite's calendar day, whatever the server's time zone
+  const todayStr = siteDayKey(new Date())!;
+  const [year, month, todayDate] = todayStr.split("-").map(Number);
+  const lastDayOfMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
   let isInvoiceDay = false;
   if (invoiceDaySetting === "last") {
@@ -2961,10 +2963,9 @@ async function autoCreateAndSendInvoicesInternal(): Promise<{ created: number; s
   }
   if (!isInvoiceDay) return { created: 0, sent: 0 };
 
-  // Check if already ran today (prevent duplicate invoices)
-  // Local date, not toISOString(): between local midnight and UTC midnight the
-  // UTC key still names yesterday, so the block would run twice on invoice day.
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  // Check if already ran today (prevent duplicate invoices) — the site day,
+  // not toISOString(): between local midnight and UTC midnight the UTC key
+  // still names yesterday, so the block would run twice on invoice day.
   if (settings._last_auto_invoice_date === todayStr) return { created: 0, sent: 0 };
 
   // Claim today BEFORE invoicing: if the run dies halfway, the next cron tick
@@ -3267,7 +3268,7 @@ async function sendInvoiceToCustomerInternal(invoiceId: number, unitId: number):
 
 
   const unitName = unitDisplayName(unit.type, unit.name);
-  const periodLabel = new Date(invoice.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" });
+  const periodLabel = fmtDateWith(invoice.periodStart, { month: "long", year: "numeric" });
 
   try {
     const { sendInvoiceNotification } = await import("./notifications");
@@ -3751,14 +3752,14 @@ export async function updateSessionDetails(
   }
   if (data.expectedCheckOut !== undefined) {
     const v = data.expectedCheckOut.trim();
-    const current = session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : "";
+    const current = siteDayKey(session.expectedCheckOut) ?? "";
     if (v !== current) {
       if (!v) {
         setGuest("expectedCheckOut", null);
       } else {
-        // Noon local time, like imported bookings — a date-only value at UTC
+        // Noon UTC, like imported bookings — a date-only value at UTC
         // midnight lands on the previous evening in Denmark.
-        const d = new Date(`${v}T12:00:00`);
+        const d = new Date(`${v}T12:00:00Z`);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(d.getTime())) {
           return { ok: false, message: "Ugyldig dato for forventet checkout." };
         }
@@ -4110,16 +4111,17 @@ export async function getTotalConsumptionHistory(period: "week" | "month" = "wee
       const curr = unitLogs[i];
       const date = curr.recordedAt;
 
+      // Danish days, whatever the server's time zone
+      const dayKey = siteDayKey(date)!;
       let bucketKey: string;
       if (period === "week") {
         // ISO week: get Monday of the week
-        const d = new Date(date);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        d.setDate(diff);
+        const d = new Date(`${dayKey}T00:00:00Z`);
+        const day = d.getUTCDay();
+        d.setUTCDate(d.getUTCDate() - (day === 0 ? 6 : day - 1));
         bucketKey = d.toISOString().slice(0, 10);
       } else {
-        bucketKey = date.toISOString().slice(0, 7);
+        bucketKey = dayKey.slice(0, 7);
       }
 
       if (!buckets.has(bucketKey)) buckets.set(bucketKey, { el: 0, water: 0 });
@@ -4359,9 +4361,9 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
       esc(s.guestName),
       esc(s.guestEmail),
       esc(s.guestPhone),
-      esc(s.checkInTime.toISOString().slice(0, 10)),
-      esc(s.checkOutTime?.toISOString().slice(0, 10)),
-      esc(s.expectedCheckOut?.toISOString().slice(0, 10)),
+      esc(siteDayKey(s.checkInTime)),
+      esc(siteDayKey(s.checkOutTime)),
+      esc(siteDayKey(s.expectedCheckOut)),
       esc(mainKwhDelta !== null ? mainKwhDelta.toFixed(2) : ""),
       esc(heatKwhDelta !== null ? heatKwhDelta.toFixed(2) : ""),
       esc(hasKwh ? totalKwh.toFixed(2) : ""),
@@ -4379,7 +4381,7 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
       esc(s.pricePerLiterWaterOverride?.toFixed(4)),
       esc(s.paymentStatus),
       esc(s.paymentId),
-      esc(s.paidAt?.toISOString().slice(0, 10)),
+      esc(siteDayKey(s.paidAt)),
       esc(s.bookingRef),
       esc(s.notes),
     ].join(";");
@@ -4445,8 +4447,8 @@ export async function exportInvoicesCSV() {
       esc(inv.id),
       esc(`${type} ${inv.unit.name}`),
       esc(type),
-      esc(inv.periodStart.toISOString().slice(0, 10)),
-      esc(inv.periodEnd.toISOString().slice(0, 10)),
+      esc(siteDayKey(inv.periodStart)),
+      esc(siteDayKey(inv.periodEnd)),
       esc(inv.startKwh?.toFixed(2)),
       esc(inv.endKwh?.toFixed(2)),
       esc(elDelta !== null ? elDelta.toFixed(2) : ""),
@@ -4462,7 +4464,7 @@ export async function exportInvoicesCSV() {
       esc(inv.totalAmount.toFixed(2)),
       esc(inv.status),
       esc(inv.paymentId),
-      esc(inv.paidAt?.toISOString().slice(0, 10)),
+      esc(siteDayKey(inv.paidAt)),
       esc(inv.paymentToken),
     ].join(";");
   });
@@ -4619,12 +4621,13 @@ export async function getSpotPricesForDate(date: string) {
 // Get hourly consumption rate for a given date (from consumption logs)
 export async function getHourlyConsumptionForDate(date: string) {
   await requireAuth();
-  const startOfDay = new Date(`${date}T00:00:00`);
-  const endOfDay = new Date(`${date}T23:59:59`);
+  // A Danish day, keyed by Danish hour like the spot prices (HourDK)
+  const startOfDay = siteDayStart(date);
+  const endOfDay = siteDayStart(date, 1);
 
   const logs = await prisma.consumptionLog.findMany({
     where: {
-      recordedAt: { gte: startOfDay, lte: endOfDay },
+      recordedAt: { gte: startOfDay, lt: endOfDay },
     },
     orderBy: { recordedAt: "asc" },
   });
@@ -4650,7 +4653,7 @@ export async function getHourlyConsumptionForDate(date: string) {
       if (diffHours <= 0 || diffHours > 2) continue; // skip gaps
 
       const kwhRate = (curr.electricityKwh - prev.electricityKwh) / diffHours;
-      const hourKey = curr.recordedAt.toISOString().slice(0, 13) + ":00:00";
+      const hourKey = `${siteDayKey(curr.recordedAt)}T${String(siteHour(curr.recordedAt)).padStart(2, "0")}:00:00`;
 
       const existing = hourlyMap.get(hourKey) || { totalKwh: 0, count: 0 };
       existing.totalKwh += Math.max(0, kwhRate);
@@ -4699,7 +4702,7 @@ export async function getAverageHourlyConsumption(days: number = 7) {
       if (diffHours <= 0 || diffHours > 2) continue;
 
       const kwhRate = Math.max(0, (curr.electricityKwh - prev.electricityKwh) / diffHours);
-      const hour = curr.recordedAt.getHours();
+      const hour = siteHour(curr.recordedAt)!;
 
       const existing = hourlyAvg.get(hour) || { totalKwh: 0, count: 0 };
       existing.totalKwh += kwhRate;
@@ -4914,9 +4917,12 @@ export async function getEconomySummary(): Promise<{
     return monthMap.get(month)!;
   }
 
+  // Months are Danish months, whatever the server's time zone
+  const monthOf = (d: Date) => siteDayKey(d)!.slice(0, 7);
+
   for (const s of sessions) {
     const date = s.checkOutTime || s.checkInTime;
-    const month = date.toISOString().slice(0, 7);
+    const month = monthOf(date);
     const m = getOrCreate(month);
     m.sessionsCount++;
     const cost = s.totalCost ?? 0;
@@ -4930,7 +4936,7 @@ export async function getEconomySummary(): Promise<{
   }
 
   for (const inv of invoices) {
-    const month = inv.periodEnd.toISOString().slice(0, 7);
+    const month = monthOf(inv.periodEnd);
     const m = getOrCreate(month);
     m.invoicesCount++;
     m.totalRevenue += inv.totalAmount;
@@ -4949,7 +4955,7 @@ export async function getEconomySummary(): Promise<{
   // any payment behind them (card payments off) were counted as paid.
   for (const [rows, isLaundry] of [[laundrySessions, true], [showerSessions, false]] as const) {
     for (const r of rows) {
-      const m = getOrCreate(r.startedAt.toISOString().slice(0, 7));
+      const m = getOrCreate(monthOf(r.startedAt));
       const price = r.pricePaid ?? 0;
       if (isLaundry) { m.laundryCount++; m.totalLaundry += price; }
       else { m.showerCount++; m.totalShowers += price; }
@@ -4966,7 +4972,7 @@ export async function getEconomySummary(): Promise<{
     }
   }
   for (const p of deskServicePayments) {
-    const m = getOrCreate(p.createdAt.toISOString().slice(0, 7));
+    const m = getOrCreate(monthOf(p.createdAt));
     m.servicesRevenue += p.amount;
     m.totalRevenue += p.amount;
     m.totalPaid += p.amount;
@@ -4986,7 +4992,7 @@ export async function getEconomySummary(): Promise<{
       unitName: unitDisplayName(s.unit.type, s.unit.name),
       guestName: s.guestName,
       total: unpaidSettlements.get(s.id)!.owed,
-      checkOut: s.checkOutTime?.toISOString().slice(0, 10) || "",
+      checkOut: siteDayKey(s.checkOutTime) ?? "",
     }));
 
   // Unpaid invoices
@@ -4996,7 +5002,7 @@ export async function getEconomySummary(): Promise<{
       id: inv.id,
       unitName: unitDisplayName(inv.unit.type, inv.unit.name),
       total: inv.totalAmount,
-      periodEnd: inv.periodEnd.toISOString().slice(0, 10),
+      periodEnd: siteDayKey(inv.periodEnd)!,
     }));
 
   const laundryTotals = {

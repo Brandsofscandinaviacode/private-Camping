@@ -40,6 +40,7 @@ import {
   getGuestLaundryMachines,
 } from "@/lib/actions";
 import { type Locale, localeLabels, getTranslations } from "@/lib/guest-translations";
+import { fmtDateWith, siteDayKey } from "@/lib/format";
 
 interface InvoiceData {
   id: number;
@@ -355,13 +356,10 @@ export function GuestPortalClient({
   // Next invoice date for long-term
   const nextInvoiceDateStr = (() => {
     if (!isLongTerm || !nextInvoiceDay) return null;
-    const now = new Date();
-    let nextDate = new Date(now.getFullYear(), now.getMonth(), nextInvoiceDay);
-    if (nextDate <= now) {
-      nextDate = new Date(now.getFullYear(), now.getMonth() + 1, nextInvoiceDay);
-    }
-    const loc = locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK";
-    return nextDate.toLocaleDateString(loc, { day: "numeric", month: "long" });
+    // The campsite's calendar, wherever the guest's phone is
+    const [y, m, d] = siteDayKey(new Date())!.split("-").map(Number);
+    const nextDate = new Date(Date.UTC(y, nextInvoiceDay <= d ? m : m - 1, nextInvoiceDay, 12));
+    return fmtDateWith(nextDate, { day: "numeric", month: "long" }, intl);
   })();
 
   return (
@@ -398,14 +396,10 @@ export function GuestPortalClient({
           <h1 className="text-xl font-bold">{tx.welcome}, {guestName}!</h1>
           <p className="text-muted-foreground text-sm mt-0.5 font-medium">{unitName}</p>
           <p className="text-muted-foreground/60 text-xs mt-1.5">
-            {isLongTerm ? tx.longTermRental : `${tx.arrival}: ${new Date(checkInTime).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
-              day: "numeric", month: "short",
-            })}`}
+            {isLongTerm ? tx.longTermRental : `${tx.arrival}: ${fmtDateWith(checkInTime, { day: "numeric", month: "short" }, intl)}`}
             {!isLongTerm && expectedCheckOut && (
               <span>
-                {" — "}{tx.departure}: {new Date(expectedCheckOut).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
-                  day: "numeric", month: "short",
-                })}
+                {" — "}{tx.departure}: {fmtDateWith(expectedCheckOut, { day: "numeric", month: "short" }, intl)}
               </span>
             )}
           </p>
@@ -421,9 +415,7 @@ export function GuestPortalClient({
                 <p className="font-medium">{tx.stayCompleted}</p>
                 {checkOutTime && (
                   <p className="text-sm text-muted-foreground mt-1">
-                    {tx.departureDate}: {new Date(checkOutTime).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", {
-                      weekday: "long", day: "numeric", month: "long",
-                    })}
+                    {tx.departureDate}: {fmtDateWith(checkOutTime, { weekday: "long", day: "numeric", month: "long" }, intl)}
                   </p>
                 )}
               </div>
@@ -580,11 +572,8 @@ export function GuestPortalClient({
           const isCurrentMonth = monthIndex === 0;
 
           // Separate current-month invoices from past-month invoices
-          const now = new Date();
-          const isInCurrentMonth = (inv: InvoiceData) => {
-            const d = new Date(inv.periodStart);
-            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-          };
+          const thisMonth = siteDayKey(new Date())!.slice(0, 7);
+          const isInCurrentMonth = (inv: InvoiceData) => siteDayKey(inv.periodStart)?.slice(0, 7) === thisMonth;
           const currentMonthInvoices = relevantInvoices.filter(isInCurrentMonth);
           const pastMonthInvoices = relevantInvoices.filter(inv => !isInCurrentMonth(inv));
 
@@ -623,11 +612,10 @@ export function GuestPortalClient({
             : (viewedInvoice?.status === "PAID" ? viewedInvoice.totalAmount : 0);
 
           // Month label
-          const locStr = locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK";
           const monthLabel = isCurrentMonth
-            ? new Date().toLocaleDateString(locStr, { month: "long", year: "numeric" })
+            ? fmtDateWith(new Date(), { month: "long", year: "numeric" }, intl)
             : viewedInvoice
-              ? new Date(viewedInvoice.periodStart).toLocaleDateString(locStr, { month: "long", year: "numeric" })
+              ? fmtDateWith(viewedInvoice.periodStart, { month: "long", year: "numeric" }, intl)
               : "";
 
           const paidLabel = locale === "en" ? "Paid" : locale === "de" ? "Bezahlt" : "Betalt";
@@ -875,7 +863,7 @@ export function GuestPortalClient({
                   <CreditCard className="h-4 w-4 mr-2" />
                   {payingInvoiceId === unpaidInvoices[0].id
                     ? tx.creatingPayment
-                    : `${tx.payInvoice} — ${new Date(unpaidInvoices[0].periodStart).toLocaleDateString(intl, { month: "long" })} — ${formatDKK(unpaidInvoices[0].totalAmount)}`}
+                    : `${tx.payInvoice} — ${fmtDateWith(unpaidInvoices[0].periodStart, { month: "long" }, intl)} — ${formatDKK(unpaidInvoices[0].totalAmount)}`}
                 </Button>
               )}
               {payError && <p className="text-xs text-red-600 text-center">{payError}</p>}
@@ -920,7 +908,7 @@ export function GuestPortalClient({
                           </span>
                           {m.endsAt && (
                             <p className="text-[11px] text-muted-foreground mt-1">
-                              {new Date(m.endsAt).toLocaleTimeString(intl, { hour: "2-digit", minute: "2-digit" })}
+                              {fmtDateWith(m.endsAt, { hour: "2-digit", minute: "2-digit" }, intl)}
                             </p>
                           )}
                         </div>
@@ -1099,7 +1087,7 @@ export function GuestPortalClient({
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium">
-                        {new Date(inv.periodStart).toLocaleDateString(locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "da-DK", { month: "long", year: "numeric" })}
+                        {fmtDateWith(inv.periodStart, { month: "long", year: "numeric" }, intl)}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {[

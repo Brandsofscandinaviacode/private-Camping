@@ -15,6 +15,7 @@ import {
   syncInvoicesToAccounting, syncSessionsToAccounting, type MonthlyEconomySummary,
 } from "@/lib/actions";
 import { KpiGrid, Kpi, Section } from "@/components/admin/admin-ui";
+import { fmtDate, siteDayKey } from "@/lib/format";
 
 const monthNames: Record<string, string> = {
   "01": "Januar", "02": "Februar", "03": "Marts", "04": "April", "05": "Maj", "06": "Juni",
@@ -79,9 +80,10 @@ export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardPr
     setExportType(type);
     startTransition(async () => {
       try {
-        if (type === "sessions") downloadCSV(await exportSessionsCSV("all"), `ophold_alle_${new Date().toISOString().slice(0, 10)}.csv`);
-        else if (type === "sessions_unpaid") downloadCSV(await exportSessionsCSV("unpaid"), `ophold_ubetalte_${new Date().toISOString().slice(0, 10)}.csv`);
-        else downloadCSV(await exportInvoicesCSV(), `fakturaer_${new Date().toISOString().slice(0, 10)}.csv`);
+        const today = siteDayKey(new Date());
+        if (type === "sessions") downloadCSV(await exportSessionsCSV("all"), `ophold_alle_${today}.csv`);
+        else if (type === "sessions_unpaid") downloadCSV(await exportSessionsCSV("unpaid"), `ophold_ubetalte_${today}.csv`);
+        else downloadCSV(await exportInvoicesCSV(), `fakturaer_${today}.csv`);
       } catch (e) { console.error("Export error:", e); } finally { setExportType(null); }
     });
   }
@@ -138,7 +140,7 @@ export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardPr
               <div className="space-y-1">
                 {unpaidSessions.map((s) => (
                   <Link key={s.id} href={`/admin/bookings/${s.id}`} className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-muted/50 transition-colors text-sm">
-                    <div><span className="font-medium">{s.guestName}</span><span className="text-muted-foreground ml-2">{s.unitName}</span>{s.checkOut && <span className="text-muted-foreground ml-2">({s.checkOut})</span>}</div>
+                    <div><span className="font-medium">{s.guestName}</span><span className="text-muted-foreground ml-2">{s.unitName}</span>{s.checkOut && <span className="text-muted-foreground ml-2">({fmtDate(`${s.checkOut}T12:00:00Z`)})</span>}</div>
                     <span className="font-semibold text-red-600 tabular-nums">{fmt(s.total)} DKK</span>
                   </Link>
                 ))}
@@ -151,7 +153,7 @@ export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardPr
               <div className="space-y-1">
                 {unpaidInvoices.map((inv) => (
                   <div key={inv.id} className="flex items-center justify-between py-2 px-3 rounded-lg text-sm">
-                    <div><span className="font-medium">{inv.unitName}</span><span className="text-muted-foreground ml-2">Faktura #{inv.id}</span><span className="text-muted-foreground ml-2">({inv.periodEnd})</span></div>
+                    <div><span className="font-medium">{inv.unitName}</span><span className="text-muted-foreground ml-2">Faktura #{inv.id}</span><span className="text-muted-foreground ml-2">({fmtDate(`${inv.periodEnd}T12:00:00Z`)})</span></div>
                     <span className="font-semibold text-red-600 tabular-nums">{fmt(inv.total)} DKK</span>
                   </div>
                 ))}
@@ -255,7 +257,7 @@ const weekMonthNames: Record<string, string> = {
 };
 function formatPeriodLabel(key: string, period: "week" | "month") {
   if (period === "month") { const [year, m] = key.split("-"); return `${weekMonthNames[m] || m} ${year.slice(2)}`; }
-  const d = new Date(key); return `${d.getDate()}/${d.getMonth() + 1}`;
+  const [, m, d] = key.split("-"); return `${Number(d)}/${Number(m)}`;
 }
 
 function TotalConsumptionChart() {

@@ -242,12 +242,12 @@ export default async function BookingDetailPage({
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">Check-out</span>
-                  <span className="text-right">{session.checkOutTime ? new Date(session.checkOutTime).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+                  <span className="text-right">{fmtDateTime(session.checkOutTime)}</span>
                 </div>
                 {session.expectedCheckOut && (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">Forventet</span>
-                    <span className="text-right">{new Date(session.expectedCheckOut).toLocaleDateString("da-DK", { day: "numeric", month: "short", year: "numeric" })}</span>
+                    <span className="text-right">{fmtDate(session.expectedCheckOut)}</span>
                   </div>
                 )}
                 {(isPendingSession || isActive) && (
@@ -413,7 +413,7 @@ export default async function BookingDetailPage({
               water: session.lastTickWaterLiters != null,
             }}
             notes={session.notes || ""}
-            expectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : ""}
+            expectedCheckOut={siteDayKey(session.expectedCheckOut) ?? ""}
             startKwh={session.startKwh}
             endKwh={session.endKwh}
             startHeatingKwh={session.startHeatingKwh}
@@ -447,7 +447,7 @@ export default async function BookingDetailPage({
             <div className="rounded-xl border border-border/60 bg-muted/40 shadow-sm p-5">
               <p className="text-sm font-medium">Reservationen er udløbet</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Opholdet sluttede {session.expectedCheckOut ? new Date(session.expectedCheckOut).toLocaleDateString("da-DK") : "for over en dag siden"}, og gæsten blev aldrig checket ind i CampSense. Bookingen tæller ikke længere som reserveret.
+                Opholdet sluttede {session.expectedCheckOut ? fmtDate(session.expectedCheckOut) : "for over en dag siden"}, og gæsten blev aldrig checket ind i CampSense. Bookingen tæller ikke længere som reserveret.
               </p>
             </div>
           )}

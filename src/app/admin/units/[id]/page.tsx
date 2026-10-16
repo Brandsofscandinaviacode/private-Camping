@@ -20,7 +20,7 @@ import { LivePowerDraw } from "@/components/admin/live-power-draw";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { unitDisplayName as formatUnitName } from "@/lib/utils";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
-import { fmtShortDate, siteDayKey } from "@/lib/format";
+import { fmtDate, fmtDateTime, fmtShortDate, siteDayKey } from "@/lib/format";
 import { ChangeUnitDialog } from "@/components/admin/change-unit-dialog";
 import { CancelReservationButton, ReleaseUnitButton } from "@/components/admin/stay-correction-buttons";
 import { bookingSystemLabel } from "@/lib/booking/sync";
@@ -145,12 +145,12 @@ export default async function UnitDetailPage({
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground inline-flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Check-in</span>
-                  <span>{new Date(pendingSession.checkInTime).toLocaleDateString("da-DK")}</span>
+                  <span>{fmtDate(pendingSession.checkInTime)}</span>
                 </div>
                 {pendingSession.expectedCheckOut && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground inline-flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Forventet checkout</span>
-                    <span>{new Date(pendingSession.expectedCheckOut).toLocaleDateString("da-DK")}</span>
+                    <span>{fmtDate(pendingSession.expectedCheckOut)}</span>
                   </div>
                 )}
                 <Separator />
@@ -220,12 +220,12 @@ export default async function UnitDetailPage({
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Check-in</span>
-                  <span>{new Date(activeSession.checkInTime).toLocaleString("da-DK")}</span>
+                  <span>{fmtDateTime(activeSession.checkInTime)}</span>
                 </div>
                 {activeSession.expectedCheckOut && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Forventet checkout</span>
-                    <span>{new Date(activeSession.expectedCheckOut).toLocaleDateString("da-DK")}</span>
+                    <span>{fmtDate(activeSession.expectedCheckOut)}</span>
                   </div>
                 )}
                 <div className="flex justify-between items-center text-sm">
@@ -332,10 +332,10 @@ export default async function UnitDetailPage({
                       </Link>
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">
-                      {new Date(s.checkInTime).toLocaleDateString("da-DK")}
+                      {fmtDate(s.checkInTime)}
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">
-                      {s.checkOutTime ? new Date(s.checkOutTime).toLocaleDateString("da-DK") : "—"}
+                      {fmtDate(s.checkOutTime)}
                     </td>
                     <td className="px-5 py-3 text-right tabular-nums">{s.totalElectricityCost?.toFixed(2) ?? "—"}</td>
                     <td className="px-5 py-3 text-right tabular-nums">{s.totalWaterCost?.toFixed(2) ?? "—"}</td>

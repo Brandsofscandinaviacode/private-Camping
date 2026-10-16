@@ -4,6 +4,7 @@
 // types are used by the page's client components.
 
 import { openReservationWhere, startOfToday } from "./booking-status";
+import { siteDayStart } from "./format";
 import type { CheckInReceipt } from "./check-in";
 import type { SettlementTone } from "./settlement-shared";
 
@@ -24,9 +25,7 @@ export function todayHref(section: TodaySectionKey): string {
 /** [start, end) of the current day — the same boundary as booking-status. */
 export function todayBounds(now: Date = new Date()): { start: Date; end: Date } {
   const start = startOfToday(now);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start, end };
+  return { start, end: siteDayStart(start, 1) };
 }
 
 /** Arriving today: reservations due today, and stays checked in today. */

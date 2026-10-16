@@ -62,3 +62,47 @@ export function fmtRelativeDay(d: DateLike, now: Date = new Date()): string {
   if (diff === -1) return "i går";
   return fmtShortDate(d);
 }
+
+/** Any other format ("oktober 2026", or in the guest's language), still in the site's time zone. */
+export function fmtDateWith(d: DateLike, options: Intl.DateTimeFormatOptions, locale = "da-DK"): string {
+  const date = toDate(d);
+  return date ? new Intl.DateTimeFormat(locale, { ...options, timeZone: SITE_TIME_ZONE }).format(date) : "—";
+}
+
+const partsFmt = new Intl.DateTimeFormat("en-US", {
+  timeZone: SITE_TIME_ZONE,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+function siteParts(at: number): Record<string, number> {
+  return Object.fromEntries(partsFmt.formatToParts(new Date(at)).filter((p) => p.type !== "literal").map((p) => [p.type, Number(p.value)]));
+}
+
+/** Hour of the day (0–23) at the campsite. */
+export function siteHour(d: DateLike): number | null {
+  const date = toDate(d);
+  return date ? siteParts(date.getTime()).hour : null;
+}
+
+function siteOffsetMs(at: number): number {
+  const p = siteParts(at);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(at / 1000) * 1000;
+}
+
+/**
+ * Midnight at the start of a site day, as an instant — independent of the
+ * process time zone and DST-safe. `day` is an instant or a "2026-10-16" key;
+ * `addDays` moves to another day (1 = start of tomorrow).
+ */
+export function siteDayStart(day: Date | string = new Date(), addDays = 0): Date {
+  const key = typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : siteDayKey(day);
+  const wall = Date.parse(`${key}T00:00:00Z`) + addDays * 86_400_000;
+  const t = wall - siteOffsetMs(wall);
+  return new Date(wall - siteOffsetMs(t));
+}

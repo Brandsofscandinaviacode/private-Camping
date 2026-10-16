@@ -1,4 +1,5 @@
 import { logger } from "@/lib/logger";
+import { siteDayKey } from "@/lib/format";
 import type { AccountingProvider, AccountingInvoice, AccountingPayment, SyncResult } from "./types";
 
 const BASE_URL = "https://restapi.e-conomic.com";
@@ -103,14 +104,14 @@ export function createEconomicProvider(config: EconomicConfig): AccountingProvid
         }));
 
         const draft = await request(config, "POST", "/invoices/drafts", {
-          date: invoice.periodEnd.toISOString().slice(0, 10),
+          date: siteDayKey(invoice.periodEnd),
           currency: invoice.currency,
           customer: { customerNumber: customer.customerNumber },
           paymentTerms: { paymentTermsNumber: config.defaultPaymentTermsNumber },
           layout: { layoutNumber: 1 },
           lines,
           notes: {
-            heading: `${invoice.unitName} — ${invoice.periodStart.toISOString().slice(0, 10)} til ${invoice.periodEnd.toISOString().slice(0, 10)}`,
+            heading: `${invoice.unitName} — ${siteDayKey(invoice.periodStart)} til ${siteDayKey(invoice.periodEnd)}`,
           },
         });
 

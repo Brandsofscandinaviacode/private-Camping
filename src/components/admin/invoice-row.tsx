@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Zap, Droplets, Send, Loader2 } from "lucide-
 import { Button } from "@/components/ui/button";
 import { sendInvoiceToCustomer } from "@/lib/actions";
 import { fmtMoney, roundOre } from "@/lib/settlement-shared";
+import { fmtDateTime, fmtDateWith } from "@/lib/format";
 import { RegisterPaymentDialog } from "./payment-dialog";
 
 interface InvoiceRowProps {
@@ -67,7 +68,7 @@ export function InvoiceRow({ invoice, unitId, paidSoFar = 0 }: InvoiceRowProps) 
         <div className="flex items-center gap-2">
           {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
           <span className="font-medium">
-            {new Date(invoice.periodStart).toLocaleDateString("da-DK", { month: "long", year: "numeric" })}
+            {fmtDateWith(invoice.periodStart, { month: "long", year: "numeric" })}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -137,7 +138,7 @@ export function InvoiceRow({ invoice, unitId, paidSoFar = 0 }: InvoiceRowProps) 
           {/* Payment info */}
           {invoice.paidAt && (
             <p className="text-xs text-muted-foreground">
-              Betalt {new Date(invoice.paidAt).toLocaleString("da-DK")}
+              Betalt {fmtDateTime(invoice.paidAt)}
             </p>
           )}
           {partlyPaid && (

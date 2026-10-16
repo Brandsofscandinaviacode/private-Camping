@@ -7,18 +7,16 @@
 // A reservation the desk cancelled or marked as no-show (cancelledAt) is
 // neither: it is closed and drops out of every banner, counter and list.
 
-/** Midnight at the start of the current day (server/browser local time). */
+import { siteDayStart } from "./format";
+
+/** Midnight at the start of the current day at the campsite (whatever the server/browser zone). */
 export function startOfToday(now: Date = new Date()): Date {
-  const d = new Date(now);
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return siteDayStart(now);
 }
 
 /** Without a planned checkout, a no-show is given one day's grace. */
 function noCheckoutCutoff(now: Date): Date {
-  const d = startOfToday(now);
-  d.setDate(d.getDate() - 1);
-  return d;
+  return siteDayStart(now, -1);
 }
 
 type ReservationLike = {
@@ -76,9 +74,7 @@ export function cancelledReservationWhere() {
 
 /** Midnight at the end of the current day. */
 function endOfToday(now: Date): Date {
-  const d = startOfToday(now);
-  d.setDate(d.getDate() + 1);
-  return d;
+  return siteDayStart(now, 1);
 }
 
 /**
