@@ -116,7 +116,8 @@ const delta = (end: number | null, start: number | null) =>
 const sumKwh = (a: number | null, b: number | null) => (a !== null || b !== null ? (a ?? 0) + (b ?? 0) : null);
 
 function classifyService(paymentStatus: string): ServiceSettlement {
-  if (paymentStatus === "PAID") return "PAID";
+  // FREE: a desk start given away (pricePaid 0) — nothing on the bill.
+  if (paymentStatus === "PAID" || paymentStatus === "FREE") return "PAID";
   if (paymentStatus === "PREPAID") return "BALANCE";
   if (paymentStatus === "INVOICED") return "INVOICED";
   return "ON_ACCOUNT";
