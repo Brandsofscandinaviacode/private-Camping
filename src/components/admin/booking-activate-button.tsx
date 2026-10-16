@@ -14,7 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { activateBookingSession } from "@/lib/actions";
-import { checkOutDateError, prepaidAmountError } from "@/lib/check-in";
+import { checkOutDateError, prepaidAmountError, todayKey } from "@/lib/check-in";
 import { bookingRefLabel, isProviderBookingRef } from "@/lib/booking-ref";
 import { fmtRelativeDay, fmtShortDate } from "@/lib/format";
 import { parseAmount, type DeskPaymentMethod } from "@/lib/payments-shared";
@@ -45,6 +45,10 @@ interface Props {
   initialExpectedCheckOut?: string | null;
   /** Linked to a booking-system booking (externalBookingId) — number is read-only, as in "Redigér booking". */
   externallyLinked?: boolean;
+  /** Small "Tjek ind" button for list rows. */
+  compact?: boolean;
+  /** Stay on the list after check-in (it shows the receipt) instead of opening the booking. */
+  stayOnPage?: boolean;
 }
 
 export function BookingActivateButton({
@@ -62,6 +66,8 @@ export function BookingActivateButton({
   initialBookingRef,
   initialExpectedCheckOut,
   externallyLinked = false,
+  compact = false,
+  stayOnPage = false,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -76,6 +82,13 @@ export function BookingActivateButton({
   const [prepaidMethod, setPrepaidMethod] = useState<DeskPaymentMethod>("CASH");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Catching up on a guest who came on an earlier day: keep the booked
+  // arrival (units without meters), and no welcome weeks after arrival.
+  const arrivedEarlier = arrivalDate < todayKey();
+  const canKeepArrival = arrivedEarlier && !hasMeters;
+  const notifyOn = notify.email || notify.sms;
+  const [keepArrival, setKeepArrival] = useState(true);
+  const [sendWelcome, setSendWelcome] = useState(!arrivedEarlier);
 
   // "danplanner:227359" is the sync key: shown read-only, never sent back.
   const refLocked = externallyLinked || isProviderBookingRef(initialBookingRef);
@@ -92,6 +105,8 @@ export function BookingActivateButton({
       setBillingMode("POSTPAID");
       setPrepaidAmount("");
       setPrepaidMethod("CASH");
+      setKeepArrival(true);
+      setSendWelcome(!arrivedEarlier);
       setError(null);
     }
     setOpen(next);
@@ -137,16 +152,18 @@ export function BookingActivateButton({
           amount,
           updates,
           billingMode === "PREPAID" ? { method: prepaidMethod } : undefined,
+          { keepArrivalDate: canKeepArrival && keepArrival, sendWelcome: notifyOn ? sendWelcome : undefined },
         );
         if (!res.ok) {
           setError(res.message);
           return;
         }
         // This dialog disappears when the page refreshes; the booking page
-        // shows the receipt with the portal QR code.
+        // (or the list it was opened from) shows the receipt with the portal QR code.
         showCheckInReceipt(res.receipt);
         setOpen(false);
-        if (pathname !== `/admin/bookings/${sessionId}`) router.push(`/admin/bookings/${sessionId}`);
+        if (stayOnPage) router.refresh();
+        else if (pathname !== `/admin/bookings/${sessionId}`) router.push(`/admin/bookings/${sessionId}`);
       } catch {
         setError(TECHNICAL_ERROR);
       }
@@ -155,9 +172,9 @@ export function BookingActivateButton({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button className="w-full" />}>
-        <LogIn className="h-4 w-4 mr-2" />
-        Check ind
+      <DialogTrigger render={compact ? <Button size="sm" /> : <Button className="w-full" />}>
+        <LogIn className={compact ? "h-3.5 w-3.5 mr-1" : "h-4 w-4 mr-2"} />
+        {compact ? "Tjek ind" : "Check ind"}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -242,6 +259,16 @@ export function BookingActivateButton({
             </div>
           )}
 
+          {canKeepArrival && (
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input type="checkbox" checked={keepArrival} onChange={(e) => setKeepArrival(e.target.checked)} className="mt-0.5 h-4 w-4 accent-primary" />
+              <span>
+                <span className="text-sm font-medium block">Behold ankomstdatoen ({fmtShortDate(arrival)})</span>
+                <span className="text-xs text-muted-foreground">Gæsten kom før i dag. Ellers bliver check-in-tiden nu.</span>
+              </span>
+            </label>
+          )}
+
           <BillingModeField
             idPrefix="activate"
             mode={billingMode}
@@ -253,7 +280,22 @@ export function BookingActivateButton({
             hasMeters={hasMeters}
           />
 
-          <WelcomeHint notify={notify} />
+          {notifyOn && (
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input type="checkbox" checked={sendWelcome} onChange={(e) => setSendWelcome(e.target.checked)} className="mt-0.5 h-4 w-4 accent-primary" />
+              <span>
+                <span className="text-sm font-medium block">Send velkomstbesked</span>
+                <span className="text-xs text-muted-foreground">
+                  Portal-linket på e-mail/SMS.{arrivedEarlier && ` Gæsten har været her siden ${fmtShortDate(arrival)}.`}
+                </span>
+              </span>
+            </label>
+          )}
+          {notifyOn && !sendWelcome ? (
+            <p className="text-xs text-muted-foreground">Ingen besked sendes. Efter check-in får du portal-linket og en QR-kode, som du giver gæsten.</p>
+          ) : (
+            <WelcomeHint notify={notify} />
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-red-600">

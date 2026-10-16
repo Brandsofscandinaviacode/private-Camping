@@ -2,38 +2,31 @@
 
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
-import { arrivedNotCheckedInWhere, overdueStayWhere } from "@/lib/booking-status";
+import { arrivedNotCheckedInWhere, openReservationWhere, overdueStayWhere } from "@/lib/booking-status";
+import { todayArrivalsWhere, todayBounds, todayDeparturesWhere } from "@/lib/today";
+import { unitDisplayName } from "@/lib/utils";
 
 /**
- * Today's guest movements for the dashboard "I dag" KPI.
+ * Today's guest movements for the dashboard "I dag" KPI — the same lists as
+ * /admin/today, so the numbers match what the desk sees there.
  *
- * - arrivals:   sessions that check in today (any status created/scheduled today)
- * - departures: ACTIVE sessions whose planned checkout (expectedCheckOut) is today
- * - nextCheckIn: the next upcoming PENDING reservation (for the "Næste check-in" line)
- *
- * All three are cheap COUNT/findFirst queries against the existing `sessions` table —
- * no new schema is required.
+ * - arrivals:    reservations due today + stays checked in today
+ * - departures:  reservations and checked-in stays planned to leave today
+ *                (Danplanner guests are rarely checked in) + stays checked out today
+ * - nextCheckIn: the next reservation not yet checked in, today or later.
+ *                Imported bookings carry only a date, so the card shows the day.
  */
 export async function getDashboardMovements() {
   await requireAuth();
 
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-
+  const now = new Date();
   const [arrivals, departures, nextCheckIn] = await Promise.all([
-    prisma.session.count({
-      // Cancelled / no-show reservations aren't arrivals
-      where: { checkInTime: { gte: start, lt: end }, cancelledAt: null },
-    }),
-    prisma.session.count({
-      where: { status: "ACTIVE", expectedCheckOut: { gte: start, lt: end } },
-    }),
+    prisma.session.count({ where: todayArrivalsWhere(now) }),
+    prisma.session.count({ where: todayDeparturesWhere(now) }),
     prisma.session.findFirst({
-      where: { status: "PENDING", cancelledAt: null, checkInTime: { gte: new Date() } },
+      where: { ...openReservationWhere(now), checkInTime: { gte: todayBounds(now).start } },
       orderBy: { checkInTime: "asc" },
-      include: { unit: { select: { name: true } } },
+      include: { unit: { select: { name: true, type: true } } },
     }),
   ]);
 
@@ -43,7 +36,7 @@ export async function getDashboardMovements() {
     nextCheckIn: nextCheckIn
       ? {
           time: nextCheckIn.checkInTime.toISOString(),
-          unitName: nextCheckIn.unit.name,
+          unitName: unitDisplayName(nextCheckIn.unit.type, nextCheckIn.unit.name),
           guestName: nextCheckIn.guestName,
         }
       : null,

@@ -87,7 +87,7 @@ export default async function AdminDashboard() {
         </div>
         <div className="flex items-center gap-2">
           {/* Reception devices (phone/tablet): the day's work first, setup on desktop */}
-          <Link href="/admin/bookings?filter=arrived" className="lg:hidden">
+          <Link href="/admin/today" className="lg:hidden">
             <Button><LogIn className="h-4 w-4 mr-2" />Ankomster i dag</Button>
           </Link>
           <div className={units.length > 0 ? "hidden lg:block" : ""}>

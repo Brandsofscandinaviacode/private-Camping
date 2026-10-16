@@ -11,10 +11,12 @@ import {
   WashingMachine,
   HelpCircle,
   Map,
+  CalendarCheck,
 } from "lucide-react";
 
 const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt", exact: true },
+  { href: "/admin/today", label: "I dag", icon: CalendarCheck, section: "Oversigt" },
   { href: "/admin/map", label: "Pladskort", icon: Map, section: "Oversigt" },
   { href: "/admin/bookings", label: "Bookinger", icon: BookOpen, section: "Oversigt", badge: true },
   { href: "/admin/elpriser", label: "Elpriser", icon: Zap, section: "Oversigt" },
