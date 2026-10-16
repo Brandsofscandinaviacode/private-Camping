@@ -29,6 +29,8 @@ interface Machine {
   minutesLeft: number;
   endsAt: string | null;
   programs: Program[];
+  /** Card payments on; otherwise QR guests pay at the desk. */
+  cardPayment: boolean;
 }
 
 interface Props {
@@ -161,6 +163,13 @@ export function PublicLaundryMachineClient({ machine: initialMachine }: Props) {
       </div>
 
       <div className="max-w-md mx-auto px-4 py-4 space-y-3 -mt-4">
+        {!machine.cardPayment && machine.available && (
+          <Card>
+            <CardContent className="py-4">
+              <p className="text-sm font-medium text-amber-800">{tx.payAtReception}</p>
+            </CardContent>
+          </Card>
+        )}
         {message && (
           <Card>
             <CardContent className="py-4">
@@ -238,7 +247,7 @@ export function PublicLaundryMachineClient({ machine: initialMachine }: Props) {
                 <Button
                   className="w-full"
                   size="lg"
-                  disabled={!machine.available || starting}
+                  disabled={!machine.available || starting || !machine.cardPayment}
                   onClick={() => handleStart()}
                 >
                   {starting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -253,7 +262,7 @@ export function PublicLaundryMachineClient({ machine: initialMachine }: Props) {
                     <button
                       key={p.id}
                       type="button"
-                      disabled={!machine.available || starting}
+                      disabled={!machine.available || starting || !machine.cardPayment}
                       onClick={() => handleStart(p.id)}
                       className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left disabled:opacity-50"
                     >
@@ -275,7 +284,7 @@ export function PublicLaundryMachineClient({ machine: initialMachine }: Props) {
                   </Button>
                 </div>
               ) : (
-                <Button className="w-full" size="lg" disabled={!machine.available || starting} onClick={() => setPickingProgram(true)}>
+                <Button className="w-full" size="lg" disabled={!machine.available || starting || !machine.cardPayment} onClick={() => setPickingProgram(true)}>
                   {tx.selectProgram}
                 </Button>
               )
@@ -288,9 +297,9 @@ export function PublicLaundryMachineClient({ machine: initialMachine }: Props) {
                   </div>
                   <span className="font-semibold text-foreground">{machine.pricePerUse.toFixed(0)} DKK</span>
                 </div>
-                <Button className="w-full" size="lg" disabled={!machine.available || starting} onClick={() => handleStart()}>
+                <Button className="w-full" size="lg" disabled={!machine.available || starting || !machine.cardPayment} onClick={() => handleStart()}>
                   {starting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {starting ? tx.creatingPayment : tx.payAndStart.replace("{amount}", machine.pricePerUse.toFixed(0))}
+                  {starting ? tx.creatingPayment : (machine.cardPayment ? tx.payAndStart : tx.startWithAmount).replace("{amount}", machine.pricePerUse.toFixed(0))}
                 </Button>
               </>
             )}

@@ -97,6 +97,12 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "Amount mismatch" }, { status: 400 });
         }
       }
+      // Cancelled (and refunded) from the desk: a repeated callback must not
+      // start the machine again.
+      if (laundrySess.cancelledAt) {
+        logger.warn("quickpay", `Laundry ${laundrySess.id}: callback for a use cancelled at the desk — ignored`);
+        return NextResponse.json({ status: "ok", type: "laundry_cancelled", id: laundrySess.id });
+      }
       // A guest who took longer than the pending TTL on the card page arrives
       // here with an auto-CANCELLED row but a captured payment. Re-open it if
       // the machine is still free; otherwise flag it loudly for a refund.
@@ -136,6 +142,10 @@ export async function POST(req: NextRequest) {
           logger.error("quickpay", `Shower ${showerSess.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);
           return NextResponse.json({ error: "Amount mismatch" }, { status: 400 });
         }
+      }
+      if (showerSess.cancelledAt) {
+        logger.warn("quickpay", `Shower ${showerSess.id}: callback for a use cancelled at the desk — ignored`);
+        return NextResponse.json({ status: "ok", type: "shower_cancelled", id: showerSess.id });
       }
       if (showerSess.status === "CANCELLED") {
         const busy = await prisma.showerSess.findFirst({

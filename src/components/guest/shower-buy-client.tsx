@@ -17,9 +17,10 @@ interface Shower {
   minMinutes: number;
   maxMinutes: number;
   available: boolean;
+  cardPayment: boolean;
 }
 
-export function ShowerBuyClient({ shower }: { shower: Shower }) {
+export function ShowerBuyClient({ shower, guestToken }: { shower: Shower; guestToken: string | null }) {
   const [locale, setLocale] = useState<Locale>(detectLocale);
   const tx = getTranslations(locale);
   const [minutes, setMinutes] = useState<number>(
@@ -29,6 +30,9 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
   const [error, setError] = useState<string | null>(null);
 
   const price = +(minutes * shower.pricePerMinute).toFixed(2);
+  // A stay's guest is charged on credit/balance/bill; a QR guest can only pay
+  // by card — without card payments they pay at the desk.
+  const payAtDesk = !shower.cardPayment && !guestToken;
 
   function dec() {
     setMinutes((m) => Math.max(shower.minMinutes, m - 1));
@@ -41,7 +45,7 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await createShowerPayment(shower.id, minutes);
+      const res = await createShowerPayment(shower.id, minutes, guestToken ?? undefined);
       if (!res.ok) {
         setError(res.message);
         setLoading(false);
@@ -158,14 +162,22 @@ export function ShowerBuyClient({ shower }: { shower: Shower }) {
               </div>
             )}
 
-            <Button className="w-full h-12 text-base" size="lg" disabled={loading} onClick={handleBuy}>
+            {payAtDesk && (
+              <p className="text-sm text-center rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-3 py-2">
+                {tx.payAtReception}
+              </p>
+            )}
+
+            <Button className="w-full h-12 text-base" size="lg" disabled={loading || payAtDesk} onClick={handleBuy}>
               {loading ? (
                 <>
                   <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                  {tx.creatingPayment}
+                  {shower.cardPayment && !guestToken ? tx.creatingPayment : tx.turningOn}
                 </>
-              ) : (
+              ) : shower.cardPayment && !guestToken ? (
                 tx.payAndStartShower.replace("{amount}", price.toFixed(0))
+              ) : (
+                tx.startWithAmount.replace("{amount}", price.toFixed(0))
               )}
             </Button>
 

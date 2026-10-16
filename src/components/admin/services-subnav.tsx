@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, WashingMachine, Wind, Droplets } from "lucide-react";
+import { LayoutDashboard, WashingMachine, Wind, Droplets, History } from "lucide-react";
 
 const tabs = [
   { href: "/admin/services", label: "Oversigt", icon: LayoutDashboard, exact: true },
+  { href: "/admin/services/history", label: "Historik", icon: History },
   { href: "/admin/services/showers", label: "Bade", icon: Droplets },
   { href: "/admin/services/washers", label: "Vaskemaskiner", icon: WashingMachine },
   { href: "/admin/services/dryers", label: "Tørretumblere", icon: Wind },

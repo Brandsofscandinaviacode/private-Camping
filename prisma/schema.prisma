@@ -481,11 +481,23 @@ model ShowerSess {
   pauseRemainingMs Int?                             // Remaining ms left when pause started
   pauseResumedAt  DateTime?                         // Last resume — enforces 10s pause cooldown
 
-  pricePaid       Float    @default(0)              // Running total (extensions add to this)
+  pricePaid       Float    @default(0)              // Running total via the payment channel below (extensions add to this)
   minutesPaid     Int      @default(0)              // Running total minutes paid (extensions add to this)
-  paymentStatus   String   @default("UNPAID")       // UNPAID | PAID
+  paymentStatus   String   @default("UNPAID")       // UNPAID | PAID | PREPAID | ON_ACCOUNT | INVOICED | FREE | REFUNDED
   paymentId       String?                           // QuickPay transaction ID for current purchase
   pendingMinutes  Int?                              // Minutes being bought while waiting for callback (extension)
+
+  // How it was paid and what happened to the money (see LaundrySess)
+  paymentMethod   String?                           // QUICKPAY | CASH | MOBILEPAY | CARD_TERMINAL | CREDIT | BALANCE | ACCOUNT | FREE
+  deskPaymentId   Int?                              // Payment row for a start paid at the desk
+  creditUsed      Float    @default(0)              // Service credit used on top of pricePaid
+  note            String?                           // Desk note / reason for a free start
+  startedBy       String?                           // Admin username for desk starts; null = guest
+  cancelledAt     DateTime?
+  cancelledBy     String?
+  cancelReason    String?
+  refundAmount    Float?                            // Money given back (balance, desk or voided from the bill), excl. credit
+  refundMethod    String?                           // BALANCE | ACCOUNT | CASH | MOBILEPAY | CARD_TERMINAL | NONE
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -534,10 +546,23 @@ model LaundrySess {
   endsAt          DateTime                         // When the machine should turn off
   status          String   @default("ACTIVE")      // ACTIVE, COMPLETED, CANCELLED
   durationMinutes Int      @default(0)             // Snapshot of duration at start
-  pricePaid       Float    @default(0)
+  pricePaid       Float    @default(0)              // Amount taken via the payment channel below (excl. creditUsed)
   chargedAmount   Float?                           // What the card link was for (price − laundry credit); callback validates against this
-  paymentStatus   String   @default("UNPAID")      // UNPAID, PAID
+  paymentStatus   String   @default("UNPAID")      // UNPAID | PAID | PREPAID | ON_ACCOUNT | INVOICED | FREE | REFUNDED
   paymentId       String?                           // QuickPay transaction ID
+
+  // How it was paid and what happened to the money. PAID only means money was
+  // actually taken (card, desk or service credit) — a free start is FREE.
+  paymentMethod   String?                           // QUICKPAY | CASH | MOBILEPAY | CARD_TERMINAL | CREDIT | BALANCE | ACCOUNT | FREE
+  deskPaymentId   Int?                              // Payment row for a start paid at the desk
+  creditUsed      Float    @default(0)              // Service credit used on top of pricePaid
+  note            String?                           // Desk note / reason for a free start
+  startedBy       String?                           // Admin username for desk starts; null = guest
+  cancelledAt     DateTime?                         // "Annullér og refundér" — status is then CANCELLED
+  cancelledBy     String?
+  cancelReason    String?
+  refundAmount    Float?                            // Money given back (balance, desk or voided from the bill), excl. credit
+  refundMethod    String?                           // BALANCE | ACCOUNT | CASH | MOBILEPAY | CARD_TERMINAL | NONE
 
   // Metered billing fields
   billingMode      String    @default("FIXED")       // FIXED | METERED
@@ -554,6 +579,27 @@ model LaundrySess {
 
   @@index([status, billingMode])
   @@map("laundry_sessions")
+}
+
+// ──────────────────────────────────────────────
+// Service credit ledger — every change to Session.laundryCredit (used for
+// laundry and showers) with who, when and why. A sale also has a Payment row.
+//   reason SALE | COMPENSATION | REMOVED | USED | REFUNDED
+// ──────────────────────────────────────────────
+model ServiceCreditEntry {
+  id         Int      @id @default(autoincrement())
+  sessionId  Int                                     // the stay
+  amount     Float                                   // + added, − removed/used
+  reason     String
+  method     String?                                 // CASH | MOBILEPAY | CARD_TERMINAL for a sale
+  note       String?
+  paymentId  Int?                                    // Payment row for a sale
+  serviceRef String?                                 // "laundry:12" / "shower:5" for USED/REFUNDED
+  createdBy  String?                                 // admin username; null = guest/system
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId])
+  @@map("service_credit_entries")
 }
 
 // ──────────────────────────────────────────────

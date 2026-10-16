@@ -13,5 +13,5 @@ export default async function PublicLaundryPage({
   const group = await getPublicLaundryGroup(token);
   if (!group) notFound();
 
-  return <PublicLaundryClient token={token} groupName={group.name} machines={group.machines} />;
+  return <PublicLaundryClient token={token} groupName={group.name} machines={group.machines} cardPayment={group.cardPayment} />;
 }

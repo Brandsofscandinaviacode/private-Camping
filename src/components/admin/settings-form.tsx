@@ -262,7 +262,7 @@ export function GeneralSettings({ settings }: SettingsFormProps) {
           </div>
           {values.postpaid_services_mode === "PAY_PER_USE" && (
             <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-              Bagudbetalende gæster betaler med kort (QuickPay) for hver vask, tørring eller bad de bruger. Kun el og vand samles på regningen.
+              Bagudbetalende gæster betaler med kort (QuickPay) for hver vask, tørring eller bad de bruger. Er kortbetaling slået fra, kan de ikke starte selv: de betaler i receptionen, og personalet starter servicen under Services. Kun el og vand samles på regningen.
             </div>
           )}
           {values.postpaid_services_mode === "ON_ACCOUNT" && (

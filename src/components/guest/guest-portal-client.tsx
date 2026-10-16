@@ -871,6 +871,7 @@ export function GuestPortalClient({
                   locale={locale}
                   credit={laundryCredit}
                   onAccount={servicesOnAccount}
+                  payByCard={quickpayEnabled && !servicesOnAccount && billingMode !== "PREPAID"}
                 />
               )}
 
@@ -1077,6 +1078,7 @@ function GuestServicesSection({
   locale,
   credit,
   onAccount,
+  payByCard,
 }: {
   showers: GuestPortalClientProps["showers"];
   machines: GuestPortalClientProps["laundryMachines"];
@@ -1084,6 +1086,8 @@ function GuestServicesSection({
   locale: string;
   credit: number;
   onAccount?: boolean;
+  /** The guest pays this start by card (not credit/balance/bill/desk). */
+  payByCard?: boolean;
 }) {
   const [showers, setShowers] = useState(initialShowers);
   const machines = initialMachines;
@@ -1105,16 +1109,16 @@ function GuestServicesSection({
     availablePlural: locale === "en" ? "available" : locale === "de" ? "verfügbar" : "ledige",
     inUse: locale === "en" ? "In use" : locale === "de" ? "In Benutzung" : "I brug",
     minutesLeft: locale === "en" ? "min left" : locale === "de" ? "Min übrig" : "min tilbage",
-    start: onAccount
-      ? (locale === "en" ? "Start" : locale === "de" ? "Starten" : "Start")
-      : (locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start"),
+    // "Betal & Start" only when a card payment actually follows
+    start: payByCard
+      ? (locale === "en" ? "Pay & Start" : locale === "de" ? "Bezahlen & Starten" : "Betal & Start")
+      : (locale === "en" ? "Start" : locale === "de" ? "Starten" : "Start"),
     choose: locale === "en" ? "Choose" : locale === "de" ? "Wählen" : "Vælg",
     perUse: locale === "en" ? "per use" : locale === "de" ? "pro Nutzung" : "pr. vask",
     perMinute: locale === "en" ? "per minute" : locale === "de" ? "pro Minute" : "pr. min",
     items: locale === "en" ? "items" : locale === "de" ? "Stück" : "stk",
   };
   const creditLabel = locale === "en" ? "Credit" : locale === "de" ? "Guthaben" : "Kredit";
-  const freeLabel = locale === "en" ? "Free" : locale === "de" ? "Gratis" : "Gratis";
 
   async function handleStartMachine(machineId: number, programId?: number) {
     setStartingId(`m-${machineId}`);
@@ -1136,13 +1140,15 @@ function GuestServicesSection({
 
   function handleStartShower(showerId: number) {
     setStartingId(`s-${showerId}`);
-    window.location.href = `/shower/${showerId}`;
+    // The token lets the shower be paid from credit / balance / the bill.
+    window.location.href = `/shower/${showerId}?token=${encodeURIComponent(token)}`;
   }
 
   function machineButtonLabel(m: GuestPortalClientProps["laundryMachines"][number]) {
     if (onAccount) return labels.start;
     if (m.billingMode === "METERED") return labels.start;
-    if (credit >= m.pricePerUse) return freeLabel;
+    // Paid with credit — not free, just nothing more to pay
+    if (credit >= m.pricePerUse) return `${labels.start} · ${creditLabel}`;
     if (credit > 0) {
       const toPay = m.pricePerUse - credit;
       return `${toPay.toFixed(0)} DKK`;

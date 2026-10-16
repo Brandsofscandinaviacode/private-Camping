@@ -64,7 +64,16 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
   useEffect(() => {
     if (state.status === "ACTIVE" && state.warmupSecondsLeft <= 0 && !relayStartedRef.current) {
       relayStartedRef.current = true;
-      startShowerRelay(state.id, token).catch(() => {});
+      // If the valve doesn't open the server cancels and refunds — show it now
+      // instead of letting the countdown run with no water.
+      startShowerRelay(state.id, token)
+        .then(async (res) => {
+          if (res.ok) return;
+          setMessage({ ok: false, text: res.message });
+          const fresh = await getShowerSessionState(state.id, token);
+          if (fresh) setState(fresh);
+        })
+        .catch(() => {});
     }
   }, [state.status, state.warmupSecondsLeft, state.id, token]);
 
@@ -162,11 +171,22 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
         <div className="max-w-md mx-auto w-full px-4 py-8 flex-1 flex flex-col justify-center">
           <Card>
             <CardContent className="py-8 text-center">
-              <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-green-600" />
-              <h1 className="text-lg font-bold">{tx.thankYouShower}</h1>
-              <p className="text-sm text-muted-foreground mt-2">
-                {tx.youUsed.replace("{min}", String(state.minutesPaid)).replace("{price}", state.pricePaid.toFixed(2))}
-              </p>
+              {state.cancelled ? (
+                <>
+                  <XCircle className="h-10 w-10 mx-auto mb-3 text-red-500" />
+                  <h1 className="text-lg font-bold">{tx.showerFailed}</h1>
+                  <p className="text-sm text-muted-foreground mt-2">{tx.showerFailedInfo}</p>
+                  {message && !message.ok && <p className="text-xs text-muted-foreground mt-2">{message.text}</p>}
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-green-600" />
+                  <h1 className="text-lg font-bold">{tx.thankYouShower}</h1>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    {tx.youUsed.replace("{min}", String(state.minutesPaid)).replace("{price}", state.pricePaid.toFixed(2))}
+                  </p>
+                </>
+              )}
               <LanguagePicker locale={locale} onChange={setLocale} />
               <Link href="/services">
                 <Button variant="outline" className="mt-5" size="sm">
@@ -395,7 +415,7 @@ export function ShowerTimerClient({ initial }: { initial: State }) {
                     {actionLoading === "extend" ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : null}
-                    {tx.payAndAdd}
+                    {state.cardPayment ? tx.payAndAdd : tx.addTime}
                   </Button>
                   <Button
                     variant="outline"
