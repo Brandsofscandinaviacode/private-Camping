@@ -4741,12 +4741,14 @@ export async function createSessionPayment(sessionId: number, portalToken: strin
 export async function createInvoicePayment(invoiceId: number, guestToken: string) {
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { unit: true },
+    include: { unit: true, session: { select: { guestPortalToken: true } } },
   });
   if (!invoice || !guestToken) throw new Error("Faktura ikke fundet");
-  // The guest may only pay invoices for the unit their portal link belongs to.
+  // The guest may only pay invoices for the unit their portal link belongs to,
+  // or their stay's own invoices (also from a unit the stay moved from).
   const ownsInvoice =
     invoice.unit.longTermPortalToken === guestToken ||
+    invoice.session?.guestPortalToken === guestToken ||
     (await prisma.session.count({ where: { unitId: invoice.unitId, guestPortalToken: guestToken } })) > 0;
   if (!ownsInvoice) throw new Error("Faktura ikke fundet");
   if (invoice.status === "PAID") throw new Error("Allerede betalt");
@@ -4756,7 +4758,7 @@ export async function createInvoicePayment(invoiceId: number, guestToken: string
 
   const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
-  let portalToken: string | null = invoice.unit.longTermPortalToken;
+  let portalToken: string | null = invoice.session?.guestPortalToken ?? invoice.unit.longTermPortalToken;
 
   // For short-term invoices the unit has no longTermPortalToken — fall back
   // to the session whose period overlaps the invoice.

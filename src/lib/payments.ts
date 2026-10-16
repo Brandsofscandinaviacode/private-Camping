@@ -62,8 +62,14 @@ async function syncInvoiceStatus(tx: Prisma.TransactionClient, invoiceId: number
   }
 }
 
-/** The stay an invoice belongs to: the postpaid stay on the unit overlapping its period. */
-export async function resolveInvoiceStay(invoice: { unitId: number; periodStart: Date; periodEnd: Date }): Promise<number | null> {
+/**
+ * The stay an invoice belongs to: the stay it was made for, or for older and
+ * unit-level invoices the postpaid stay on the unit overlapping its period.
+ */
+export async function resolveInvoiceStay(
+  invoice: { unitId: number; periodStart: Date; periodEnd: Date; sessionId?: number | null },
+): Promise<number | null> {
+  if (invoice.sessionId != null) return invoice.sessionId;
   const stays = await prisma.session.findMany({
     where: {
       unitId: invoice.unitId,
@@ -286,7 +292,7 @@ export async function recordInvoicePayment(
 ): Promise<RegisteredPayment> {
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, unitId: true, periodStart: true, periodEnd: true, totalAmount: true, status: true },
+    select: { id: true, unitId: true, sessionId: true, periodStart: true, periodEnd: true, totalAmount: true, status: true },
   });
   if (!inv) throw new PaymentError("Fakturaen findes ikke.");
   if (inv.status === "PAID") throw new PaymentError("Fakturaen er allerede betalt.");
@@ -453,7 +459,7 @@ export async function recordQuickPayPayment(input: {
   if (input.kind === "INVOICE" && input.invoiceId && sessionId == null) {
     const inv = await prisma.invoice.findUnique({
       where: { id: input.invoiceId },
-      select: { unitId: true, periodStart: true, periodEnd: true },
+      select: { unitId: true, sessionId: true, periodStart: true, periodEnd: true },
     });
     if (inv) sessionId = await resolveInvoiceStay(inv);
   }
