@@ -58,6 +58,13 @@ export default async function AuthorizePage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const raw = await searchParams;
+  if (raw.denied === "1") {
+    return (
+      <Notice title="Adgang afvist">
+        <p>Appen har ikke fået adgang til CampSense. Du kan lukke denne side.</p>
+      </Notice>
+    );
+  }
   const params: Record<string, string | undefined> = {};
   for (const key of AUTHORIZE_FIELDS) {
     const v = raw[key];

@@ -74,7 +74,7 @@ export async function login(username: string, password: string): Promise<{ error
     }
     const userFails = hitCount(userKey);
     if (userFails > USER_FAILS_BEFORE_DELAY) {
-      await new Promise((r) => setTimeout(r, Math.min(5000, (userFails - USER_FAILS_BEFORE_DELAY) * 250)));
+      await new Promise((r) => setTimeout(r, Math.min(3000, (userFails - USER_FAILS_BEFORE_DELAY) * 150)));
     }
 
     const user = await prisma.user.findUnique({ where: { username } });
@@ -87,6 +87,7 @@ export async function login(username: string, password: string): Promise<{ error
     }
     resetLimit(userIpKey);
     resetLimit(ipKey);
+    resetLimit(userKey);
 
     const session = await getSession();
     session.userId = user.id;
@@ -170,7 +171,9 @@ export async function changePassword(currentPassword: string, newPassword: strin
   const now = new Date();
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash: hash } });
   await prisma.mcpOAuthToken.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: now } });
-  await prisma.mcpOAuthCode.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: now } });
+  // Deleted rather than marked used: presenting a used code triggers replay
+  // handling, which would also revoke grants approved after this change.
+  await prisma.mcpOAuthCode.deleteMany({ where: { userId: user.id, usedAt: null } });
   await deleteMcpApiKey();
 
   // Keep this browser logged in; every other session is now stale.

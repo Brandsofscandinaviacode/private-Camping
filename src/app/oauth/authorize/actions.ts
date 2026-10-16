@@ -58,6 +58,8 @@ async function decide(formData: FormData, approve: boolean): Promise<never> {
   const redirectHost = new URL(v.req.redirectUri).host;
   if (!approve) {
     logger.info("mcp", "OAuth client denied", { clientId: v.req.clientId, clientName: v.req.clientName, redirectHost });
+    // Don't hand a non-Claude host a one-click redirect off this site.
+    if (!isKnownClaudeRedirect(v.req.redirectUri)) redirect("/oauth/authorize?denied=1");
     redirect(buildRedirect(v.req.redirectUri, {
       error: "access_denied", error_description: "Afvist af administrator", state: v.req.state, iss: origin,
     }));
