@@ -30,6 +30,19 @@ import { unitHardwareSummary } from "@/lib/check-in-hardware";
 import { BookingSyncNotice } from "@/components/admin/booking-sync-notice";
 import { PaymentList } from "@/components/admin/payment-list";
 import { getInvoicePaidAmounts } from "@/lib/payment-actions";
+import { StayReceiptHost } from "@/components/admin/stay-receipt";
+import { ChangeUnitDialog } from "@/components/admin/change-unit-dialog";
+import { ChangeDepartureDialog } from "@/components/admin/change-departure-dialog";
+import { StayInvoiceDialog } from "@/components/admin/stay-invoice-dialog";
+import {
+  CancelReservationButton,
+  MonthlyInvoicingSwitch,
+  ReopenReservationButton,
+  UndoCheckInButton,
+  UndoCheckOutButton,
+} from "@/components/admin/stay-correction-buttons";
+import { bookingSystemLabel } from "@/lib/booking/sync";
+import { cancelReasonLabel, nextMonthlyInvoiceDue, undoCheckInDeadline, undoCheckOutDeadline } from "@/lib/stay-corrections";
 
 import { unitDisplayName } from "@/lib/utils";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
@@ -64,7 +77,8 @@ export default async function BookingDetailPage({
   // A reservation whose stay ended without a check-in is shown as expired
   // and can no longer be activated.
   const isExpiredReservation = isReservationExpired(session);
-  const isPendingSession = session.status === "PENDING" && !isExpiredReservation;
+  const isCancelled = session.status === "PENDING" && !!session.cancelledAt;
+  const isPendingSession = session.status === "PENDING" && !isExpiredReservation && !isCancelled;
   const hasArrived = hasArrivedNotCheckedIn(session);
   const isActive = session.status === "ACTIVE";
   const isCompleted = session.status === "COMPLETED";
@@ -74,6 +88,18 @@ export default async function BookingDetailPage({
   const isNothingDue = isCompleted && settlement.state === "NOTHING_DUE";
   const headline = settlementHeadline(settlement);
   const refLabel = bookingRefLabel(session.bookingRef);
+  const unitName = unitDisplayName(session.unit.type, session.unit.name);
+  const linkedLabel = session.externalBookingId ? bookingSystemLabel(session.externalBookingId) : null;
+  // Undo windows: the buttons only show while they can still work.
+  const now = new Date();
+  const undoInUntil = isActive ? undoCheckInDeadline(session) : null;
+  const canUndoCheckIn = !!undoInUntil && now < undoInUntil;
+  const undoOutUntil = isCompleted ? undoCheckOutDeadline(session) : null;
+  const canUndoCheckOut = !!undoOutUntil && now < undoOutUntil;
+  const isPostpaid = session.billingMode !== "PREPAID";
+  // Long stays billed by interim invoices: when the next one is due.
+  const lastStayInvoiceEnd = session.invoices.reduce<Date | null>((d, i) => (!d || i.periodEnd > d ? i.periodEnd : d), null);
+  const monthlyDue = session.monthlyInvoicing && isActive ? nextMonthlyInvoiceDue(lastStayInvoiceEnd ?? session.checkInTime) : null;
 
   const usedKwhMain = (session.endKwh != null && session.startKwh != null)
     ? Math.max(0, session.endKwh - session.startKwh) : null;
@@ -92,9 +118,9 @@ export default async function BookingDetailPage({
   // Deposit total for prepaid stays (prepaidAmount is the live balance, not the deposit)
   const prepaidDeposited = session.billingMode === "PREPAID" ? await resolvePrepaidDeposited(session) : null;
   // Part payments on the unit's invoices (ledger), and who the payment dialog is about.
-  const invoicePaid = session.unit.invoices.length > 0
-    ? await getInvoicePaidAmounts(session.unit.invoices.filter((i) => i.status !== "PAID").map((i) => i.id))
-    : {};
+  // The stay's own invoices can sit on a unit it moved away from.
+  const openInvoiceIds = [...new Set([...session.unit.invoices, ...session.invoices].filter((i) => i.status !== "PAID").map((i) => i.id))];
+  const invoicePaid = openInvoiceIds.length > 0 ? await getInvoicePaidAmounts(openInvoiceIds) : {};
   const payContext = `${unitDisplayName(session.unit.type, session.unit.name)} · ${session.guestName}`;
 
   return (
@@ -106,6 +132,7 @@ export default async function BookingDetailPage({
         ]}
       />
       <CheckInReceiptHost sessionId={session.id} siteUrl={siteUrl} />
+      <StayReceiptHost sessionId={session.id} />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/admin/bookings">
@@ -129,6 +156,12 @@ export default async function BookingDetailPage({
               <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
                 Udløbet
+              </span>
+            )}
+            {isCancelled && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
+                {cancelReasonLabel(session.cancelReason)}
               </span>
             )}
             {isActive && (
@@ -217,6 +250,18 @@ export default async function BookingDetailPage({
                     <span className="text-right">{new Date(session.expectedCheckOut).toLocaleDateString("da-DK", { day: "numeric", month: "short", year: "numeric" })}</span>
                   </div>
                 )}
+                {(isPendingSession || isActive) && (
+                  <div className="flex justify-end">
+                    <ChangeDepartureDialog
+                      sessionId={session.id}
+                      current={siteDayKey(session.expectedCheckOut)}
+                      arrival={siteDayKey(session.checkInTime)!}
+                      isActive={isActive}
+                      allowOpen={session.unit.isLongTerm}
+                      linkedLabel={linkedLabel}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Afregning */}
@@ -241,6 +286,9 @@ export default async function BookingDetailPage({
                     )}
                   </div>
                 )}
+                {isPostpaid && (isPendingSession || isActive) && !session.unit.isLongTerm && (
+                  <MonthlyInvoicingSwitch sessionId={session.id} on={session.monthlyInvoicing} />
+                )}
               </div>
             </div>
 
@@ -249,7 +297,7 @@ export default async function BookingDetailPage({
                 <Separator className="my-4" />
                 <div className="text-sm">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Bemærkninger</p>
-                  <p>{session.notes}</p>
+                  <p className="whitespace-pre-line">{session.notes}</p>
                 </div>
               </>
             )}
@@ -260,17 +308,23 @@ export default async function BookingDetailPage({
             <div className="flex items-center gap-2 min-w-0">
               <FileText className="h-4 w-4 text-primary shrink-0" />
               <p className="text-xs text-muted-foreground">
-                {isExpiredReservation
+                {isCancelled
+                  ? `${cancelReasonLabel(session.cancelReason)} ${fmtDateTime(session.cancelledAt)} — tæller ikke som reservation.`
+                  : isExpiredReservation
                   ? "Udløbet reservation — gæsten blev aldrig checket ind."
                   : isPendingSession
                   ? "Importeret booking — vælg afregningsform og aktivér."
-                  : isActive && !session.unit.isLongTerm
+                  : isActive
                     ? "Viser afregning og måleraflæsninger før udtjek, derefter opgørelsen."
                     : "Udskriftsvenlig opgørelse — kan bruges som kvittering."}
               </p>
             </div>
-            <div className="shrink-0">
-              {isExpiredReservation ? null : isPendingSession ? (
+            <div className="shrink-0 flex flex-col items-stretch sm:items-end gap-2">
+              {isCancelled ? (
+                <ReopenReservationButton sessionId={session.id} />
+              ) : isExpiredReservation ? (
+                <CancelReservationButton sessionId={session.id} guestName={session.guestName} arrived linkedLabel={linkedLabel} />
+              ) : isPendingSession ? (<>
                 <BookingActivateButton
                   sessionId={session.id}
                   guestName={session.guestName}
@@ -287,20 +341,48 @@ export default async function BookingDetailPage({
                   initialExpectedCheckOut={siteDayKey(session.expectedCheckOut)}
                   externallyLinked={!!session.externalBookingId}
                 />
-              ) : isActive && !session.unit.isLongTerm ? (
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <ChangeUnitDialog sessionId={session.id} guestName={session.guestName} unitName={unitName} isActive={false} />
+                  <CancelReservationButton sessionId={session.id} guestName={session.guestName} arrived={hasArrived} linkedLabel={linkedLabel} />
+                </div>
+              </>) : isActive ? (<>
                 <BookingCheckoutButton
                   sessionId={session.id}
                   guestName={session.guestName}
                   unitName={session.unit.name}
+                  expectedCheckOut={siteDayKey(session.expectedCheckOut)}
+                  isLongTerm={session.unit.isLongTerm}
                 />
-              ) : (
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <ChangeUnitDialog
+                    sessionId={session.id}
+                    guestName={session.guestName}
+                    unitName={unitName}
+                    isActive
+                    triggerLabel={canUndoCheckIn ? "Forkert enhed? Skift enhed" : "Skift enhed"}
+                  />
+                  {canUndoCheckIn && (
+                    <UndoCheckInButton
+                      sessionId={session.id}
+                      guestName={session.guestName}
+                      unitName={unitName}
+                      deadline={undoInUntil!.toISOString()}
+                      imported={!!session.externalBookingId}
+                      prepaidText={session.billingMode === "PREPAID" && prepaidDeposited ? fmtMoney(prepaidDeposited, settlement.currency) : null}
+                    />
+                  )}
+                </div>
+              </>) : (<>
                 <Link href={`/admin/bookings/${session.id}/statement`}>
                   <Button variant="outline" size="sm">
                     <FileText className="h-4 w-4 mr-2" />
                     Vis opgørelse
                   </Button>
                 </Link>
-              )}
+                {canUndoCheckOut && (
+                  <UndoCheckOutButton sessionId={session.id} guestName={session.guestName} unitName={unitName} deadline={undoOutUntil!.toISOString()} />
+                )}
+              </>)}
             </div>
           </div>
         </div>
@@ -551,19 +633,32 @@ export default async function BookingDetailPage({
             // so previous guests' invoices aren't mixed in.
             const sessionStart = session.checkInTime;
             const sessionEnd = session.checkOutTime ?? new Date(8640000000000000); // max date for active sessions
-            const invoices = session.unit.isLongTerm
+            // The stay's own invoices (they follow it to another unit) and
+            // untagged ones on the unit in the stay's period.
+            const unitInvoices = session.unit.isLongTerm
               ? session.unit.invoices
-              : session.unit.invoices.filter((inv) => inv.periodEnd >= sessionStart && inv.periodStart <= sessionEnd);
+              : session.unit.invoices.filter((inv) => inv.sessionId == null && inv.periodEnd >= sessionStart && inv.periodStart <= sessionEnd);
+            const invoices = [...session.invoices, ...unitInvoices.filter((u) => !session.invoices.some((i) => i.id === u.id))]
+              .sort((a, b) => b.periodEnd.getTime() - a.periodEnd.getTime());
             // A completed short stay is settled on its statement — a new
             // invoice would bill the unit's meter, not this stay.
             const canInvoice = isActive || session.unit.isLongTerm;
             if (invoices.length === 0 && !canInvoice) return null;
             return (
               <div className="rounded-xl border border-border/60 bg-card shadow-sm">
-                <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-                  <h2 className="font-semibold">{session.unit.isLongTerm ? "Månedlige fakturaer" : "Fakturaer"}</h2>
-                  {canInvoice && <CreateInvoiceButton unitId={session.unit.id} />}
+                <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-2">
+                  <h2 className="font-semibold">{session.unit.isLongTerm || session.monthlyInvoicing ? "Månedlige fakturaer" : "Fakturaer"}</h2>
+                  {isActive && !session.unit.isLongTerm
+                    ? <StayInvoiceDialog sessionId={session.id} />
+                    : canInvoice && <CreateInvoiceButton unitId={session.unit.id} />}
                 </div>
+                {monthlyDue && (
+                  <p className={`px-5 pt-3 text-xs ${monthlyDue < now ? "text-amber-700 font-medium" : "text-muted-foreground"}`}>
+                    {monthlyDue < now
+                      ? `Mellemfaktura forfalden siden ${fmtDate(monthlyDue)} – aflæs måleren og lav fakturaen.`
+                      : `Næste mellemfaktura ${fmtDate(monthlyDue)}.`}
+                  </p>
+                )}
                 <div className="p-5">
                   {invoices.length === 0 ? (
                     <p className="text-sm text-muted-foreground">

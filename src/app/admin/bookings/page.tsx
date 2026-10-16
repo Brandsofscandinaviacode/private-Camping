@@ -73,7 +73,8 @@ export default async function BookingsPage({
             const expired = isReservationExpired(s, now);
             const overdue = isStayOverdue(s, now);
             const arrived = hasArrivedNotCheckedIn(s, now);
-            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, { expired, overdue, arrived });
+            const cancelReason = s.cancelledAt ? (s.cancelReason ?? "CANCELLED") : null;
+            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, { expired, overdue, arrived, cancelReason });
             // El/vand so far — zero (and hidden) on units without meters
             const running = s.status === "ACTIVE" ? s.accumulatedElCost + s.accumulatedWaterCost : 0;
             return (
@@ -94,7 +95,7 @@ export default async function BookingsPage({
                       {(s.checkOutTime || s.expectedCheckOut) && <ArrowRight className="h-3 w-3 opacity-40 shrink-0" />}
                       {s.checkOutTime ? (
                         <span className="shrink-0">{fmtDate(s.checkOutTime)}</span>
-                      ) : s.expectedCheckOut && !expired ? (
+                      ) : s.expectedCheckOut && !expired && !cancelReason ? (
                         <span className={`shrink-0 ${overdue ? "text-red-600 font-medium" : s.status === "ACTIVE" && siteDayKey(s.expectedCheckOut) === today ? "text-amber-600 font-medium" : ""}`}>
                           Afrejse {fmtRelativeDay(s.expectedCheckOut, now)}
                         </span>

@@ -28,7 +28,7 @@ export interface CheckInReceipt {
 
 export type CheckInResult =
   | { ok: true; message: string; receipt: CheckInReceipt; sessionId: number; guestPortalToken: string }
-  | { ok: false; message: string };
+  | { ok: false; message: string; reservationConflicts?: string[] };
 
 export interface SendResult {
   ok: boolean;

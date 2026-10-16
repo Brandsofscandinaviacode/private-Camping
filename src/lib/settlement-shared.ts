@@ -149,6 +149,13 @@ export interface CheckoutOptions {
     startWaterLiters?: number | null;
   };
   note?: string;
+  /**
+   * When the guest really left ("YYYY-MM-DDTHH:mm", site time), if not now —
+   * stored as the stay's check-out time. Billing still follows the meters.
+   */
+  departedAt?: string;
+  /** Long-term unit: also end the tenancy (unit vacant, tenant and monthly invoicing removed). */
+  endTenancy?: boolean;
 }
 
 export interface CheckoutMeterInfo {

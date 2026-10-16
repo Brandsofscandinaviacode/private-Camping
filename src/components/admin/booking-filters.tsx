@@ -12,7 +12,7 @@ interface BookingFiltersProps {
   arrivedCount?: number;
   overdueCount?: number;
   /** Plain counts shown on the chips (not attention badges). */
-  counts?: { active: number; pending: number; expired: number };
+  counts?: { active: number; pending: number; expired: number; cancelled?: number };
   searchQuery: string;
 }
 
@@ -25,6 +25,7 @@ const filters = [
   { value: "unpaid", label: "Ubetalt", dot: "bg-red-500" },
   { value: "paid", label: "Betalt", dot: "bg-emerald-500" },
   { value: "expired", label: "Udløbne", dot: "bg-muted-foreground/40" },
+  { value: "cancelled", label: "Annulleret/udeblevet", dot: "bg-muted-foreground/40" },
 ];
 
 function buildUrl(filter: string, search: string): string {
@@ -88,8 +89,8 @@ export function BookingFilters({ activeFilter, unpaidCount, arrivedCount = 0, ov
                   </span>
                 );
               })()}
-              {counts && (f.value === "active" || f.value === "pending" || f.value === "expired") && (
-                <span className={`tabular-nums ${active ? "opacity-70" : "opacity-60"}`}>({counts[f.value]})</span>
+              {counts && (f.value === "active" || f.value === "pending" || f.value === "expired" || f.value === "cancelled") && (
+                <span className={`tabular-nums ${active ? "opacity-70" : "opacity-60"}`}>({counts[f.value] ?? 0})</span>
               )}
             </Link>
           );

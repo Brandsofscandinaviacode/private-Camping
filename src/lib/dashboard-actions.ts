@@ -24,13 +24,14 @@ export async function getDashboardMovements() {
 
   const [arrivals, departures, nextCheckIn] = await Promise.all([
     prisma.session.count({
-      where: { checkInTime: { gte: start, lt: end } },
+      // Cancelled / no-show reservations aren't arrivals
+      where: { checkInTime: { gte: start, lt: end }, cancelledAt: null },
     }),
     prisma.session.count({
       where: { status: "ACTIVE", expectedCheckOut: { gte: start, lt: end } },
     }),
     prisma.session.findFirst({
-      where: { status: "PENDING", checkInTime: { gte: new Date() } },
+      where: { status: "PENDING", cancelledAt: null, checkInTime: { gte: new Date() } },
       orderBy: { checkInTime: "asc" },
       include: { unit: { select: { name: true } } },
     }),

@@ -20,7 +20,10 @@ import { LivePowerDraw } from "@/components/admin/live-power-draw";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { unitDisplayName as formatUnitName } from "@/lib/utils";
 import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
-import { siteDayKey } from "@/lib/format";
+import { fmtShortDate, siteDayKey } from "@/lib/format";
+import { ChangeUnitDialog } from "@/components/admin/change-unit-dialog";
+import { CancelReservationButton, ReleaseUnitButton } from "@/components/admin/stay-correction-buttons";
+import { bookingSystemLabel } from "@/lib/booking/sync";
 import { bookingRefLabel } from "@/lib/booking-ref";
 import { unitHardwareSummary } from "@/lib/check-in-hardware";
 import { hasArrivedNotCheckedIn } from "@/lib/booking-status";
@@ -62,6 +65,10 @@ export default async function UnitDetailPage({
   const completedSessions = unit.sessions.filter((s) => s.status === "COMPLETED");
   const unitDisplayName = formatUnitName(unit.type, unit.name);
   const hwSummary = unitHardwareSummary(hw);
+  // "18. okt.–20. okt." for the reservation warnings
+  const pendingPeriod = pendingSession
+    ? `${fmtShortDate(pendingSession.checkInTime)}${pendingSession.expectedCheckOut ? `–${fmtShortDate(pendingSession.expectedCheckOut)}` : ""}`
+    : "";
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
@@ -163,6 +170,27 @@ export default async function UnitDetailPage({
                   initialExpectedCheckOut={siteDayKey(pendingSession.expectedCheckOut)}
                   externallyLinked={!!pendingSession.externalBookingId}
                 />
+                <div className="flex flex-wrap gap-2">
+                  <ChangeUnitDialog sessionId={pendingSession.id} guestName={pendingSession.guestName} unitName={unitDisplayName} isActive={false} />
+                  <CancelReservationButton
+                    sessionId={pendingSession.id}
+                    guestName={pendingSession.guestName}
+                    arrived={pendingArrived}
+                    linkedLabel={pendingSession.externalBookingId ? bookingSystemLabel(pendingSession.externalBookingId) : null}
+                  />
+                </div>
+                {/* Somebody else turns up: a walk-in is allowed after a warning */}
+                <div className="pt-1">
+                  <CheckInDialog
+                    unitId={unit.id}
+                    unitName={unitDisplayName}
+                    isLongTerm={unit.isLongTerm}
+                    hasHardware={hwSummary.any}
+                    hasMeters={hwSummary.meters}
+                    notify={notify}
+                    reservation={{ guestName: pendingSession.guestName, period: pendingPeriod, started: pendingArrived }}
+                  />
+                </div>
               </div>
             </div>
           ) : !isOccupied && !activeSession ? (
@@ -204,15 +232,42 @@ export default async function UnitDetailPage({
                   <span className="text-muted-foreground">Gæsteportal</span>
                   <CopyButton text={`/guest/${activeSession.guestPortalToken}`} label="Kopiér link" baseUrl={siteUrl} />
                 </div>
+                {pendingSession && (
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="text-muted-foreground">Næste reservation</span>
+                    <Link href={`/admin/bookings/${pendingSession.id}`} className="text-right text-primary hover:underline">
+                      {pendingSession.guestName} · {pendingPeriod}
+                    </Link>
+                  </div>
+                )}
                 <Separator />
                 <BookingCheckoutButton
                   sessionId={activeSession.id}
                   guestName={activeSession.guestName}
                   unitName={unitDisplayName}
+                  expectedCheckOut={siteDayKey(activeSession.expectedCheckOut)}
+                  isLongTerm={unit.isLongTerm}
                 />
+                <ChangeUnitDialog sessionId={activeSession.id} guestName={activeSession.guestName} unitName={unitDisplayName} isActive />
               </div>
             </div>
-          ) : null}
+          ) : (
+            // Marked occupied with nobody checked in — e.g. a fastligger
+            // checked out while the tenancy stayed on the unit.
+            <div className="rounded-xl border border-border/60 bg-card shadow-sm">
+              <div className="px-5 py-4 border-b border-border">
+                <h2 className="font-semibold">Optaget uden indtjekket gæst</h2>
+              </div>
+              <div className="p-5 space-y-3 text-sm">
+                <p className="text-muted-foreground">
+                  {unit.isLongTerm && unit.longTermGuestName
+                    ? `Enheden er udlejet til ${unit.longTermGuestName} (fastligger), men ingen er tjekket ind. Månedsfakturaen går stadig til lejeren.`
+                    : "Enheden står som optaget, men ingen gæst er tjekket ind, så den kan hverken tjekkes ind eller ud."}
+                </p>
+                <ReleaseUnitButton unitId={unit.id} unitName={unitDisplayName} tenantName={unit.isLongTerm ? unit.longTermGuestName : null} />
+              </div>
+            </div>
+          )}
 
         </div>
 

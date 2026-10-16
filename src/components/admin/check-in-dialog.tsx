@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LogIn } from "lucide-react";
+import { LogIn, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -35,6 +35,11 @@ interface CheckInDialogProps {
   hasHardware?: boolean;
   hasMeters?: boolean;
   notify?: { email: boolean; sms: boolean };
+  /**
+   * Open reservation on the unit. When its stay has started, a walk-in needs
+   * the desk's OK; a later one is only mentioned (the server checks the dates).
+   */
+  reservation?: { guestName: string; period: string; started: boolean } | null;
 }
 
 export function CheckInDialog({
@@ -44,6 +49,7 @@ export function CheckInDialog({
   hasHardware = false,
   hasMeters = false,
   notify = { email: false, sms: false },
+  reservation = null,
 }: CheckInDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -57,6 +63,9 @@ export function CheckInDialog({
   const [prepaidMethod, setPrepaidMethod] = useState<DeskPaymentMethod>("CASH");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Reservation conflicts the desk has to accept before a walk-in
+  const [conflicts, setConflicts] = useState<string[] | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
 
   function reset() {
     setGuestName("");
@@ -69,6 +78,8 @@ export function CheckInDialog({
     setPrepaidAmount("");
     setPrepaidMethod("CASH");
     setError(null);
+    setConflicts(null);
+    setConfirmed(false);
   }
 
   function handleOpenChange(next: boolean) {
@@ -98,6 +109,11 @@ export function CheckInDialog({
         return;
       }
     }
+    const mustConfirm = !!conflicts || !!reservation?.started;
+    if (mustConfirm && !confirmed) {
+      setError("Enheden er reserveret. Sæt flueben for at checke walk-in-gæsten ind alligevel.");
+      return;
+    }
 
     setError(null);
     setLoading(true);
@@ -111,9 +127,20 @@ export function CheckInDialog({
         expectedCheckOut || undefined,
         billingMode,
         amount,
-        { requireExpectedCheckOut: true, prepaidMethod: billingMode === "PREPAID" ? prepaidMethod : undefined },
+        {
+          requireExpectedCheckOut: true,
+          prepaidMethod: billingMode === "PREPAID" ? prepaidMethod : undefined,
+          checkReservations: true,
+          allowReservationConflict: confirmed,
+        },
       );
       if (!res.ok) {
+        if (res.reservationConflicts) {
+          setConflicts(res.reservationConflicts);
+          setConfirmed(false);
+          setError(null);
+          return;
+        }
         setError(res.message);
         return;
       }
@@ -133,9 +160,9 @@ export function CheckInDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button className="w-full" />}>
+      <DialogTrigger render={<Button className="w-full" variant={reservation ? "outline" : "default"} />}>
         <LogIn className="h-4 w-4 mr-2" />
-        Check-in
+        {reservation ? "Walk-in på enheden" : "Check-in"}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -214,6 +241,28 @@ export function CheckInDialog({
           />
 
           <WelcomeHint notify={notify} />
+
+          {reservation && !reservation.started && !conflicts && (
+            <p className="text-xs text-muted-foreground">
+              Næste reservation: {reservation.guestName} {reservation.period}. Overlapper udtjekket den, bliver du spurgt.
+            </p>
+          )}
+          {(reservation?.started || conflicts) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2 text-sm text-amber-900">
+              <p className="flex items-start gap-1.5 font-medium">
+                <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                {conflicts
+                  ? conflicts.join(" · ")
+                  : `Reserveret til ${reservation!.guestName} ${reservation!.period}`}{" "}
+                – fortsæt?
+              </p>
+              <p className="text-xs">Reservationen bliver liggende. Flyt eller annullér den bagefter, hvis gæsten skal have en anden enhed.</p>
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-medium">
+                <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="h-4 w-4 accent-primary" />
+                Ja, check walk-in-gæsten ind alligevel
+              </label>
+            </div>
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-red-600">

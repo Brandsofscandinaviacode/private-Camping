@@ -51,10 +51,18 @@ export default async function GuestPortalPage({
       : isPostpaid
       ? await prisma.invoice.findMany({
           where: {
-            unitId: session.unitId,
             status: { not: "DRAFT" },
-            periodEnd: { gte: session.checkInTime },
-            ...(session.checkOutTime ? { periodStart: { lte: session.checkOutTime } } : {}),
+            // The stay's own invoices (also from a unit it moved from), and
+            // older untagged ones on the unit by period.
+            OR: [
+              { sessionId: session.id },
+              {
+                sessionId: null,
+                unitId: session.unitId,
+                periodEnd: { gte: session.checkInTime },
+                ...(session.checkOutTime ? { periodStart: { lte: session.checkOutTime } } : {}),
+              },
+            ],
           },
           orderBy: { periodEnd: "desc" },
           take: 12,

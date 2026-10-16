@@ -275,11 +275,20 @@ model Session {
   // Reservation closed without a stay (status stays PENDING): CANCELLED | NO_SHOW.
   cancelledAt       DateTime?
   cancelReason      String?
+  // When the desk actually did the check-in/check-out. checkInTime/checkOutTime
+  // are the stay's own times (a check-out can be dated back to the real
+  // departure); the undo windows count from these.
+  checkInRecordedAt  DateTime?
+  checkOutRecordedAt DateTime?
+  // Long stay billed by interim invoices (el/water/services) while checked in,
+  // included in the automatic monthly run — a property of the stay, not the unit.
+  monthlyInvoicing  Boolean   @default(false)
 
   laundrySessions LaundrySess[]
   showerSessions  ShowerSess[]
   prepaidTopUps   PrepaidTopUp[]
   payments        Payment[]
+  invoices        Invoice[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -304,6 +313,10 @@ model Invoice {
   id     Int  @id @default(autoincrement())
   unitId Int
   unit   Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  // The stay the invoice bills (null on unit-level fastligger invoices and on
+  // invoices from before the column). A stay that changes unit keeps them.
+  sessionId Int?
+  session   Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   // Billing period
   periodStart DateTime
@@ -324,6 +337,9 @@ model Invoice {
   totalAmount     Float  @default(0)
 
   status    InvoiceStatus @default(DRAFT)
+  // Delivered to the guest (e-mail/SMS sent). The payment deadline counts
+  // from here — an invoice nobody has seen is never overdue.
+  sentAt    DateTime?
   paidAt    DateTime?
   paymentId String?       // QuickPay transaction ID
 
@@ -339,6 +355,7 @@ model Invoice {
 
   @@index([unitId, periodStart]) // getSessionStatement, monthly invoice lookup
   @@index([status])              // checkOverdueInvoices
+  @@index([sessionId])
   payments Payment[]
 
   @@map("invoices")
