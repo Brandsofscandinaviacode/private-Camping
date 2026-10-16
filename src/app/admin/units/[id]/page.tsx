@@ -8,6 +8,7 @@ import {
   getUnitHAStates,
   getActiveSession,
   getPendingSession,
+  getGlobalSettings,
 } from "@/lib/actions";
 import { CheckInDialog } from "@/components/admin/check-in-dialog";
 import { BookingCheckoutButton } from "@/components/admin/booking-checkout-button";
@@ -18,6 +19,9 @@ import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
 import { LivePowerDraw } from "@/components/admin/live-power-draw";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { unitDisplayName as formatUnitName } from "@/lib/utils";
+import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
+import { siteDayKey } from "@/lib/format";
+import { unitHardwareSummary } from "@/lib/check-in-hardware";
 
 export const dynamic = "force-dynamic";
 
@@ -33,16 +37,24 @@ export default async function UnitDetailPage({
   const unit = await getUnitWithDetails(unitId);
   if (!unit) notFound();
 
-  const [haStates, activeSession, pendingSession] = await Promise.all([
+  const [haStates, activeSession, pendingSession, globalSettings] = await Promise.all([
     getUnitHAStates(unitId).catch(() => null),
     getActiveSession(unitId),
     getPendingSession(unitId),
+    getGlobalSettings(),
   ]);
+  const notify = {
+    email: globalSettings.notifications_email_enabled === "true",
+    sms: globalSettings.notifications_sms_enabled === "true",
+  };
+  const siteBase = getBaseUrl(globalSettings);
+  const siteUrl = isPlaceholderBaseUrl(siteBase) ? "" : siteBase;
 
   const isOccupied = unit.status === "OCCUPIED";
   const hw = unit.hardware;
   const completedSessions = unit.sessions.filter((s) => s.status === "COMPLETED");
   const unitDisplayName = formatUnitName(unit.type, unit.name);
+  const hwSummary = unitHardwareSummary(hw);
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-5xl">
@@ -132,16 +144,29 @@ export default async function UnitDetailPage({
                 <BookingActivateButton
                   sessionId={pendingSession.id}
                   guestName={pendingSession.guestName}
+                  unitId={unit.id}
                   unitName={unitDisplayName}
+                  arrivalDate={siteDayKey(pendingSession.checkInTime)!}
+                  isLongTerm={unit.isLongTerm}
+                  hasHardware={hwSummary.any}
+                  hasMeters={hwSummary.meters}
+                  notify={notify}
                   initialEmail={pendingSession.guestEmail}
                   initialPhone={pendingSession.guestPhone}
                   initialBookingRef={pendingSession.bookingRef}
-                  initialExpectedCheckOut={pendingSession.expectedCheckOut ? pendingSession.expectedCheckOut.toISOString().slice(0, 10) : null}
+                  initialExpectedCheckOut={siteDayKey(pendingSession.expectedCheckOut)}
                 />
               </div>
             </div>
           ) : !isOccupied && !activeSession ? (
-            <CheckInDialog unitId={unit.id} unitName={unitDisplayName} />
+            <CheckInDialog
+              unitId={unit.id}
+              unitName={unitDisplayName}
+              isLongTerm={unit.isLongTerm}
+              hasHardware={hwSummary.any}
+              hasMeters={hwSummary.meters}
+              notify={notify}
+            />
           ) : activeSession ? (
             <div className="rounded-xl border border-border/60 bg-card shadow-sm">
               <div className="px-5 py-4 border-b border-border flex items-center justify-between">
@@ -170,7 +195,7 @@ export default async function UnitDetailPage({
                 )}
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-muted-foreground">Gæsteportal</span>
-                  <CopyButton text={`/guest/${activeSession.guestPortalToken}`} label="Kopiér link" />
+                  <CopyButton text={`/guest/${activeSession.guestPortalToken}`} label="Kopiér link" baseUrl={siteUrl} />
                 </div>
                 <Separator />
                 <BookingCheckoutButton

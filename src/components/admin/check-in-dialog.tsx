@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,29 +14,37 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { checkIn } from "@/lib/actions";
+import { addDaysToKey, checkOutDateError, prepaidAmountError, todayKey } from "@/lib/check-in";
+import { fmtShortDate } from "@/lib/format";
+import {
+  BillingModeField,
+  CheckOutDateField,
+  HardwarePrecheck,
+  NoHardwareNote,
+  TECHNICAL_ERROR,
+  WelcomeHint,
+} from "./check-in-fields";
+import { showCheckInReceipt } from "./check-in-receipt";
 
 interface CheckInDialogProps {
   unitId: number;
   unitName: string;
+  /** Long-term units may be checked in without a planned checkout. */
+  isLongTerm?: boolean;
+  hasHardware?: boolean;
+  hasMeters?: boolean;
+  notify?: { email: boolean; sms: boolean };
 }
 
-function copyToClipboard(text: string) {
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(text);
-  } else {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
-  }
-}
-
-export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
+export function CheckInDialog({
+  unitId,
+  unitName,
+  isLongTerm = false,
+  hasHardware = false,
+  hasMeters = false,
+  notify = { email: false, sms: false },
+}: CheckInDialogProps) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
@@ -45,207 +54,172 @@ export function CheckInDialog({ unitId, unitName }: CheckInDialogProps) {
   const [billingMode, setBillingMode] = useState<"PREPAID" | "POSTPAID">("POSTPAID");
   const [prepaidAmount, setPrepaidAmount] = useState("");
   const [loading, setLoading] = useState(false);
-  const [copyLabel, setCopyLabel] = useState("Kopiér");
-  const [result, setResult] = useState<{
-    guestPortalToken: string;
-  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setGuestName("");
+    setGuestEmail("");
+    setGuestPhone("");
+    setBookingRef("");
+    // A walk-in usually stays one night; long-term tenants may stay open-ended.
+    setExpectedCheckOut(isLongTerm ? "" : addDaysToKey(todayKey(), 1));
+    setBillingMode("POSTPAID");
+    setPrepaidAmount("");
+    setError(null);
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (next) reset();
+    setOpen(next);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!guestName.trim()) return;
+    if (loading) return;
+    const name = guestName.trim();
+    if (!name) {
+      setError("Skriv gæstens navn.");
+      return;
+    }
+    const dateError = checkOutDateError(expectedCheckOut, { required: !isLongTerm });
+    if (dateError) {
+      setError(dateError);
+      return;
+    }
+    let amount: number | undefined;
+    if (billingMode === "PREPAID") {
+      amount = parseFloat(prepaidAmount);
+      const amountError = prepaidAmountError(amount);
+      if (amountError) {
+        setError(amountError);
+        return;
+      }
+    }
+
+    setError(null);
     setLoading(true);
     try {
       const res = await checkIn(
         unitId,
-        guestName.trim(),
+        name,
         guestEmail.trim() || undefined,
         guestPhone.trim() || undefined,
         bookingRef.trim() || undefined,
         expectedCheckOut || undefined,
         billingMode,
-        billingMode === "PREPAID" ? parseFloat(prepaidAmount) || 0 : undefined,
+        amount,
+        { requireExpectedCheckOut: true },
       );
-      setResult(res);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Check-in fejlede");
+      if (!res.ok) {
+        setError(res.message);
+        return;
+      }
+      // The unit page switches to "Aktuel gæst" and drops this dialog, so the
+      // receipt, QR code and portal link are shown on the booking page.
+      showCheckInReceipt(res.receipt);
+      setOpen(false);
+      router.push(`/admin/bookings/${res.sessionId}`);
+    } catch {
+      setError(TECHNICAL_ERROR);
     } finally {
       setLoading(false);
     }
   }
 
-  function handleClose() {
-    setOpen(false);
-    setGuestName("");
-    setGuestEmail("");
-    setGuestPhone("");
-    setBookingRef("");
-    setExpectedCheckOut("");
-    setBillingMode("POSTPAID");
-    setPrepaidAmount("");
-    setResult(null);
-    setCopyLabel("Kopiér");
-  }
-
-  const guestUrl =
-    typeof window !== "undefined" && result
-      ? `${window.location.origin}/guest/${result.guestPortalToken}`
-      : "";
+  const today = todayKey();
 
   return (
-    <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : handleClose())}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger render={<Button className="w-full" />}>
         <LogIn className="h-4 w-4 mr-2" />
         Check-in
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Check-in til {unitName}</DialogTitle>
         </DialogHeader>
 
-        {!result ? (
-          <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4">
+          <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-2">
+            <p className="text-sm">
+              Walk-in · ankomst i dag ({fmtShortDate(new Date())})
+            </p>
+            {hasHardware ? <HardwarePrecheck unitId={unitId} /> : <NoHardwareNote />}
+          </div>
+
+          <div>
+            <Label htmlFor="guest-name">Gæstens navn *</Label>
+            <Input
+              id="guest-name"
+              value={guestName}
+              onChange={(e) => setGuestName(e.target.value)}
+              placeholder="Fornavn Efternavn"
+              required
+              autoFocus
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="guest-name">Gæstens navn *</Label>
+              <Label htmlFor="guest-email">Email</Label>
               <Input
-                id="guest-name"
-                value={guestName}
-                onChange={(e) => setGuestName(e.target.value)}
-                placeholder="Fornavn Efternavn"
-                autoFocus
+                id="guest-email"
+                type="email"
+                value={guestEmail}
+                onChange={(e) => setGuestEmail(e.target.value)}
+                placeholder="gæst@email.dk"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="guest-email">Email</Label>
-                <Input
-                  id="guest-email"
-                  type="email"
-                  value={guestEmail}
-                  onChange={(e) => setGuestEmail(e.target.value)}
-                  placeholder="gæst@email.dk"
-                />
-              </div>
-              <div>
-                <Label htmlFor="guest-phone">Telefon</Label>
-                <Input
-                  id="guest-phone"
-                  type="tel"
-                  value={guestPhone}
-                  onChange={(e) => setGuestPhone(e.target.value)}
-                  placeholder="+4512345678"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="booking-ref">Booking nr.</Label>
-                <Input
-                  id="booking-ref"
-                  value={bookingRef}
-                  onChange={(e) => setBookingRef(e.target.value)}
-                  placeholder="F.eks. BK-001"
-                />
-              </div>
-              <div>
-                <Label htmlFor="expected-checkout">Forventet checkout</Label>
-                <Input
-                  id="expected-checkout"
-                  type="date"
-                  value={expectedCheckOut}
-                  onChange={(e) => setExpectedCheckOut(e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Billing mode */}
-            <div className="space-y-2">
-              <Label>Afregning</Label>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setBillingMode("POSTPAID")}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    billingMode === "POSTPAID"
-                      ? "border-primary bg-primary/5 text-primary font-medium"
-                      : "border-border text-muted-foreground hover:border-foreground/20"
-                  }`}
-                >
-                  Bagudbetalt
-                  <span className="block text-xs mt-0.5 font-normal opacity-70">Betaler ved checkout</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBillingMode("PREPAID")}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    billingMode === "PREPAID"
-                      ? "border-primary bg-primary/5 text-primary font-medium"
-                      : "border-border text-muted-foreground hover:border-foreground/20"
-                  }`}
-                >
-                  Forudbetalt
-                  <span className="block text-xs mt-0.5 font-normal opacity-70">Allerede betalt i kassen</span>
-                </button>
-              </div>
-              {billingMode === "PREPAID" && (
-                <div>
-                  <Label htmlFor="prepaid-amount">Forudbetalt beløb (DKK)</Label>
-                  <Input
-                    id="prepaid-amount"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={prepaidAmount}
-                    onChange={(e) => setPrepaidAmount(e.target.value)}
-                    placeholder="F.eks. 500"
-                    className="mt-1"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Gæsten kan følge forbruget mod dette beløb. Ubrugt beløb refunderes ikke.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              Systemet tænder strøm, aflæser målere og opretter gæsteportal.
-              Gæsten modtager et link via SMS og/eller email (hvis aktiveret).
-            </p>
-            <Button type="submit" disabled={loading || !guestName.trim()} className="w-full">
-              {loading ? "Checker ind..." : "Bekræft check-in"}
-            </Button>
-          </form>
-        ) : (
-          <div className="space-y-4">
-            <div className="p-4 bg-primary/10 border border-primary/20 rounded-lg">
-              <p className="font-medium text-primary">Check-in gennemført!</p>
-              <p className="text-sm text-primary/80 mt-1">
-                Strøm tændt, målere aflæst, gæsteportal oprettet.
-              </p>
-            </div>
             <div>
-              <Label>Gæsteportal link</Label>
-              <div className="flex gap-2 mt-1">
-                <Input value={guestUrl} readOnly className="text-xs" />
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    copyToClipboard(guestUrl);
-                    setCopyLabel("Kopieret!");
-                    setTimeout(() => setCopyLabel("Kopiér"), 2000);
-                  }}
-                >
-                  {copyLabel}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Del dette link med gæsten, så de kan se deres forbrug.
-              </p>
+              <Label htmlFor="guest-phone">Telefon</Label>
+              <Input
+                id="guest-phone"
+                type="tel"
+                value={guestPhone}
+                onChange={(e) => setGuestPhone(e.target.value)}
+                placeholder="+4512345678"
+              />
             </div>
-            <Button onClick={handleClose} variant="outline" className="w-full">
-              Luk
-            </Button>
           </div>
-        )}
+          <CheckOutDateField
+            id="expected-checkout"
+            value={expectedCheckOut}
+            onChange={setExpectedCheckOut}
+            fromKey={today}
+            required={!isLongTerm}
+            allowOpen={isLongTerm}
+            warnLong={!isLongTerm}
+          />
+          <div>
+            <Label htmlFor="booking-ref">Booking nr.</Label>
+            <Input
+              id="booking-ref"
+              value={bookingRef}
+              onChange={(e) => setBookingRef(e.target.value)}
+              placeholder="Valgfrit"
+            />
+          </div>
+
+          <BillingModeField
+            idPrefix="checkin"
+            mode={billingMode}
+            onModeChange={setBillingMode}
+            amount={prepaidAmount}
+            onAmountChange={setPrepaidAmount}
+            hasMeters={hasMeters}
+          />
+
+          <WelcomeHint notify={notify} />
+
+          {error && (
+            <p role="alert" className="text-sm text-red-600">
+              {error}
+            </p>
+          )}
+
+          <Button type="submit" disabled={loading} className="w-full">
+            {loading ? "Checker ind..." : "Bekræft check-in"}
+          </Button>
+        </form>
       </DialogContent>
     </Dialog>
   );

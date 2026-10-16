@@ -134,10 +134,11 @@ export async function POST(req: NextRequest) {
         prepaid_amount != null ? parseFloat(prepaid_amount) : undefined,
       ),
     );
+    if (!result.ok) return NextResponse.json({ error: result.message }, { status: 400 });
 
     if (external_price != null) {
       await prisma.session.update({
-        where: { id: result.session.id },
+        where: { id: result.sessionId },
         data: {
           externalPrice: parseFloat(external_price),
           externalDescription: external_description || null,
@@ -150,7 +151,7 @@ export async function POST(req: NextRequest) {
     const baseUrl = getBaseUrl(settingsMap);
 
     return NextResponse.json({
-      session_id: result.session.id,
+      session_id: result.sessionId,
       guest_portal_token: result.guestPortalToken,
       guest_portal_url: `${baseUrl}/guest/${result.guestPortalToken}`,
       status: "ACTIVE",

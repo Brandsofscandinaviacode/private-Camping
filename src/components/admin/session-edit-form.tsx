@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Save, Send, Loader2, ChevronDown, ChevronRight, Pencil, Gauge, TriangleAlert } from "lucide-react";
+import { Save, ChevronDown, ChevronRight, Pencil, Gauge, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateSessionDetails, resendGuestNotification } from "@/lib/actions";
+import { updateSessionDetails } from "@/lib/actions";
 import { bookingRefLabel } from "@/lib/booking-ref";
 import { fmtMoney, type SessionDetailsInput } from "@/lib/settlement-shared";
 
@@ -61,8 +61,6 @@ export function SessionEditForm(props: SessionEditFormProps) {
   const { sessionId, status, bookingRefLocked, hasHeatingMeter, hasWaterMeter, hasElectricityMeter, isActive, startLocked } = props;
   const isCompleted = status === "COMPLETED";
   const [isPending, startTransition] = useTransition();
-  const [resending, setResending] = useState(false);
-  const [resendMsg, setResendMsg] = useState("");
   // Collapsed by default — editing is a secondary action, and the full form
   // dominated the page when always open.
   const [expanded, setExpanded] = useState(false);
@@ -163,20 +161,6 @@ export function SessionEditForm(props: SessionEditFormProps) {
     });
   }
 
-  async function handleResend() {
-    setResending(true);
-    setResendMsg("");
-    try {
-      await resendGuestNotification(sessionId);
-      setResendMsg("Sendt!");
-      setTimeout(() => setResendMsg(""), 4000);
-    } catch (e) {
-      setResendMsg(e instanceof Error ? e.message : "Fejl ved afsendelse");
-    } finally {
-      setResending(false);
-    }
-  }
-
   const g = (key: GuestKey, value: string) => setGuest((v) => ({ ...v, [key]: value }));
   const m = (key: MoneyKey, value: string) => {
     setMoney((v) => ({ ...v, [key]: value }));
@@ -218,16 +202,7 @@ export function SessionEditForm(props: SessionEditFormProps) {
             </span>
           )}
         </button>
-        <Button variant="outline" size="sm" onClick={handleResend} disabled={resending}>
-          {resending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-          {resending ? "Sender..." : "Gensend"}
-        </Button>
       </div>
-      {resendMsg && (
-        <div className={`mx-5 mb-3 text-sm p-2 rounded-lg ${resendMsg === "Sendt!" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-          {resendMsg}
-        </div>
-      )}
       {expanded && (
       <div className="p-5 pt-0 space-y-4 border-t border-border mt-1">
         {/* ── Gæst og ophold — never changes any amount ── */}

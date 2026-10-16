@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { getSessionById, getPricing, getSessionSettlement } from "@/lib/actions";
+import { getSessionById, getPricing, getSessionSettlement, getGlobalSettings } from "@/lib/actions";
 import { SettlementSummary } from "@/components/admin/settlement-summary";
 import { fmtMoney, settlementHeadline } from "@/lib/settlement-shared";
 import { bookingRefLabel, parseBookingRef } from "@/lib/booking-ref";
@@ -21,6 +21,11 @@ import { BookingCheckoutButton } from "@/components/admin/booking-checkout-butto
 import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { PrepaidBalance } from "@/components/admin/prepaid-balance";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
+import { CheckInReceiptHost } from "@/components/admin/check-in-receipt";
+import { GuestPortalCard } from "@/components/admin/guest-portal-handover";
+import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
+import { siteDayKey } from "@/lib/format";
+import { unitHardwareSummary } from "@/lib/check-in-hardware";
 
 import { unitDisplayName } from "@/lib/utils";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
@@ -39,8 +44,19 @@ export default async function BookingDetailPage({
   const session = await getSessionById(sessionId);
   if (!session) notFound();
 
-  const [pricing, settlement] = await Promise.all([getPricing(), getSessionSettlement(sessionId)]);
+  const [pricing, settlement, settings] = await Promise.all([
+    getPricing(),
+    getSessionSettlement(sessionId),
+    getGlobalSettings(),
+  ]);
   if (!settlement) notFound();
+  const notify = {
+    email: settings.notifications_email_enabled === "true",
+    sms: settings.notifications_sms_enabled === "true",
+  };
+  const siteBase = getBaseUrl(settings);
+  const siteUrl = isPlaceholderBaseUrl(siteBase) ? "" : siteBase;
+  const hwSummary = unitHardwareSummary(session.unit.hardware);
   // A reservation whose stay ended without a check-in is shown as expired
   // and can no longer be activated.
   const isExpiredReservation = isReservationExpired(session);
@@ -74,6 +90,7 @@ export default async function BookingDetailPage({
           { label: session.guestName },
         ]}
       />
+      <CheckInReceiptHost sessionId={session.id} siteUrl={siteUrl} />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/admin/bookings">
@@ -141,7 +158,7 @@ export default async function BookingDetailPage({
         <div className="rounded-xl border border-border/60 bg-card shadow-sm">
           <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold">Booking detaljer</h2>
-            <CopyButton text={`/guest/${session.guestPortalToken}`} label="Kopiér gæstelink" />
+            <CopyButton text={`/guest/${session.guestPortalToken}`} label="Kopiér gæstelink" baseUrl={siteUrl} />
           </div>
           <div className="p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-5 text-sm">
@@ -236,11 +253,17 @@ export default async function BookingDetailPage({
                 <BookingActivateButton
                   sessionId={session.id}
                   guestName={session.guestName}
+                  unitId={session.unit.id}
                   unitName={session.unit.name}
+                  arrivalDate={siteDayKey(session.checkInTime)!}
+                  isLongTerm={session.unit.isLongTerm}
+                  hasHardware={hwSummary.any}
+                  hasMeters={hwSummary.meters}
+                  notify={notify}
                   initialEmail={session.guestEmail}
                   initialPhone={session.guestPhone}
                   initialBookingRef={session.bookingRef}
-                  initialExpectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : null}
+                  initialExpectedCheckOut={siteDayKey(session.expectedCheckOut)}
                 />
               ) : isActive && !session.unit.isLongTerm ? (
                 <BookingCheckoutButton
@@ -259,6 +282,18 @@ export default async function BookingDetailPage({
             </div>
           </div>
         </div>
+
+        {isActive && (
+          <GuestPortalCard
+            sessionId={session.id}
+            portalPath={`/guest/${session.guestPortalToken}`}
+            siteUrl={siteUrl}
+            emailEnabled={notify.email}
+            smsEnabled={notify.sms}
+            hasEmail={!!session.guestEmail}
+            hasPhone={!!session.guestPhone}
+          />
+        )}
 
         <SessionEditForm
             sessionId={session.id}
