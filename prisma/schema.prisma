@@ -260,9 +260,23 @@ model Session {
   accountingSyncId String?
   accountingSyncAt DateTime?
 
+  // Booking-system link — the stable sync key, e.g. "danplanner:375529".
+  // bookingRef stays for display; matching on it broke when staff edited it.
+  externalBookingId String?   @unique
+  // Fields the desk corrected by hand (JSON array of field names). Sync never
+  // overwrites them; differing booking-system values go to syncConflicts.
+  lockedFields      String?
+  syncConflicts     String?   // JSON { field: valueFromBookingSystem }
+  // A successful sync no longer lists this reservation.
+  missingFromFeedAt DateTime?
+  // Reservation closed without a stay (status stays PENDING): CANCELLED | NO_SHOW.
+  cancelledAt       DateTime?
+  cancelReason      String?
+
   laundrySessions LaundrySess[]
   showerSessions  ShowerSess[]
   prepaidTopUps   PrepaidTopUp[]
+  payments        Payment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -322,6 +336,8 @@ model Invoice {
 
   @@index([unitId, periodStart]) // getSessionStatement, monthly invoice lookup
   @@index([status])              // checkOverdueInvoices
+  payments Payment[]
+
   @@map("invoices")
 }
 
@@ -609,4 +625,34 @@ model McpOAuthToken {
   @@index([clientId])
   @@index([expiresAt])
   @@map("mcp_oauth_tokens")
+}
+
+// ──────────────────────────────────────────────
+// Payment — every amount taken or refunded at the desk (or online), so the
+// till can be reconciled. Reversals are new rows with a negative amount that
+// point at the original (reversesId); nothing is ever deleted.
+//   kind BALANCE    — into/out of a prepaid balance (deposit, top-up, refund of rest)
+//   kind SETTLEMENT — pays a stay's bill at/after checkout (partial allowed)
+//   kind INVOICE    — pays an invoice
+//   kind SERVICE    — laundry/shower paid at the desk
+// ──────────────────────────────────────────────
+model Payment {
+  id         Int       @id @default(autoincrement())
+  sessionId  Int?
+  session    Session?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  invoiceId  Int?
+  invoice    Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  amount     Float                                   // DKK; negative = refund/reversal
+  method     String                                  // CASH | MOBILEPAY | CARD_TERMINAL | BANK | QUICKPAY | OTHER
+  kind       String                                  // BALANCE | SETTLEMENT | INVOICE | SERVICE
+  note       String?
+  createdBy  String?                                 // admin username
+  reversesId Int?      @unique                       // the payment this row reverses
+  externalId String?                                 // e.g. QuickPay transaction id
+  createdAt  DateTime  @default(now())
+
+  @@index([sessionId])
+  @@index([invoiceId])
+  @@index([createdAt])
+  @@map("payments")
 }

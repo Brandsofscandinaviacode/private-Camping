@@ -16,7 +16,9 @@ RUN npx prisma generate && npx next build
 # ── Production ──
 FROM base AS runner
 ENV NODE_ENV=production
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# Danish local time for "today", invoice months and nightly jobs
+ENV TZ=Europe/Copenhagen
+RUN apt-get update && apt-get install -y --no-install-recommends curl tzdata && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app ./
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

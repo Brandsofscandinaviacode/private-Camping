@@ -9,6 +9,8 @@ services:
       # App log on the persistent volume, so it survives redeploys (and the
       # history is readable via Claude / MCP get_recent_logs).
       LOG_DIR: "/app/data/logs"
+      # Danish local time for "today", invoice months, nightly jobs and logs.
+      TZ: "Europe/Copenhagen"
     volumes:
       - campsense-data:/app/data
     ports:
