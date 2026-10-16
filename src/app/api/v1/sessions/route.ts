@@ -178,9 +178,11 @@ export async function PATCH(req: NextRequest) {
 
     if (action === "checkout") {
       const result = await runWithApiAuth(() => checkOut(id));
+      if (!result.ok) return NextResponse.json({ error: result.message }, { status: 400 });
+      const { settlement, ...totals } = result;
       const session = await prisma.session.findUnique({ where: { id } });
-      const grandTotal = (result.totalCost || 0) + (session?.externalPrice || 0);
-      return NextResponse.json({ ...result, externalPrice: session?.externalPrice, grandTotal });
+      const grandTotal = (totals.totalCost || 0) + (session?.externalPrice || 0);
+      return NextResponse.json({ ...totals, externalPrice: session?.externalPrice, grandTotal, amountDue: settlement?.owed ?? null });
     }
 
     if (action === "set_price") {

@@ -20,12 +20,12 @@ export default async function AdminLayout({
 
   return (
     <AdminThemeProvider>
-    <div className="flex flex-col md:flex-row h-full min-h-screen">
+    <div className="flex flex-col md:flex-row print:block h-full min-h-screen">
       {/* Mobile top bar + drawer */}
       <MobileSidebar username={session.username || "admin"} unpaidCount={unpaidCount} />
 
       {/* Desktop Sidebar — hidden on mobile */}
-      <aside className="hidden md:flex w-60 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex-col shrink-0">
+      <aside className="hidden md:flex print:hidden w-60 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex-col shrink-0">
         <div className="px-5 py-5 border-b border-sidebar-border">
           <Link href="/admin" className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-sidebar-primary to-sidebar-primary/80 flex items-center justify-center shadow-md shadow-sidebar-primary/20">
@@ -56,7 +56,7 @@ export default async function AdminLayout({
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-background">
+      <main className="flex-1 overflow-auto print:overflow-visible bg-background print:bg-white">
         {children}
       </main>
     </div>

@@ -8,10 +8,9 @@ import {
   getUnitHAStates,
   getActiveSession,
   getPendingSession,
-  getGlobalSettings,
 } from "@/lib/actions";
 import { CheckInDialog } from "@/components/admin/check-in-dialog";
-import { CheckOutDialog } from "@/components/admin/check-out-dialog";
+import { BookingCheckoutButton } from "@/components/admin/booking-checkout-button";
 import { BookingActivateButton } from "@/components/admin/booking-activate-button";
 import { CabinControls } from "@/components/admin/cabin-controls";
 import { CopyButton } from "@/components/admin/copy-button";
@@ -34,13 +33,11 @@ export default async function UnitDetailPage({
   const unit = await getUnitWithDetails(unitId);
   if (!unit) notFound();
 
-  const [haStates, activeSession, pendingSession, globalSettings] = await Promise.all([
+  const [haStates, activeSession, pendingSession] = await Promise.all([
     getUnitHAStates(unitId).catch(() => null),
     getActiveSession(unitId),
     getPendingSession(unitId),
-    getGlobalSettings(),
   ]);
-  const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
 
   const isOccupied = unit.status === "OCCUPIED";
   const hw = unit.hardware;
@@ -176,11 +173,10 @@ export default async function UnitDetailPage({
                   <CopyButton text={`/guest/${activeSession.guestPortalToken}`} label="Kopiér link" />
                 </div>
                 <Separator />
-                <CheckOutDialog
+                <BookingCheckoutButton
                   sessionId={activeSession.id}
                   guestName={activeSession.guestName}
                   unitName={unitDisplayName}
-                  autoPowerOff={autoPowerOff}
                 />
               </div>
             </div>

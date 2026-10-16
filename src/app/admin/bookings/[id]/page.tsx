@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { isReservationExpired, isStayOverdue } from "@/lib/booking-status";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, Receipt, FileText } from "lucide-react";
+import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { getSessionById, getPricing } from "@/lib/actions";
+import { getSessionById, getPricing, getSessionSettlement } from "@/lib/actions";
+import { SettlementSummary } from "@/components/admin/settlement-summary";
+import { fmtMoney, settlementHeadline } from "@/lib/settlement-shared";
+import { bookingRefLabel, parseBookingRef } from "@/lib/booking-ref";
 import { CopyButton } from "@/components/admin/copy-button";
 import { SessionActions } from "@/components/admin/session-actions";
 import { SessionEditForm } from "@/components/admin/session-edit-form";
@@ -36,14 +39,20 @@ export default async function BookingDetailPage({
   const session = await getSessionById(sessionId);
   if (!session) notFound();
 
-  const pricing = await getPricing();
+  const [pricing, settlement] = await Promise.all([getPricing(), getSessionSettlement(sessionId)]);
+  if (!settlement) notFound();
   // A reservation whose stay ended without a check-in is shown as expired
   // and can no longer be activated.
   const isExpiredReservation = isReservationExpired(session);
   const isPendingSession = session.status === "PENDING" && !isExpiredReservation;
   const isActive = session.status === "ACTIVE";
-  const isUnpaid = session.status === "COMPLETED" && session.paymentStatus === "UNPAID";
-  const isPaid = session.paymentStatus === "PAID";
+  const isCompleted = session.status === "COMPLETED";
+  // Payment badges follow the settlement — a 0-kr stay is not "Ubetalt".
+  const isUnpaid = isCompleted && (settlement.state === "OWED" || settlement.state === "PARTIAL");
+  const isPaid = isCompleted && settlement.state === "PAID";
+  const isNothingDue = isCompleted && settlement.state === "NOTHING_DUE";
+  const headline = settlementHeadline(settlement);
+  const refLabel = bookingRefLabel(session.bookingRef);
 
   const usedKwhMain = (session.endKwh != null && session.startKwh != null)
     ? Math.max(0, session.endKwh - session.startKwh) : null;
@@ -105,7 +114,7 @@ export default async function BookingDetailPage({
             {isUnpaid && (
               <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-medium inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                Ubetalt
+                {settlement.state === "PARTIAL" ? "Delvist betalt" : "Ubetalt"}
               </span>
             )}
             {isPaid && (
@@ -114,9 +123,15 @@ export default async function BookingDetailPage({
                 Betalt
               </span>
             )}
+            {isNothingDue && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
+                Intet at betale
+              </span>
+            )}
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {unitDisplayName(session.unit.type, session.unit.name)} &middot; {session.bookingRef || `#${session.id}`}
+            {unitDisplayName(session.unit.type, session.unit.name)} &middot; {refLabel || `#${session.id}`}
           </p>
         </div>
       </div>
@@ -143,7 +158,7 @@ export default async function BookingDetailPage({
                 </div>
                 <div className="flex items-center gap-2">
                   <Hash className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="truncate">{session.bookingRef || "—"}</span>
+                  <span className="truncate">{refLabel || "—"}</span>
                 </div>
               </div>
 
@@ -178,13 +193,14 @@ export default async function BookingDetailPage({
                     <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Bagudbetalt</span>
                   )}
                 </div>
-                {/* Meter settlement only — services are listed separately in
-                    "Forbrug og køb", so labelling this a final total made the
-                    two figures look contradictory. */}
-                {session.totalCost != null && (
+                {/* One figure, from the settlement — the same one the
+                    statement, the unpaid badge and Økonomi use. */}
+                {session.status !== "PENDING" && (
                   <div className="flex items-center justify-between gap-2 pt-0.5">
-                    <span className="text-muted-foreground">El og vand ved checkout</span>
-                    <span className="font-semibold tabular-nums">{session.totalCost.toFixed(2)} DKK</span>
+                    <span className="text-muted-foreground">{headline.label}</span>
+                    {headline.amount != null && (
+                      <span className="font-semibold tabular-nums">{fmtMoney(headline.amount, settlement.currency)}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -211,8 +227,8 @@ export default async function BookingDetailPage({
                   : isPendingSession
                   ? "Importeret booking — vælg afregningsform og aktivér."
                   : isActive && !session.unit.isLongTerm
-                    ? "Checker ud, aflæser målere og opretter afsluttende faktura."
-                    : "Udskriftsvenlig opgørelse med forbrug og skyldigt beløb."}
+                    ? "Viser afregning og måleraflæsninger før udtjek, derefter opgørelsen."
+                    : "Udskriftsvenlig opgørelse — kan bruges som kvittering."}
               </p>
             </div>
             <div className="shrink-0">
@@ -250,6 +266,13 @@ export default async function BookingDetailPage({
             guestEmail={session.guestEmail || ""}
             guestPhone={session.guestPhone || ""}
             bookingRef={session.bookingRef || ""}
+            bookingRefLocked={!!session.externalBookingId || !!parseBookingRef(session.bookingRef)}
+            status={session.status}
+            startLocked={{
+              el: session.lastTickKwh != null,
+              heat: session.lastTickHeatingKwh != null,
+              water: session.lastTickWaterLiters != null,
+            }}
             notes={session.notes || ""}
             expectedCheckOut={session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : ""}
             startKwh={session.startKwh}
@@ -264,6 +287,7 @@ export default async function BookingDetailPage({
             defaultPricePerKwh={pricing.pricePerKwh}
             defaultPricePerLiterWater={pricing.pricePerLiterWater}
             hasWaterMeter={!!session.unit.hardware?.hasWater}
+            hasElectricityMeter={!!session.unit.hardware?.hasElectricity || session.startKwh != null}
             isActive={isActive}
           />
       </div>
@@ -420,9 +444,11 @@ export default async function BookingDetailPage({
           </>)}
         </div>
 
-        {/* Right: saldo, vaskekredit, betaling */}
+        {/* Right: afregning, saldo, vaskekredit */}
         <div className="space-y-5">
-          {session.billingMode === "PREPAID" && (
+          {/* A running prepaid stay keeps its balance card (top-ups); every
+              other stay gets the one settlement figure. */}
+          {session.billingMode === "PREPAID" && isActive && (
             <PrepaidBalance
               sessionId={session.id}
               prepaidAmount={session.prepaidAmount ?? 0}
@@ -432,7 +458,25 @@ export default async function BookingDetailPage({
             />
           )}
 
-          {session.billingMode !== "PREPAID" && (() => {
+          {session.status !== "PENDING" && !(session.billingMode === "PREPAID" && isActive) && (
+            <SettlementSummary settlement={settlement}>
+              {isCompleted && (
+                <SessionActions
+                  sessionId={session.id}
+                  owed={settlement.owed}
+                  currency={settlement.currency}
+                  canUndo={
+                    settlement.paid > 0.005 ||
+                    settlement.paidWithoutRecord ||
+                    settlement.payments.some((p) => (p.kind === "SETTLEMENT" || p.kind === "INVOICE") && p.amount > 0 && p.reversesId == null && !p.reversed)
+                  }
+                  openInvoiceCount={settlement.invoices.filter((i) => i.status !== "PAID").length}
+                />
+              )}
+            </SettlementSummary>
+          )}
+
+          {session.billingMode !== "PREPAID" && session.status !== "PENDING" && (() => {
             // For long-term units, show all invoices on the unit.
             // For short-term bookings, scope to invoices that overlap this session's period
             // so previous guests' invoices aren't mixed in.
@@ -441,57 +485,32 @@ export default async function BookingDetailPage({
             const invoices = session.unit.isLongTerm
               ? session.unit.invoices
               : session.unit.invoices.filter((inv) => inv.periodEnd >= sessionStart && inv.periodStart <= sessionEnd);
-            const unpaid = invoices.filter((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
-            const totalOwed = unpaid.reduce((sum, inv) => sum + inv.totalAmount, 0);
+            // A completed short stay is settled on its statement — a new
+            // invoice would bill the unit's meter, not this stay.
+            const canInvoice = isActive || session.unit.isLongTerm;
+            if (invoices.length === 0 && !canInvoice) return null;
             return (
               <div className="rounded-xl border border-border/60 bg-card shadow-sm">
                 <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Receipt className="h-4 w-4 text-primary" />
-                    <h2 className="font-semibold">Skyldigt beløb</h2>
-                  </div>
-                  <CreateInvoiceButton unitId={session.unit.id} />
+                  <h2 className="font-semibold">{session.unit.isLongTerm ? "Månedlige fakturaer" : "Fakturaer"}</h2>
+                  {canInvoice && <CreateInvoiceButton unitId={session.unit.id} />}
                 </div>
-                <div className="p-5 space-y-4">
-                  <div className="flex items-center justify-between p-4 rounded-lg bg-primary/5 border border-primary/10">
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Ubetalt total</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {unpaid.length === 0 ? "Ingen ubetalte fakturaer" : `${unpaid.length} ubetalt${unpaid.length === 1 ? "" : "e"} faktura${unpaid.length === 1 ? "" : "er"}`}
-                      </p>
-                    </div>
-                    <span className={`text-2xl font-bold tabular-nums ${totalOwed > 0 ? "text-primary" : "text-muted-foreground"}`}>
-                      {totalOwed.toFixed(2)} <span className="text-sm font-medium text-muted-foreground">DKK</span>
-                    </span>
-                  </div>
-
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">
-                      {session.unit.isLongTerm ? "Månedlige fakturaer" : "Fakturaer"}
+                <div className="p-5">
+                  {invoices.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Ingen fakturaer. Opholdet afregnes samlet ved udtjek — en faktura er kun nødvendig ved lange ophold.
                     </p>
-                    {invoices.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Ingen fakturaer endnu</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {invoices.map((inv) => (
-                          <InvoiceRow key={inv.id} invoice={inv} unitId={session.unit.id} />
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {invoices.map((inv) => (
+                        <InvoiceRow key={inv.id} invoice={inv} unitId={session.unit.id} />
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })()}
-
-          {session.billingMode !== "PREPAID" && (
-            <SessionActions
-              sessionId={session.id}
-              paymentStatus={session.paymentStatus}
-              isPaid={isPaid}
-              paidAt={session.paidAt?.toISOString() ?? null}
-            />
-          )}
 
           {isActive && (
             <LaundryCreditSection

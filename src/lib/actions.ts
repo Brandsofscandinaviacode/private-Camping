@@ -15,6 +15,21 @@ import { logger } from "./logger";
 import { getBaseUrl } from "./base-url";
 import { cleanupMcpOAuth } from "./mcp/oauth";
 import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "./prepaid";
+import { computeSettlement, computeSettlements, listUnpaidSettlements, recalcCompletedCosts, syncPaymentStatus } from "./settlement";
+import {
+  fmtMoney,
+  roundOre,
+  STALE_READING_MINUTES,
+  type CampInfo,
+  type CheckoutMeterInfo,
+  type CheckoutOptions,
+  type CheckoutPreview,
+  type SessionDetailsInput,
+  type Settlement,
+  type UpdateSessionResult,
+} from "./settlement-shared";
+import { parseBookingRef } from "./booking-ref";
+import { fmtDateTime } from "./format";
 
 // How long a PENDING laundry/shower row waits for its card payment before it
 // is auto-cancelled. Must comfortably exceed the time a guest can spend on the
@@ -842,8 +857,42 @@ async function sendCheckInNotificationAsync(
 // ──────────────────────────────────────────────
 // CHECK-OUT FLOW
 // ──────────────────────────────────────────────
-export async function checkOut(sessionId: number) {
-  await requireAuth();
+type CheckoutResult =
+  | {
+      ok: true;
+      totalElectricityCost: number | null;
+      totalWaterCost: number | null;
+      totalServicesCost: number;
+      totalCost: number;
+      isPrepaid: boolean;
+      prepaidAmount: number | null;
+      settlement: Settlement | null;
+    }
+  | { ok: false; message: string };
+
+/**
+ * Check a guest out. Expected problems (already checked out, a meter that
+ * can't be read) come back as { ok: false, message } in Danish — thrown
+ * messages are hidden in production. The API route calls this without
+ * options, which keeps the old behaviour: last reading, refuse if none.
+ */
+export async function checkOut(sessionId: number, options: CheckoutOptions = {}): Promise<CheckoutResult> {
+  const auth = await requireAuth();
+  try {
+    return await checkOutInternal(sessionId, options, auth.username || "admin");
+  } catch (e) {
+    logger.error("checkout", `checkOut fejl (session ${sessionId})`, e);
+    return { ok: false, message: "Udtjek fejlede uventet. Prøv igen — fortsætter fejlen, så se loggen." };
+  }
+}
+
+async function checkOutInternal(sessionId: number, options: CheckoutOptions, username: string): Promise<CheckoutResult> {
+  const mode = options.meterMode ?? "AUTO";
+  const extraNote = options.note?.trim() ?? "";
+  if (mode === "NONE" && !extraNote) {
+    return { ok: false, message: "Skriv en note om, hvorfor el og vand ikke afregnes yderligere." };
+  }
+
   // Final tick first — ensures the accumulator captures every second of
   // consumption up to this instant at the correct hourly spot prices.
   // The tick uses optimistic concurrency, so if a cron tick is racing
@@ -860,11 +909,13 @@ export async function checkOut(sessionId: number) {
     include: { unit: { include: { hardware: true } } },
   });
 
-  if (!session) throw new Error("Session ikke fundet");
-  if (session.status === "COMPLETED") throw new Error("Session allerede afsluttet");
+  if (!session) return { ok: false, message: "Opholdet findes ikke." };
+  if (session.status === "COMPLETED") return { ok: false, message: "Opholdet er allerede tjekket ud." };
+  if (session.status !== "ACTIVE") return { ok: false, message: "Gæsten er ikke tjekket ind, så opholdet kan ikke tjekkes ud." };
 
   const hw = session.unit.hardware;
   const pricing = await getPricing();
+  const now = new Date();
 
   // End-of-session meter readings come from the latest tick — guaranteed
   // in-sync with the accumulator because tick just ran. Fall back to a
@@ -890,29 +941,109 @@ export async function checkOut(sessionId: number) {
   const elTicked = session.lastTickAt != null && (session.lastTickKwh != null || session.lastTickHeatingKwh != null);
   const waterTicked = session.lastTickAt != null && session.lastTickWaterLiters != null;
 
-  // Block checkout if a configured meter failed to read and we have no accumulator
-  const meterFailures: string[] = [];
-  if (hardware.hasElectricityMeter(hw) && endKwh === null && !elTicked) {
-    meterFailures.push("el-måler");
+  // AUTO (API, no choice made): refuse when a configured meter was never
+  // read. The checkout dialog offers manual readings or no further billing.
+  if (mode === "AUTO") {
+    const meterFailures: string[] = [];
+    if (hardware.hasElectricityMeter(hw) && endKwh === null && !elTicked) meterFailures.push("el-måleren");
+    if (hardware.hasWaterMeter(hw) && endWaterLiters === null && !waterTicked) meterFailures.push("vandmåleren");
+    if (meterFailures.length > 0) {
+      logger.error("checkout", `Meter read failed at checkout for session ${sessionId}`, meterFailures);
+      return {
+        ok: false,
+        message: `${meterFailures.join(" og ")} kunne ikke aflæses. Indtast slutaflæsningen manuelt, eller tjek ud uden yderligere el/vand-afregning.`.replace(/^./, (c) => c.toUpperCase()),
+      };
+    }
   }
-  if (hardware.hasWaterMeter(hw) && endWaterLiters === null && !waterTicked) {
-    meterFailures.push("vandmåler");
-  }
-  if (meterFailures.length > 0) {
-    logger.error("checkout", `Meter read failed at checkout for session ${sessionId}`, meterFailures);
-    throw new Error(`Kan ikke checke ud — ${meterFailures.join(" og ")} kunne ikke aflæses. Prøv igen eller kontakt support.`);
+
+  // MANUAL: the operator read the meter by hand. Only the part since the
+  // last automatic reading is billed (manual − last tick), so consumption
+  // already in the accumulator — or on a mid-stay invoice — isn't billed twice.
+  const manualAdd = { elKwh: 0, elCost: 0, waterLiters: 0, waterCost: 0 };
+  let elManual = false;
+  let waterManual = false;
+  const startUpdates: Record<string, number> = {};
+  const manualNotes: string[] = [];
+  if (mode === "MANUAL") {
+    const m = options.manual ?? {};
+    let elRate = session.pricePerKwhOverride ?? pricing.pricePerKwh;
+    if (session.pricePerKwhOverride == null) {
+      try { elRate = (await getEffectiveElPricing()).pricePerKwh; } catch { /* fixed price */ }
+    }
+    const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
+    const fmt = (v: number, unit: string) => `${v.toLocaleString("da-DK", { maximumFractionDigits: 2 })} ${unit}`;
+
+    const step = (
+      label: string,
+      unit: string,
+      end: number | null | undefined,
+      lastTick: number | null,
+      start: number | null,
+      manualStart: number | null | undefined,
+    ): { end: number; delta: number; newStart: number | null } | string | null => {
+      if (end == null) return null;
+      if (!Number.isFinite(end) || end < 0) return `Ugyldig slutaflæsning for ${label}.`;
+      let newStart: number | null = null;
+      let baseline = lastTick ?? start;
+      if (baseline == null) {
+        if (manualStart == null || !Number.isFinite(manualStart) || manualStart < 0) {
+          return `Opholdet har ingen startaflæsning for ${label} — indtast også den.`;
+        }
+        baseline = manualStart;
+        newStart = manualStart;
+      }
+      if (end < baseline) return `Slutaflæsningen for ${label} (${fmt(end, unit)}) er lavere end sidste aflæsning (${fmt(baseline, unit)}).`;
+      manualNotes.push(`${label} ${fmt(end, unit)}`);
+      return { end, delta: end - baseline, newStart };
+    };
+
+    const el = step("el", "kWh", m.endKwh, session.lastTickKwh, session.startKwh, m.startKwh);
+    const heat = step("varme", "kWh", m.endHeatingKwh, session.lastTickHeatingKwh, session.startHeatingKwh, m.startHeatingKwh);
+    const water = step("vand", "L", m.endWaterLiters, session.lastTickWaterLiters, session.startWaterLiters, m.startWaterLiters);
+    for (const r of [el, heat, water]) if (typeof r === "string") return { ok: false, message: r };
+    if (!el && !heat && !water) return { ok: false, message: "Indtast mindst én slutaflæsning." };
+
+    if (el && typeof el !== "string") {
+      endKwh = el.end;
+      manualAdd.elKwh += el.delta;
+      if (el.newStart != null) startUpdates.startKwh = el.newStart;
+      elManual = true;
+    }
+    if (heat && typeof heat !== "string") {
+      endHeatingKwh = heat.end;
+      manualAdd.elKwh += heat.delta;
+      if (heat.newStart != null) startUpdates.startHeatingKwh = heat.newStart;
+      elManual = true;
+    }
+    if (water && typeof water !== "string") {
+      endWaterLiters = water.end;
+      manualAdd.waterLiters += water.delta;
+      if (water.newStart != null) startUpdates.startWaterLiters = water.newStart;
+      waterManual = true;
+    }
+    manualAdd.elCost = manualAdd.elKwh * elRate;
+    manualAdd.waterCost = manualAdd.waterLiters * waterRate;
+
+    const missing: string[] = [];
+    if (hardware.hasElectricityMeter(hw) && endKwh === null && !elTicked) missing.push("el");
+    if (hardware.hasWaterMeter(hw) && endWaterLiters === null && !waterTicked) missing.push("vand");
+    if (missing.length > 0) {
+      return { ok: false, message: `Indtast også slutaflæsning for ${missing.join(" og ")} — måleren har ingen aflæsning.` };
+    }
   }
 
   // Costs come straight from the accumulator — that's the time-weighted
   // sum of (delta × hourly spot price) across every tick, which is the
   // correct billable amount regardless of what the price is right now.
   // Only a meter no tick ever read (legacy session) uses the snapshot.
-  let totalElectricityCost: number | null = elTicked || session.accumulatedElCost > 0
-    ? session.accumulatedElCost : null;
-  let totalWaterCost: number | null = waterTicked || session.accumulatedWaterCost > 0
-    ? session.accumulatedWaterCost : null;
+  let totalElectricityCost: number | null = elManual
+    ? session.accumulatedElCost + manualAdd.elCost
+    : elTicked || session.accumulatedElCost > 0 ? session.accumulatedElCost : null;
+  let totalWaterCost: number | null = waterManual
+    ? session.accumulatedWaterCost + manualAdd.waterCost
+    : waterTicked || session.accumulatedWaterCost > 0 ? session.accumulatedWaterCost : null;
 
-  if (totalElectricityCost === null || totalWaterCost === null) {
+  if (mode !== "NONE" && (totalElectricityCost === null || totalWaterCost === null)) {
     // Legacy fallback: snapshot price × total delta
     let effectiveElPrice = pricing.pricePerKwh;
     try {
@@ -953,6 +1084,63 @@ export async function checkOut(sessionId: number) {
 
   const totalCost = (totalElectricityCost ?? 0) + (totalWaterCost ?? 0) + totalServicesCost;
 
+  // How the meters were settled goes on the booking's notes, so the
+  // statement and a later look at the booking can explain the figure.
+  const noteParts: string[] = [];
+  if (mode === "LAST") {
+    noteParts.push(session.lastTickAt
+      ? `Sidste måleraflæsning brugt (målt ${fmtDateTime(session.lastTickAt)})`
+      : "Sidste måleraflæsning brugt");
+  }
+  if (mode === "MANUAL") noteParts.push(`Manuel slutaflæsning: ${manualNotes.join(", ")}`);
+  if (mode === "NONE") noteParts.push("Ingen yderligere el/vand-afregning");
+  if (extraNote) noteParts.push(extraNote);
+  const noteLine = noteParts.length > 0 ? `[Udtjek ${fmtDateTime(now)} · ${username}] ${noteParts.join(". ")}` : null;
+
+  const updateData: Record<string, unknown> = {
+    status: "COMPLETED",
+    checkOutTime: now,
+    endKwh,
+    endHeatingKwh,
+    endWaterLiters,
+    totalElectricityCost,
+    totalWaterCost,
+    totalCost,
+    ...startUpdates,
+  };
+  if (manualAdd.elKwh > 0) {
+    updateData.accumulatedElCost = { increment: manualAdd.elCost };
+    updateData.accumulatedElKwh = { increment: manualAdd.elKwh };
+  }
+  if (manualAdd.waterLiters > 0) {
+    updateData.accumulatedWaterCost = { increment: manualAdd.waterCost };
+    updateData.accumulatedWaterLiters = { increment: manualAdd.waterLiters };
+  }
+  if (noteLine) updateData.notes = session.notes ? `${session.notes}\n${noteLine}` : noteLine;
+
+  // Conditional update: fail if status changed between our read and write
+  // (concurrent checkOut call, admin double-click, etc.). Prevents double
+  // check-out and ensures concurrent cron ticks can no longer mutate this
+  // session via tickSessionConsumption's own status=ACTIVE guard.
+  const res = await prisma.session.updateMany({
+    where: { id: sessionId, status: "ACTIVE" },
+    data: updateData,
+  });
+  if (res.count === 0) {
+    return { ok: false, message: "Opholdet er allerede tjekket ud eller blev ændret samtidig. Genindlæs siden." };
+  }
+  if (noteLine) logger.info("checkout", `Ophold ${sessionId}: ${noteParts.join(". ")}`);
+
+  // Payment status follows the settlement: under 1 kr left (nothing used, or
+  // covered by the prepayment) is settled now; anything else stays open. A
+  // "paid" flag set while the stay ran doesn't cover what came after it.
+  let settlement: Settlement | null = null;
+  try {
+    settlement = await syncPaymentStatus(sessionId, { ignorePaidFlag: true });
+  } catch (e) {
+    logger.error("checkout", `Betalingsstatus kunne ikke opdateres (session ${sessionId})`, e);
+  }
+
   // Turn off devices based on auto_power_off setting
   const globalSettings = await readGlobalSettings();
   const autoPowerOff = globalSettings.auto_power_off_on_checkout === "true";
@@ -974,71 +1162,118 @@ export async function checkOut(sessionId: number) {
     try { await ha.setClimateTemperature(hw.climateEntityId, pricing.defaultVacantTemp); } catch (e) { logger.error("checkout", "HA climate set vacant temp", e); }
   }
 
-  // For prepaid: mark as PAID since amount was collected upfront, no refund
-  const isPrepaid = session.billingMode === "PREPAID";
-  const updateData: Record<string, unknown> = {
-    status: "COMPLETED",
-    checkOutTime: new Date(),
-    endKwh,
-    endHeatingKwh,
-    endWaterLiters,
-    totalElectricityCost,
-    totalWaterCost,
-    totalCost,
-  };
-  if (isPrepaid) {
-    // Settled from the balance unless el/water overran it — then the
-    // shortfall stays open so the guest can pay it from the portal.
-    const shortfall = prepaidShortfall({ prepaidAmount: session.prepaidAmount, totalElectricityCost, totalWaterCost });
-    if (shortfall < 1) {
-      updateData.paymentStatus = "PAID";
-      updateData.paidAt = new Date();
-    }
-  }
-
-  // Conditional update: fail if status changed between our read and write
-  // (concurrent checkOut call, admin double-click, etc.). Prevents double
-  // check-out and ensures concurrent cron ticks can no longer mutate this
-  // session via tickSessionConsumption's own status=ACTIVE guard.
-  const res = await prisma.session.updateMany({
-    where: { id: sessionId, status: "ACTIVE" },
-    data: updateData,
-  });
-  if (res.count === 0) {
-    throw new Error("Session allerede afsluttet eller ændret af en anden proces");
-  }
-
   // Only mark vacant for non-long-term
   if (!session.unit.isLongTerm) {
     await prisma.unit.update({ where: { id: session.unitId }, data: { status: "VACANT" } });
   }
 
   revalidatePath("/admin");
+  revalidatePath("/admin/bookings");
+  revalidatePath(`/admin/bookings/${sessionId}`);
   revalidatePath(`/admin/units/${session.unitId}`);
-  return { totalElectricityCost, totalWaterCost, totalServicesCost, totalCost, isPrepaid, prepaidAmount: session.prepaidAmount };
+  return {
+    ok: true,
+    totalElectricityCost,
+    totalWaterCost,
+    totalServicesCost,
+    totalCost,
+    isPrepaid: session.billingMode === "PREPAID",
+    prepaidAmount: session.prepaidAmount,
+    settlement,
+  };
+}
+
+/**
+ * What check-out will settle, shown in the dialog before the operator
+ * confirms: the settlement so far and the state of each meter. Ticks first,
+ * so the figures and readings are as fresh as the hardware allows.
+ */
+export async function getCheckoutPreview(
+  sessionId: number,
+): Promise<{ ok: true; preview: CheckoutPreview } | { ok: false; message: string }> {
+  await requireAuth();
+  const initial = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { unit: { include: { hardware: true } } },
+  });
+  if (!initial) return { ok: false, message: "Opholdet findes ikke." };
+  if (initial.status === "COMPLETED") return { ok: false, message: "Opholdet er allerede tjekket ud." };
+  if (initial.status !== "ACTIVE") return { ok: false, message: "Gæsten er ikke tjekket ind." };
+
+  const hw = initial.unit.hardware;
+  let read = { el: false, heat: false, water: false };
+  let session = initial;
+  if (hw) {
+    try {
+      const tick = await tickSessionConsumptionInternal(sessionId);
+      if (tick) read = tick.read;
+      const reloaded = await prisma.session.findUnique({
+        where: { id: sessionId },
+        include: { unit: { include: { hardware: true } } },
+      });
+      if (reloaded) session = reloaded;
+    } catch (e) {
+      logger.error("checkout", "getCheckoutPreview: tick fejl", e);
+    }
+  }
+
+  const settlement = await computeSettlement(sessionId, { ignorePaidFlag: true });
+  if (!settlement) return { ok: false, message: "Opholdet findes ikke." };
+
+  const now = new Date();
+  const meters: CheckoutMeterInfo[] = [];
+  const addMeter = (
+    key: CheckoutMeterInfo["key"],
+    label: string,
+    unit: CheckoutMeterInfo["unit"],
+    configured: boolean,
+    readNow: boolean,
+    lastTick: number | null,
+    start: number | null,
+  ) => {
+    if (!configured) return;
+    const lastValue = lastTick ?? start;
+    const lastReadAt = readNow ? now : lastTick != null ? session.lastTickAt : start != null ? session.checkInTime : null;
+    const ageMin = lastReadAt ? (now.getTime() - lastReadAt.getTime()) / 60_000 : Infinity;
+    meters.push({
+      key,
+      label,
+      unit,
+      online: readNow,
+      lastValue,
+      lastReadAt,
+      startValue: start,
+      stale: !readNow && (lastValue == null || ageMin > STALE_READING_MINUTES),
+    });
+  };
+  addMeter("el", hardware.hasHeatingMeter(hw) ? "El (hoved)" : "El", "kWh", hardware.hasElectricityMeter(hw), read.el, session.lastTickKwh, session.startKwh);
+  addMeter("heat", "Varme", "kWh", hardware.hasHeatingMeter(hw), read.heat, session.lastTickHeatingKwh, session.startHeatingKwh);
+  addMeter("water", "Vand", "L", hardware.hasWaterMeter(hw), read.water, session.lastTickWaterLiters, session.startWaterLiters);
+
+  const pricing = await getPricing();
+  let elPrice = session.pricePerKwhOverride ?? pricing.pricePerKwh;
+  if (session.pricePerKwhOverride == null) {
+    try { elPrice = (await getEffectiveElPricing()).pricePerKwh; } catch { /* fixed price */ }
+  }
+  const settings = await readGlobalSettings();
+
+  return {
+    ok: true,
+    preview: {
+      settlement,
+      meters,
+      elPrice,
+      waterPrice: session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater,
+      powerOff: settings.auto_power_off_on_checkout === "true" && hardware.hasElectricitySwitch(hw),
+    },
+  };
 }
 
 // ──────────────────────────────────────────────
-// SESSION STATEMENT — breakdown per billing period for a booking
-// Used by the printable /admin/bookings/[id]/statement page.
-// Combines prior invoices + any un-invoiced remainder into one consolidated
-// list of periods with cost + paid amount, so the admin can hand the guest
-// a complete overview of their stay.
+// SESSION STATEMENT — the printable /admin/bookings/[id]/statement page.
+// Everything money comes from the settlement (src/lib/settlement.ts), so the
+// statement, the booking page and the unpaid lists can't disagree.
 // ──────────────────────────────────────────────
-export interface StatementPeriod {
-  label: string;                 // "April 2026" or date range
-  periodStart: Date;
-  periodEnd: Date;
-  electricityKwh: number | null;
-  electricityCost: number;
-  waterLiters: number | null;
-  waterCost: number;
-  totalAmount: number;
-  paidAmount: number;            // 0 or totalAmount
-  paymentStatus: "PAID" | "PENDING" | "OVERDUE" | "DRAFT" | "UNINVOICED";
-  invoiceId: number | null;      // null for the un-invoiced remainder
-}
-
 export interface SessionStatement {
   session: {
     id: number;
@@ -1048,7 +1283,7 @@ export interface SessionStatement {
     bookingRef: string | null;
     checkInTime: Date;
     checkOutTime: Date | null;
-    status: "ACTIVE" | "COMPLETED";
+    status: "PENDING" | "ACTIVE" | "COMPLETED";
     isLongTerm: boolean;
   };
   unit: {
@@ -1056,269 +1291,32 @@ export interface SessionStatement {
     name: string;
     type: string;
   };
-  periods: StatementPeriod[];
-  /** Laundry/shower purchases during the stay — billed outside the meter periods. */
-  services: Array<{
-    label: string;
-    detail: string | null;
-    occurredAt: Date;
-    amount: number;
-    paid: boolean;
-  }>;
-  totals: {
-    electricityCost: number;
-    waterCost: number;
-    servicesCost: number;
-    /** Meters + services — everything the guest consumed. */
-    totalCost: number;
-    totalPaid: number;
-    owed: number;            // total - paid, clamped; amounts < 1 DKK are treated as 0
-  };
-  /**
-   * Present only for PREPAID stays. Such a guest owes nothing — consumption is
-   * drawn from the amount paid up front — so the statement shows a balance
-   * instead of an amount due.
-   */
-  prepaid: {
-    deposited: number;
-    used: number;
-    remaining: number;
-  } | null;
+  settlement: Settlement;
+  camp: CampInfo;
   generatedAt: Date;
-  currency: string;
 }
 
 export async function getSessionStatement(sessionId: number): Promise<SessionStatement | null> {
   await requireAuth();
-  const initial = await prisma.session.findUnique({
-    where: { id: sessionId },
-    include: { unit: { include: { hardware: true } } },
-  });
+  const initial = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
   if (!initial) return null;
 
-  // For ACTIVE sessions, tick first so the "remainder" reflects time-weighted
+  // For ACTIVE sessions, tick first so the figures reflect time-weighted
   // spot-price billing up to now (same numbers as /api/cron would produce).
-  let session = initial;
   if (initial.status === "ACTIVE") {
     try {
       await tickSessionConsumptionInternal(sessionId);
-      const reloaded = await prisma.session.findUnique({
-        where: { id: sessionId },
-        include: { unit: { include: { hardware: true } } },
-      });
-      if (reloaded) session = reloaded;
     } catch (e) {
       logger.error("tick", "getSessionStatement: tick fejl", e);
     }
   }
 
-  const pricing = await getPricing();
-
-  // Effective rates (honor per-booking overrides)
-  let effectiveElPrice = pricing.pricePerKwh;
-  try {
-    const effective = await getEffectiveElPricing();
-    effectiveElPrice = effective.pricePerKwh;
-  } catch {
-    // Fallback to fixed price
-  }
-  if (session.pricePerKwhOverride != null) effectiveElPrice = session.pricePerKwhOverride;
-  const waterRate = session.pricePerLiterWaterOverride ?? pricing.pricePerLiterWater;
-
-  // Load invoices that overlap this session's timespan. For long-term tenants
-  // we still scope by session period so a statement covers just this stay.
-  const sessionStart = session.checkInTime;
-  const sessionEnd = session.checkOutTime ?? new Date();
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      unitId: session.unitId,
-      periodEnd: { gte: sessionStart },
-      periodStart: { lte: sessionEnd },
-    },
-    orderBy: { periodStart: "asc" },
-  });
-
-  const fmtMonth = (d: Date) => d.toLocaleDateString("da-DK", { month: "long", year: "numeric" });
-  const fmtRange = (a: Date, b: Date) => {
-    const sameMonth = a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
-    if (sameMonth) return fmtMonth(a);
-    return `${a.toLocaleDateString("da-DK")} – ${b.toLocaleDateString("da-DK")}`;
-  };
-
-  const periods: StatementPeriod[] = invoices.map((inv) => {
-    const elKwh = (inv.endKwh != null && inv.startKwh != null)
-      ? Math.max(0, inv.endKwh - inv.startKwh) : null;
-    const heatKwh = (inv.endHeatingKwh != null && inv.startHeatingKwh != null)
-      ? Math.max(0, inv.endHeatingKwh - inv.startHeatingKwh) : null;
-    const combinedKwh = (elKwh !== null || heatKwh !== null)
-      ? (elKwh ?? 0) + (heatKwh ?? 0) : null;
-    const waterL = (inv.endWaterLiters != null && inv.startWaterLiters != null)
-      ? Math.max(0, inv.endWaterLiters - inv.startWaterLiters) : null;
-    const status = inv.status as "PAID" | "PENDING" | "OVERDUE" | "DRAFT";
-    return {
-      label: fmtRange(inv.periodStart, inv.periodEnd),
-      periodStart: inv.periodStart,
-      periodEnd: inv.periodEnd,
-      electricityKwh: combinedKwh,
-      electricityCost: inv.electricityCost,
-      waterLiters: waterL,
-      waterCost: inv.waterCost,
-      totalAmount: inv.totalAmount,
-      paidAmount: status === "PAID" ? inv.totalAmount : 0,
-      paymentStatus: status,
-      invoiceId: inv.id,
-    };
-  });
-
-  // Compute the "remainder" period — consumption since the last invoice (or
-  // since check-in if none) that has not yet been billed. For ACTIVE sessions
-  // we read live meters; for COMPLETED sessions we use session.endKwh.
-  const hw = session.unit.hardware;
-  const lastInvoice = invoices.length > 0 ? invoices[invoices.length - 1] : null;
-  const remainderStart = lastInvoice ? lastInvoice.periodEnd : session.checkInTime;
-  const remainderEnd = session.checkOutTime ?? new Date();
-
-  let remainderStartKwh: number | null = null;
-  let remainderEndKwh: number | null = null;
-  let remainderStartHeating: number | null = null;
-  let remainderEndHeating: number | null = null;
-  let remainderStartWater: number | null = null;
-  let remainderEndWater: number | null = null;
-
-  if (session.status === "ACTIVE") {
-    if (hardware.hasElectricityMeter(hw)) {
-      remainderStartKwh = lastInvoice?.endKwh ?? session.startKwh;
-      remainderEndKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `statement:el session=${session.id}`);
-    }
-    if (hardware.hasHeatingMeter(hw)) {
-      remainderStartHeating = lastInvoice?.endHeatingKwh ?? session.startHeatingKwh;
-      remainderEndHeating = await safeReadMeter(hardware.heatingMeterEp(hw!), `statement:heat session=${session.id}`);
-    }
-    if (hardware.hasWaterMeter(hw)) {
-      remainderStartWater = lastInvoice?.endWaterLiters ?? session.startWaterLiters;
-      remainderEndWater = await safeReadMeter(hardware.waterMeterEp(hw!), `statement:water session=${session.id}`);
-    }
-  } else {
-    // COMPLETED — use stored readings
-    remainderStartKwh = lastInvoice?.endKwh ?? session.startKwh;
-    remainderEndKwh = session.endKwh;
-    remainderStartHeating = lastInvoice?.endHeatingKwh ?? session.startHeatingKwh;
-    remainderEndHeating = session.endHeatingKwh;
-    remainderStartWater = lastInvoice?.endWaterLiters ?? session.startWaterLiters;
-    remainderEndWater = session.endWaterLiters;
-  }
-
-  const remMainKwh = (remainderEndKwh != null && remainderStartKwh != null)
-    ? Math.max(0, remainderEndKwh - remainderStartKwh) : null;
-  const remHeatKwh = (remainderEndHeating != null && remainderStartHeating != null)
-    ? Math.max(0, remainderEndHeating - remainderStartHeating) : null;
-  const remCombinedKwh = (remMainKwh !== null || remHeatKwh !== null)
-    ? (remMainKwh ?? 0) + (remHeatKwh ?? 0) : null;
-  const remWaterL = (remainderEndWater != null && remainderStartWater != null)
-    ? Math.max(0, remainderEndWater - remainderStartWater) : null;
-
-  // Prefer the time-weighted accumulator (populated by 10-min cron ticks) so
-  // the remainder is billed against the actual hourly spot price in effect
-  // when each kWh was consumed. Fall back to snapshot pricing for sessions
-  // pre-dating the accumulator or with no tick history.
-  const useAccumulatorForRemainder =
-    session.lastTickAt != null || session.accumulatedElCost > 0 || session.accumulatedWaterCost > 0;
-  const remElectricityCost = useAccumulatorForRemainder
-    ? session.accumulatedElCost
-    : (remCombinedKwh ?? 0) * effectiveElPrice;
-  const remWaterCost = useAccumulatorForRemainder
-    ? session.accumulatedWaterCost
-    : (remWaterL ?? 0) * waterRate;
-  const remTotal = remElectricityCost + remWaterCost;
-
-  // Include the remainder when it has consumption — or a cost: after a meter
-  // reset / failed read the kWh can be 0 or null while the accumulator
-  // still holds money that checkout will charge.
-  {
-    const hasAny = (remCombinedKwh ?? 0) > 0 || (remWaterL ?? 0) > 0 || remTotal > 0.005;
-    if (hasAny) {
-      periods.push({
-        label: session.status === "ACTIVE"
-          ? `Ikke-faktureret forbrug (indtil nu)`
-          : fmtRange(remainderStart, remainderEnd),
-        periodStart: remainderStart,
-        periodEnd: remainderEnd,
-        electricityKwh: remCombinedKwh,
-        electricityCost: remElectricityCost,
-        waterLiters: remWaterL,
-        waterCost: remWaterCost,
-        totalAmount: remTotal,
-        paidAmount: 0,
-        paymentStatus: "UNINVOICED",
-        invoiceId: null,
-      });
-    }
-  }
-
-  // Laundry and shower purchases are billed per use, outside the meter
-  // periods. Leaving them out made the statement total disagree with what the
-  // guest actually spent.
-  const [laundrySessions, showerSessions] = await Promise.all([
-    prisma.laundrySess.findMany({
-      where: { sessionId, status: { not: "CANCELLED" } },
-      include: { machine: { select: { name: true } } },
-      orderBy: { startedAt: "asc" },
-    }),
-    prisma.showerSess.findMany({
-      where: { sessionId, status: { not: "CANCELLED" } },
-      include: { shower: { select: { name: true } } },
-      orderBy: { startedAt: "asc" },
-    }),
+  const [session, settlement, settings] = await Promise.all([
+    prisma.session.findUnique({ where: { id: sessionId }, include: { unit: true } }),
+    computeSettlement(sessionId),
+    readGlobalSettings(),
   ]);
-
-  const services = [
-    ...laundrySessions.map((l) => ({
-      label: l.machine.name,
-      detail: l.programName || (l.durationMinutes ? `${l.durationMinutes} min` : null),
-      occurredAt: l.startedAt,
-      amount: l.billingMode === "METERED" && l.status === "ACTIVE" ? (l.reservedAmount ?? 0) : l.pricePaid,
-      paid: l.paymentStatus === "PAID" || l.paymentStatus === "PREPAID",
-    })),
-    ...showerSessions.map((s) => ({
-      label: s.shower.name,
-      detail: s.minutesPaid ? `${s.minutesPaid} min` : null,
-      occurredAt: s.startedAt,
-      amount: s.pricePaid,
-      paid: s.paymentStatus === "PAID" || s.paymentStatus === "PREPAID",
-    })),
-  ].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
-
-  const servicesCost = services.reduce((s, x) => s + x.amount, 0);
-  const servicesPaid = services.reduce((s, x) => s + (x.paid ? x.amount : 0), 0);
-
-  const totalElectricity = periods.reduce((s, p) => s + p.electricityCost, 0);
-  const totalWater = periods.reduce((s, p) => s + p.waterCost, 0);
-  const totalCost = periods.reduce((s, p) => s + p.totalAmount, 0) + servicesCost;
-  const totalPaid = periods.reduce((s, p) => s + p.paidAmount, 0) + servicesPaid;
-
-  // PREPAID guests draw consumption from money already deposited, so they owe
-  // nothing — reporting an "amount due" for them was simply wrong. The live
-  // balance (prepaidAmount) already carries every service draw, so only
-  // el/water accumulators remain to subtract; deriving "used" from
-  // deposited − remaining also keeps card-paid services out of the balance.
-  const isPrepaid = session.billingMode === "PREPAID";
-  let prepaid: { deposited: number; used: number; remaining: number } | null = null;
-  let rawOwed: number;
-  if (isPrepaid) {
-    const deposited = await resolvePrepaidDeposited(session);
-    const remainingRaw =
-      (session.prepaidAmount ?? 0) - session.accumulatedElCost - session.accumulatedWaterCost;
-    prepaid = {
-      deposited,
-      used: deposited - remainingRaw,
-      remaining: Math.max(0, remainingRaw),
-    };
-    rawOwed = Math.max(0, -remainingRaw); // only if they overspent the deposit
-  } else {
-    rawOwed = totalCost - totalPaid;
-  }
-  // Amounts under 1 DKK are considered rounding noise and ignored
-  const owed = rawOwed < 1 ? 0 : rawOwed;
+  if (!session || !settlement) return null;
 
   return {
     session: {
@@ -1329,7 +1327,7 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
       bookingRef: session.bookingRef,
       checkInTime: session.checkInTime,
       checkOutTime: session.checkOutTime,
-      status: session.status as "ACTIVE" | "COMPLETED",
+      status: settlement.sessionStatus,
       isLongTerm: session.unit.isLongTerm,
     },
     unit: {
@@ -1337,56 +1335,53 @@ export async function getSessionStatement(sessionId: number): Promise<SessionSta
       name: session.unit.name,
       type: session.unit.type,
     },
-    periods,
-    services,
-    totals: {
-      electricityCost: totalElectricity,
-      waterCost: totalWater,
-      servicesCost,
-      totalCost,
-      totalPaid,
-      owed,
+    settlement,
+    camp: {
+      name: settings.camp_name?.trim() || null,
+      address: settings.camp_address?.trim() || null,
+      cvr: settings.camp_cvr?.trim() || null,
     },
-    prepaid,
     generatedAt: new Date(),
-    currency: pricing.currency,
   };
 }
 
+/** The settlement for one stay (booking page, client components). No tick. */
+export async function getSessionSettlement(sessionId: number): Promise<Settlement | null> {
+  await requireAuth();
+  return computeSettlement(sessionId);
+}
+
 // ──────────────────────────────────────────────
-// CHECK-OUT WITH STATEMENT — wraps checkOut() and, for postpaid bookings,
-// attempts to generate a final invoice for any un-invoiced remainder so the
-// printed statement fully reflects what the guest is being charged. If the
-// remainder is below 1 DKK we silently skip invoice creation.
+// CHECK-OUT WITH STATEMENT — the one check-out flow in the UI (booking page
+// and unit page). No closing invoice: for a short stay the stay itself is the
+// bill. The old closing invoice was raised after the stay was completed, so
+// it found no active stay, was usually skipped, and double-billed when it
+// wasn't. Long-term units keep their monthly invoices.
 // ──────────────────────────────────────────────
-export async function checkOutWithStatement(sessionId: number) {
+export async function checkOutWithStatement(
+  sessionId: number,
+  options: CheckoutOptions = {},
+): Promise<{ ok: true; state: Settlement["state"] | null; owed: number } | { ok: false; message: string }> {
   await requireAuth();
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    select: { unitId: true, billingMode: true, status: true },
+    select: { status: true },
   });
-  if (!session) throw new Error("Session ikke fundet");
+  if (!session) return { ok: false, message: "Opholdet findes ikke." };
+  if (session.status === "PENDING") return { ok: false, message: "Gæsten er ikke tjekket ind." };
 
+  let state: Settlement["state"] | null = null;
+  let owed = 0;
   if (session.status === "ACTIVE") {
-    await checkOut(sessionId);
-  }
-
-  // For postpaid bookings, try to create a closing invoice covering any
-  // consumption since the last invoice. Ignored if under the 1 DKK threshold.
-  if (session.billingMode !== "PREPAID") {
-    try {
-      await createMonthlyInvoiceInternal(session.unitId);
-    } catch (e) {
-      // Expected when there's no un-invoiced consumption or it's < 1 DKK.
-      if (!(e instanceof Error) || !e.message.includes("mindst 1 DKK")) {
-        logger.error("invoice", "checkOutWithStatement invoice fejl", e);
-      }
-    }
+    const res = await checkOut(sessionId, options);
+    if (!res.ok) return res;
+    state = res.settlement?.state ?? null;
+    owed = res.settlement?.owed ?? 0;
   }
 
   revalidatePath(`/admin/bookings/${sessionId}`);
   revalidatePath(`/admin/bookings/${sessionId}/statement`);
-  return { ok: true };
+  return { ok: true, state, owed };
 }
 
 // ──────────────────────────────────────────────
@@ -1419,6 +1414,8 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
   addedWaterCost: number;
   elPriceAtTick: number;
   spotPrice: number | null;
+  /** Which configured meters answered this tick (checkout shows the rest as offline). */
+  read: { el: boolean; heat: boolean; water: boolean };
 } | null> {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
@@ -1525,6 +1522,7 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
     updateData.lastTickWaterLiters = currentWaterLiters;
   }
 
+  const meterRead = { el: currentKwh !== null, heat: currentHeatingKwh !== null, water: currentWaterLiters !== null };
   const hasAnyRead = currentKwh !== null || currentHeatingKwh !== null || currentWaterLiters !== null;
   if (hasAnyRead) {
     if (addElKwh > 0) {
@@ -1558,6 +1556,7 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
         addedWaterCost: 0,
         elPriceAtTick: elPrice,
         spotPrice,
+        read: meterRead,
       };
     }
   }
@@ -1569,6 +1568,7 @@ async function tickSessionConsumptionInternal(sessionId: number): Promise<{
     addedWaterCost: addWaterCost,
     elPriceAtTick: elPrice,
     spotPrice,
+    read: meterRead,
   };
 }
 
@@ -2127,9 +2127,35 @@ export async function activateBookingSession(
 // ──────────────────────────────────────────────
 // INVOICES — Monthly billing
 // ──────────────────────────────────────────────
-export async function createMonthlyInvoice(unitId: number) {
+// Danish messages createMonthlyInvoiceInternal throws on purpose.
+const EXPECTED_INVOICE_ERRORS = ["Beløbet skal være mindst 1 DKK", "Enheden har en forudbetalt gæst", "Enhed ikke fundet"];
+
+/** "Ny faktura" on the booking page. Expected problems come back as a message. */
+export async function createMonthlyInvoice(
+  unitId: number,
+): Promise<{ ok: true; invoiceId: number; totalAmount: number } | { ok: false; message: string }> {
   await requireAuth();
-  return createMonthlyInvoiceInternal(unitId);
+  const unit = await prisma.unit.findUnique({ where: { id: unitId }, select: { isLongTerm: true } });
+  if (!unit) return { ok: false, message: "Enheden findes ikke." };
+  // Without a guest checked in, a short-term unit's invoice would bill the
+  // meter since the last invoice — consumption a completed stay already
+  // settles on its statement.
+  if (!unit.isLongTerm) {
+    const active = await prisma.session.findFirst({ where: { unitId, status: "ACTIVE" }, select: { id: true } });
+    if (!active) {
+      return { ok: false, message: "Der er ingen indtjekket gæst på enheden. Et afsluttet ophold afregnes på opgørelsen." };
+    }
+  }
+  try {
+    const invoice = await createMonthlyInvoiceInternal(unitId);
+    revalidatePath("/admin/bookings");
+    return { ok: true, invoiceId: invoice.id, totalAmount: invoice.totalAmount };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    if (EXPECTED_INVOICE_ERRORS.some((m) => message.startsWith(m))) return { ok: false, message };
+    logger.error("invoice", `createMonthlyInvoice fejl (enhed ${unitId})`, e);
+    return { ok: false, message: "Fakturaen kunne ikke oprettes. Prøv igen." };
+  }
 }
 
 // Unauthenticated core — for cron/checkout paths only (not a Server Action).
@@ -2855,24 +2881,124 @@ export async function getSessionCharges(sessionId: number): Promise<{
   };
 }
 
-export async function markSessionPaid(sessionId: number, paymentId?: string) {
-  await requireAuth();
-  await prisma.session.update({
+/**
+ * "Markér som betalt": records what the guest owes as paid at the desk, so the
+ * statement, badge and Økonomi all show it. Open invoices of the stay are
+ * paid with it — left open they would keep sending reminders and could cut
+ * the power as overdue. Only after check-out: while a stay runs, more
+ * consumption is still coming.
+ */
+export async function markSessionPaid(
+  sessionId: number,
+  paymentId?: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const auth = await requireAuth();
+  const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    data: { paymentStatus: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
+    select: { status: true, billingMode: true },
   });
-  revalidatePath("/admin/bookings");
+  if (!session) return { ok: false, message: "Opholdet findes ikke." };
+  if (session.status === "PENDING") return { ok: false, message: "Gæsten er ikke tjekket ind." };
+  if (session.status === "ACTIVE") {
+    return {
+      ok: false,
+      message: session.billingMode === "PREPAID"
+        ? "Gæsten er stadig tjekket ind — brug 'Tilføj indbetaling' på saldoen."
+        : "Opholdet er stadig i gang. Betalingen registreres, når gæsten er tjekket ud.",
+    };
+  }
+
+  const settlement = await computeSettlement(sessionId);
+  if (!settlement) return { ok: false, message: "Opholdet findes ikke." };
+  const username = auth.username || "admin";
+  const now = new Date();
+  const openInvoices = settlement.invoices.filter((i) => i.status !== "PAID");
+  const openInvoiceTotal = openInvoices.reduce((t, i) => t + i.totalAmount, 0);
+  // Pays exactly what is owed; under 1 kr there's nothing to record.
+  const rest = settlement.owed > 0 ? roundOre(settlement.owed - openInvoiceTotal) : 0;
+  if (rest < 0.005 && openInvoices.length === 0) {
+    await syncPaymentStatus(sessionId);
+    revalidatePath(`/admin/bookings/${sessionId}`);
+    return { ok: true };
+  }
+
+  const ALREADY = "Betalingen er allerede registreret. Genindlæs siden.";
+  try {
+    await prisma.$transaction(async (tx) => {
+      // A double click or a second screen must not record the payment twice.
+      const fresh = await tx.payment.aggregate({ where: { sessionId, kind: "SETTLEMENT" }, _sum: { amount: true } });
+      if (Math.abs((fresh._sum.amount ?? 0) - settlement.paid) > 0.005) throw new Error(ALREADY);
+      for (const inv of openInvoices) {
+        await tx.invoice.update({ where: { id: inv.id }, data: { status: "PAID", paidAt: now } });
+        await tx.payment.create({
+          data: { sessionId, invoiceId: inv.id, amount: inv.totalAmount, method: "OTHER", kind: "INVOICE", createdBy: username, note: "Betalt sammen med opholdet" },
+        });
+      }
+      if (rest >= 0.005) {
+        await tx.payment.create({
+          data: { sessionId, amount: rest, method: "OTHER", kind: "SETTLEMENT", createdBy: username, externalId: paymentId ?? null, note: "Markeret som betalt" },
+        });
+      }
+      await tx.session.update({
+        where: { id: sessionId },
+        data: { paymentStatus: "PAID", paidAt: now, ...(paymentId ? { paymentId } : {}) },
+      });
+    });
+  } catch (e) {
+    if (e instanceof Error && e.message === ALREADY) return { ok: false, message: ALREADY };
+    throw e;
+  }
+  logger.info("payment", `Ophold ${sessionId} markeret betalt af ${username}: ${fmtMoney(settlement.owed, settlement.currency)}`);
+
+  revalidatePath("/admin", "layout");
   revalidatePath(`/admin/bookings/${sessionId}`);
+  return { ok: true };
 }
 
-export async function markSessionUnpaid(sessionId: number) {
-  await requireAuth();
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { paymentStatus: "UNPAID", paidAt: null, paymentId: null },
+/**
+ * "Fortryd betaling": books counter-entries for what markSessionPaid
+ * recorded (nothing is deleted) and reopens the stay.
+ */
+export async function markSessionUnpaid(sessionId: number): Promise<{ ok: true } | { ok: false; message: string }> {
+  const auth = await requireAuth();
+  const settlement = await computeSettlement(sessionId);
+  if (!settlement) return { ok: false, message: "Opholdet findes ikke." };
+  const username = auth.username || "admin";
+  const open = settlement.payments.filter(
+    (p) => (p.kind === "SETTLEMENT" || (p.kind === "INVOICE" && p.note === "Betalt sammen med opholdet"))
+      && p.amount > 0 && p.reversesId == null && !p.reversed,
+  );
+
+  await prisma.$transaction(async (tx) => {
+    for (const p of open) {
+      await tx.payment.create({
+        data: {
+          sessionId,
+          invoiceId: p.invoiceId,
+          amount: -p.amount,
+          method: p.method,
+          kind: p.kind,
+          reversesId: p.id,
+          createdBy: username,
+          note: "Betaling fortrudt",
+        },
+      });
+      if (p.invoiceId != null) {
+        await tx.invoice.update({ where: { id: p.invoiceId }, data: { status: "PENDING", paidAt: null } });
+      }
+    }
+    await tx.session.update({
+      where: { id: sessionId },
+      data: { paymentStatus: "UNPAID", paidAt: null, paymentId: null },
+    });
   });
-  revalidatePath("/admin/bookings");
+  // A stay with nothing (≥ 1 kr) due is settled whatever the button said.
+  await syncPaymentStatus(sessionId);
+  logger.info("payment", `Betaling på ophold ${sessionId} fortrudt af ${username}`);
+
+  revalidatePath("/admin", "layout");
   revalidatePath(`/admin/bookings/${sessionId}`);
+  return { ok: true };
 }
 
 /**
@@ -2925,93 +3051,217 @@ export async function adjustPrepaidAmount(sessionId: number, newAmount: number) 
   revalidatePath("/admin/bookings");
 }
 
+const METER_FIELDS = ["startKwh", "endKwh", "startHeatingKwh", "endHeatingKwh", "startWaterLiters", "endWaterLiters"] as const;
+const PRICE_FIELDS = ["pricePerKwhOverride", "pricePerLiterWaterOverride"] as const;
+// Guest fields the booking-system sync must leave alone once the desk edits them.
+const SYNC_LOCKABLE_FIELDS = ["guestName", "guestEmail", "guestPhone", "expectedCheckOut"];
+
+/**
+ * "Redigér booking". Only fields that differ from what is stored are written.
+ * Guest/stay fields never touch money. Meter readings and price overrides:
+ * - running/reserved stays: never write totals (checkout settles from the
+ *   accumulator); a price override applies from the next meter reading;
+ * - completed stays: recalculated the way checkout bills (accumulator +
+ *   corrected difference, on-account services), and only after the operator
+ *   confirms the before/after amount (call again with confirm: true).
+ */
 export async function updateSessionDetails(
   sessionId: number,
-  data: {
-    guestName?: string;
-    guestEmail?: string;
-    guestPhone?: string;
-    bookingRef?: string;
-    notes?: string;
-    expectedCheckOut?: string;
-    startKwh?: number | null;
-    endKwh?: number | null;
-    startHeatingKwh?: number | null;
-    endHeatingKwh?: number | null;
-    startWaterLiters?: number | null;
-    endWaterLiters?: number | null;
-    pricePerKwhOverride?: number | null;
-    pricePerLiterWaterOverride?: number | null;
-  }
-) {
-  await requireAuth();
+  data: SessionDetailsInput,
+  opts: { confirm?: boolean } = {},
+): Promise<UpdateSessionResult> {
+  const auth = await requireAuth();
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!session) return { ok: false, message: "Opholdet findes ikke." };
+
   const updateData: Record<string, unknown> = {};
-  if (data.guestName !== undefined) updateData.guestName = data.guestName;
-  if (data.guestEmail !== undefined) updateData.guestEmail = data.guestEmail || null;
-  if (data.guestPhone !== undefined) updateData.guestPhone = data.guestPhone || null;
-  if (data.bookingRef !== undefined) updateData.bookingRef = data.bookingRef || null;
-  if (data.notes !== undefined) updateData.notes = data.notes || null;
-  if (data.expectedCheckOut !== undefined) updateData.expectedCheckOut = data.expectedCheckOut ? new Date(data.expectedCheckOut) : null;
-  if (data.startKwh !== undefined) updateData.startKwh = data.startKwh;
-  if (data.endKwh !== undefined) updateData.endKwh = data.endKwh;
-  if (data.startHeatingKwh !== undefined) updateData.startHeatingKwh = data.startHeatingKwh;
-  if (data.endHeatingKwh !== undefined) updateData.endHeatingKwh = data.endHeatingKwh;
-  if (data.startWaterLiters !== undefined) updateData.startWaterLiters = data.startWaterLiters;
-  if (data.endWaterLiters !== undefined) updateData.endWaterLiters = data.endWaterLiters;
-  if (data.pricePerKwhOverride !== undefined) updateData.pricePerKwhOverride = data.pricePerKwhOverride;
-  if (data.pricePerLiterWaterOverride !== undefined) updateData.pricePerLiterWaterOverride = data.pricePerLiterWaterOverride;
+  const changedGuestFields: string[] = [];
+  const setGuest = (field: string, value: unknown) => {
+    updateData[field] = value;
+    changedGuestFields.push(field);
+  };
 
-  // If consumption OR any price override was manually edited, recalculate costs
-  const needsRecalc = data.startKwh !== undefined || data.endKwh !== undefined
-    || data.startHeatingKwh !== undefined || data.endHeatingKwh !== undefined
-    || data.startWaterLiters !== undefined || data.endWaterLiters !== undefined
-    || data.pricePerKwhOverride !== undefined || data.pricePerLiterWaterOverride !== undefined;
-
-  if (needsRecalc) {
-    const session = await prisma.session.findUnique({ where: { id: sessionId } });
-    if (session) {
-      const pricing = await getPricing();
-      const startKwh = data.startKwh !== undefined ? data.startKwh : session.startKwh;
-      const endKwh = data.endKwh !== undefined ? data.endKwh : session.endKwh;
-      const startHeatingKwh = data.startHeatingKwh !== undefined ? data.startHeatingKwh : session.startHeatingKwh;
-      const endHeatingKwh = data.endHeatingKwh !== undefined ? data.endHeatingKwh : session.endHeatingKwh;
-      const startWater = data.startWaterLiters !== undefined ? data.startWaterLiters : session.startWaterLiters;
-      const endWater = data.endWaterLiters !== undefined ? data.endWaterLiters : session.endWaterLiters;
-
-      // Use per-booking override when set, otherwise fall back to the global price
-      const kwhRate = (data.pricePerKwhOverride !== undefined ? data.pricePerKwhOverride : session.pricePerKwhOverride)
-        ?? pricing.pricePerKwh;
-      const waterRate = (data.pricePerLiterWaterOverride !== undefined ? data.pricePerLiterWaterOverride : session.pricePerLiterWaterOverride)
-        ?? pricing.pricePerLiterWater;
-
-      let elCostCalc = 0;
-      let hasElCalc = false;
-      if (startKwh != null && endKwh != null) {
-        const usedKwh = Math.max(0, endKwh - startKwh);
-        elCostCalc += usedKwh * kwhRate;
-        hasElCalc = true;
+  // ── Gæst og ophold ──
+  if (data.guestName !== undefined) {
+    const v = data.guestName.trim();
+    if (!v) return { ok: false, message: "Gæstenavn må ikke være tomt." };
+    if (v !== session.guestName) setGuest("guestName", v);
+  }
+  if (data.guestEmail !== undefined) {
+    const v = data.guestEmail.trim() || null;
+    if (v !== session.guestEmail) setGuest("guestEmail", v);
+  }
+  if (data.guestPhone !== undefined) {
+    const v = data.guestPhone.trim() || null;
+    if (v !== session.guestPhone) setGuest("guestPhone", v);
+  }
+  if (data.bookingRef !== undefined) {
+    const v = data.bookingRef.trim() || null;
+    if (v !== session.bookingRef) {
+      // The provider ref is the sync key — editing it made the next sync
+      // import the booking again as a duplicate.
+      if (session.externalBookingId || parseBookingRef(session.bookingRef)) {
+        return { ok: false, message: "Booking nr. kommer fra booking-systemet og kan ikke ændres her." };
       }
-      if (startHeatingKwh != null && endHeatingKwh != null) {
-        const usedHeating = Math.max(0, endHeatingKwh - startHeatingKwh);
-        elCostCalc += usedHeating * kwhRate;
-        hasElCalc = true;
+      updateData.bookingRef = v;
+    }
+  }
+  if (data.notes !== undefined) {
+    const v = data.notes.trim() ? data.notes : null;
+    if (v !== session.notes) updateData.notes = v;
+  }
+  if (data.expectedCheckOut !== undefined) {
+    const v = data.expectedCheckOut.trim();
+    const current = session.expectedCheckOut ? session.expectedCheckOut.toISOString().slice(0, 10) : "";
+    if (v !== current) {
+      if (!v) {
+        setGuest("expectedCheckOut", null);
+      } else {
+        // Noon local time, like imported bookings — a date-only value at UTC
+        // midnight lands on the previous evening in Denmark.
+        const d = new Date(`${v}T12:00:00`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(d.getTime())) {
+          return { ok: false, message: "Ugyldig dato for forventet checkout." };
+        }
+        setGuest("expectedCheckOut", d);
       }
-      if (hasElCalc) {
-        updateData.totalElectricityCost = parseFloat(elCostCalc.toFixed(2));
-      }
-      if (startWater != null && endWater != null) {
-        const usedWater = Math.max(0, endWater - startWater);
-        updateData.totalWaterCost = parseFloat((usedWater * waterRate).toFixed(2));
-      }
-      const elCost = (updateData.totalElectricityCost as number | undefined) ?? session.totalElectricityCost ?? 0;
-      const waterCost = (updateData.totalWaterCost as number | undefined) ?? session.totalWaterCost ?? 0;
-      updateData.totalCost = parseFloat(((elCost as number) + (waterCost as number)).toFixed(2));
     }
   }
 
+  // ── Målerstande og pris ──
+  const before = {
+    startKwh: session.startKwh,
+    endKwh: session.endKwh,
+    startHeatingKwh: session.startHeatingKwh,
+    endHeatingKwh: session.endHeatingKwh,
+    startWaterLiters: session.startWaterLiters,
+    endWaterLiters: session.endWaterLiters,
+    pricePerKwhOverride: session.pricePerKwhOverride,
+    pricePerLiterWaterOverride: session.pricePerLiterWaterOverride,
+  };
+  const after = { ...before };
+  const changedMoneyFields: string[] = [];
+  for (const key of [...METER_FIELDS, ...PRICE_FIELDS]) {
+    const v = data[key];
+    if (v === undefined) continue;
+    if (v !== null && (!Number.isFinite(v) || v < 0)) {
+      return { ok: false, message: "Målerstande og priser skal være positive tal." };
+    }
+    if (v !== before[key]) {
+      after[key] = v;
+      changedMoneyFields.push(key);
+    }
+  }
+
+  let message: string | undefined;
+  let amountChange: { before: number; after: number } | null = null;
+  if (changedMoneyFields.length > 0) {
+    const pairs: Array<[number | null, number | null, string]> = [
+      [after.startKwh, after.endKwh, "El"],
+      [after.startHeatingKwh, after.endHeatingKwh, "Varme"],
+      [after.startWaterLiters, after.endWaterLiters, "Vand"],
+    ];
+    for (const [start, end, label] of pairs) {
+      if (start != null && end != null && end < start) {
+        return { ok: false, message: `${label}: slutaflæsningen kan ikke være lavere end startaflæsningen.` };
+      }
+    }
+
+    if (session.status === "COMPLETED") {
+      const settlement = await computeSettlement(sessionId);
+      if (settlement?.state === "PAID") {
+        return { ok: false, message: "Opholdet er betalt. Fortryd betalingen, før målerstande eller pris rettes." };
+      }
+      const pricing = await getPricing();
+      let elPrice = pricing.pricePerKwh;
+      try { elPrice = (await getEffectiveElPricing()).pricePerKwh; } catch { /* fixed price */ }
+      const recalc = recalcCompletedCosts({
+        before: { ...before, totalElectricityCost: session.totalElectricityCost, totalWaterCost: session.totalWaterCost },
+        after: { ...after, totalElectricityCost: session.totalElectricityCost, totalWaterCost: session.totalWaterCost },
+        accumulatedElCost: session.accumulatedElCost,
+        accumulatedElKwh: session.accumulatedElKwh,
+        accumulatedWaterCost: session.accumulatedWaterCost,
+        accumulatedWaterLiters: session.accumulatedWaterLiters,
+        elTicked: session.lastTickKwh != null || session.lastTickHeatingKwh != null || session.accumulatedElKwh > 0,
+        waterTicked: session.lastTickWaterLiters != null || session.accumulatedWaterLiters > 0,
+        elPrice,
+        waterPrice: pricing.pricePerLiterWater,
+      });
+      // Same total checkout stores: el + water + on-account services.
+      const [laundryAgg, showerAgg] = await Promise.all([
+        prisma.laundrySess.aggregate({ where: { sessionId, paymentStatus: "ON_ACCOUNT" }, _sum: { pricePaid: true } }),
+        prisma.showerSess.aggregate({ where: { sessionId, paymentStatus: "ON_ACCOUNT" }, _sum: { pricePaid: true } }),
+      ]);
+      const onAccount = (laundryAgg._sum.pricePaid ?? 0) + (showerAgg._sum.pricePaid ?? 0);
+      const oldElWater = (session.totalElectricityCost ?? 0) + (session.totalWaterCost ?? 0);
+      const newElWater = (recalc.electricityCost ?? 0) + (recalc.waterCost ?? 0);
+      const totalBefore = settlement?.totals.totalCost ?? roundOre(oldElWater + onAccount);
+      const totalAfter = roundOre(totalBefore - oldElWater + newElWater);
+
+      if (Math.abs(totalAfter - totalBefore) >= 0.005) {
+        if (!opts.confirm) {
+          return {
+            ok: false,
+            needsConfirmation: true,
+            before: totalBefore,
+            after: totalAfter,
+            message: `Beløbet for opholdet ændres fra ${fmtMoney(totalBefore)} til ${fmtMoney(totalAfter)}.`,
+          };
+        }
+        amountChange = { before: totalBefore, after: totalAfter };
+      }
+      if (recalc.elChanged) updateData.totalElectricityCost = recalc.electricityCost;
+      if (recalc.waterChanged) updateData.totalWaterCost = recalc.waterCost;
+      Object.assign(updateData, recalc.accumulators);
+      updateData.totalCost = roundOre(newElWater + onAccount);
+    } else {
+      // A running or reserved stay is settled at checkout from the meter's
+      // own readings; totals stay unset so every screen keeps the live figure.
+      const endFields = changedMoneyFields.filter((k) => k.startsWith("end"));
+      if (endFields.length > 0) {
+        return { ok: false, message: "Slutaflæsning sættes ved udtjek. Brug 'Indtast slutaflæsning' i udtjek-dialogen." };
+      }
+      const startTicked: Record<string, boolean> = {
+        startKwh: session.lastTickKwh != null,
+        startHeatingKwh: session.lastTickHeatingKwh != null,
+        startWaterLiters: session.lastTickWaterLiters != null,
+      };
+      if (changedMoneyFields.some((k) => startTicked[k])) {
+        return { ok: false, message: "Startaflæsningen kan ikke rettes, når måleren allerede afregner løbende." };
+      }
+      if (changedMoneyFields.some((k) => k.startsWith("price"))) {
+        message = "Den nye pris gælder fra næste måleraflæsning. Allerede målt forbrug ændres ikke.";
+      }
+    }
+    for (const key of changedMoneyFields) updateData[key] = after[key as keyof typeof after];
+  }
+
+  if (Object.keys(updateData).length === 0) return { ok: true, message: "Ingen ændringer at gemme." };
+
+  // Fields corrected by hand on an imported booking are locked against the
+  // booking-system sync, so the next sync doesn't silently undo them.
+  const lockable = changedGuestFields.filter((f) => SYNC_LOCKABLE_FIELDS.includes(f));
+  if (lockable.length > 0 && (session.externalBookingId || parseBookingRef(session.bookingRef))) {
+    let locked: string[] = [];
+    try {
+      const parsed = JSON.parse(session.lockedFields || "[]");
+      if (Array.isArray(parsed)) locked = parsed.filter((x): x is string => typeof x === "string");
+    } catch { /* malformed — start over */ }
+    updateData.lockedFields = JSON.stringify([...new Set([...locked, ...lockable])]);
+  }
+
   await prisma.session.update({ where: { id: sessionId }, data: updateData });
+  if (amountChange) {
+    logger.info(
+      "booking",
+      `Ophold ${sessionId}: beløb rettet af ${auth.username || "admin"} fra ${fmtMoney(amountChange.before)} til ${fmtMoney(amountChange.after)} (${changedMoneyFields.join(", ")})`,
+    );
+  }
+  if (session.status === "COMPLETED" && changedMoneyFields.length > 0) await syncPaymentStatus(sessionId);
+
   revalidatePath("/admin/bookings");
   revalidatePath(`/admin/bookings/${sessionId}`);
+  return { ok: true, message };
 }
 
 export async function resendGuestNotification(sessionId: number) {
@@ -3041,11 +3291,10 @@ export async function resendGuestNotification(sessionId: number) {
   return { ok: true };
 }
 
+/** Completed stays that still owe ≥ 1 kr — same rule as the statement and Økonomi. */
 export async function getUnpaidCount() {
   await requireAuth();
-  return prisma.session.count({
-    where: { status: "COMPLETED", paymentStatus: "UNPAID" },
-  });
+  return (await listUnpaidSettlements()).length;
 }
 
 // ──────────────────────────────────────────────
@@ -4023,14 +4272,18 @@ export async function getEconomySummary(): Promise<{
 
   const months = [...monthMap.values()].sort((a, b) => b.month.localeCompare(a.month));
 
-  // Unpaid sessions
+  // Unpaid sessions — what the guest still owes per the settlement (the same
+  // figure as the statement and the unpaid badge), not the raw stay total.
+  const unpaidSettlements = await computeSettlements(
+    sessions.filter((s) => s.paymentStatus === "UNPAID").map((s) => s.id),
+  );
   const unpaidSessions = sessions
-    .filter((s) => s.paymentStatus === "UNPAID" && (s.totalCost ?? 0) > 0)
+    .filter((s) => (unpaidSettlements.get(s.id)?.owed ?? 0) > 0)
     .map((s) => ({
       id: s.id,
       unitName: unitDisplayName(s.unit.type, s.unit.name),
       guestName: s.guestName,
-      total: s.totalCost ?? 0,
+      total: unpaidSettlements.get(s.id)!.owed,
       checkOut: s.checkOutTime?.toISOString().slice(0, 10) || "",
     }));
 
