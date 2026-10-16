@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { isReservationExpired } from "@/lib/booking-status";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Zap, Droplets, Flame, Mail, Hash, Phone, Receipt, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,10 @@ export default async function BookingDetailPage({
   if (!session) notFound();
 
   const pricing = await getPricing();
-  const isPendingSession = session.status === "PENDING";
+  // A reservation whose stay ended without a check-in is shown as expired
+  // and can no longer be activated.
+  const isExpiredReservation = isReservationExpired(session);
+  const isPendingSession = session.status === "PENDING" && !isExpiredReservation;
   const isActive = session.status === "ACTIVE";
   const isUnpaid = session.status === "COMPLETED" && session.paymentStatus === "UNPAID";
   const isPaid = session.paymentStatus === "PAID";
@@ -75,6 +79,12 @@ export default async function BookingDetailPage({
               <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                 Reserveret
+              </span>
+            )}
+            {isExpiredReservation && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
+                Udløbet
               </span>
             )}
             {isActive && (
@@ -187,7 +197,9 @@ export default async function BookingDetailPage({
             <div className="flex items-center gap-2 min-w-0">
               <FileText className="h-4 w-4 text-primary shrink-0" />
               <p className="text-xs text-muted-foreground">
-                {isPendingSession
+                {isExpiredReservation
+                  ? "Udløbet reservation — gæsten blev aldrig checket ind."
+                  : isPendingSession
                   ? "Importeret booking — vælg afregningsform og aktivér."
                   : isActive && !session.unit.isLongTerm
                     ? "Checker ud, aflæser målere og opretter afsluttende faktura."
@@ -195,7 +207,7 @@ export default async function BookingDetailPage({
               </p>
             </div>
             <div className="shrink-0">
-              {isPendingSession ? (
+              {isExpiredReservation ? null : isPendingSession ? (
                 <BookingActivateButton
                   sessionId={session.id}
                   guestName={session.guestName}
@@ -259,6 +271,15 @@ export default async function BookingDetailPage({
             />
           )}
 
+          {isExpiredReservation && (
+            <div className="rounded-xl border border-border/60 bg-muted/40 shadow-sm p-5">
+              <p className="text-sm font-medium">Reservationen er udløbet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Opholdet sluttede {session.expectedCheckOut ? new Date(session.expectedCheckOut).toLocaleDateString("da-DK") : "for over en dag siden"}, og gæsten blev aldrig checket ind i CampSense. Bookingen tæller ikke længere som reserveret.
+              </p>
+            </div>
+          )}
+
           {isPendingSession && (
             <div className="rounded-xl border border-amber-200/60 bg-amber-50/50 shadow-sm p-5">
               <p className="text-sm text-amber-800 font-medium">Afventer check-in</p>
@@ -268,7 +289,7 @@ export default async function BookingDetailPage({
             </div>
           )}
 
-          {!isPendingSession && (<>
+          {session.status !== "PENDING" && (<>
           <div className="rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Forbrug og køb</h2>

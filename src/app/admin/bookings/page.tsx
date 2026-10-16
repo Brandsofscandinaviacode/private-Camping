@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { isReservationExpired } from "@/lib/booking-status";
 import { getAllSessions, getUnpaidCount } from "@/lib/actions";
 import { BookingFilters } from "@/components/admin/booking-filters";
 import { Calendar, ChevronRight, ArrowRight } from "lucide-react";
@@ -51,7 +52,7 @@ export default async function BookingsPage({
       ) : (
         <Surface className="divide-y divide-border/60 overflow-hidden">
           {sessions.map((s) => {
-            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus);
+            const { tone, label, pulse } = bookingTone(s.status, s.paymentStatus, isReservationExpired(s));
             return (
               <Link key={s.id} href={`/admin/bookings/${s.id}`} aria-label={`${s.guestName}${label ? ` — ${label}` : ""}`}>
                 <div className={`flex items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40 transition-all cursor-pointer border-l-[3px] ${accent[tone]}`}>

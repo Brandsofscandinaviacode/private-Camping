@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
+import { openReservationWhere, startOfToday } from "./booking-status";
 import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
@@ -2002,8 +2003,10 @@ export async function getActiveSession(unitId: number) {
 
 export async function getPendingSession(unitId: number) {
   await requireAuth();
+  // Only reservations whose stay hasn't ended — an imported booking that was
+  // never checked in must not keep the unit "Reserveret" months later.
   return prisma.session.findFirst({
-    where: { unitId, status: "PENDING" },
+    where: { unitId, ...openReservationWhere() },
     orderBy: { checkInTime: "asc" },
   });
 }
@@ -2690,8 +2693,8 @@ export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "activ
   await requireAuth();
   const filterWhere = filter === "unpaid" ? { status: "COMPLETED" as const, paymentStatus: "UNPAID" as const }
     : filter === "paid" ? { paymentStatus: "PAID" as const }
-    : filter === "active" ? { status: { in: ["ACTIVE" as const, "PENDING" as const] } }
-    : filter === "pending" ? { status: "PENDING" as const }
+    : filter === "active" ? { OR: [{ status: "ACTIVE" as const }, openReservationWhere()] }
+    : filter === "pending" ? openReservationWhere()
     : {};
 
   const searchWhere = search && search.trim()
@@ -2706,7 +2709,8 @@ export async function getAllSessions(filter?: "all" | "unpaid" | "paid" | "activ
     : {};
 
   return prisma.session.findMany({
-    where: { ...filterWhere, ...searchWhere },
+    // AND, not spread: both fragments may carry their own OR.
+    where: { AND: [filterWhere, searchWhere] },
     include: { unit: true },
     orderBy: { checkInTime: "desc" },
     take: 100,
@@ -7101,6 +7105,13 @@ export async function syncBookings(productType: "all" | "tourist" | "seasonal" =
     const existing = await prisma.session.findFirst({
       where: { bookingRef: externalRef },
     });
+
+    // Don't import a stay that is already over — it could only ever show
+    // up as an expired reservation.
+    if (!existing && checkOutDate < startOfToday()) {
+      skipped.push({ booking: `${booking.bookingNumber} (${booking.unitName})`, reason: "Opholdet er allerede afsluttet" });
+      continue;
+    }
 
     const guestName = booking.customerName || booking.guestNames || "Ukendt gæst";
     const guestEmail = booking.email || null;
