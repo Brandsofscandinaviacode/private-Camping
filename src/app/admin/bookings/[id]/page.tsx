@@ -80,6 +80,11 @@ export default async function BookingDetailPage({
   const hasHeatingMeter = !!(session.unit.hardware?.hasHeating && session.unit.hardware?.heatingMeterEntityId);
   const usedWater = (session.endWaterLiters != null && session.startWaterLiters != null)
     ? Math.max(0, session.endWaterLiters - session.startWaterLiters) : null;
+  // Units without meters (most pitches) have no consumption chart or readings
+  // to show — unless an earlier setup left readings on this stay.
+  const meterHw = session.unit.hardware;
+  const showMeters = !!(meterHw?.hasElectricity || meterHw?.hasHeating || meterHw?.hasWater)
+    || session.startKwh != null || session.startHeatingKwh != null || session.startWaterLiters != null;
   // Deposit total for prepaid stays (prepaidAmount is the live balance, not the deposit)
   const prepaidDeposited = session.billingMode === "PREPAID" ? await resolvePrepaidDeposited(session) : null;
 
@@ -371,6 +376,7 @@ export default async function BookingDetailPage({
             <SessionCharges sessionId={session.id} />
           </div>
 
+          {showMeters && (<>
           <div className="rounded-xl border border-border/60 bg-card shadow-sm">
             <div className="px-5 py-4 border-b border-border">
               <h2 className="font-semibold">Forbrugstrend</h2>
@@ -480,10 +486,11 @@ export default async function BookingDetailPage({
             </div>
           </div>
           </>)}
+          </>)}
         </div>
 
-        {/* Right: afregning, saldo, vaskekredit */}
-        <div className="space-y-5">
+        {/* Right: afregning, saldo, vaskekredit — first on phone/tablet, where the columns stack */}
+        <div className="space-y-5 order-first lg:order-none">
           {/* A running prepaid stay keeps its balance card (top-ups); every
               other stay gets the one settlement figure. */}
           {session.billingMode === "PREPAID" && isActive && (

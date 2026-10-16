@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "./prisma";
 import { readGlobalSettings } from "./settings";
-import { arrivedNotCheckedInWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, startOfToday } from "./booking-status";
+import { arrivedNotCheckedInWhere, expiredReservationWhere, openReservationWhere, overdueStayWhere, startOfToday, hasArrivedNotCheckedIn } from "./booking-status";
 import { BOOKING_MAX_LIMIT, BOOKING_PAGE_SIZE, BOOKING_SEARCH_SCAN, compareBookingRows, rankBookingSearch, type BookingListFilter as ListFilter } from "./booking-list";
+import { hasAnyHardware, unitStateKey, METER_FRESH_MS } from "./unit-state";
 import * as ha from "./homeassistant";
 import * as hardware from "./hardware";
 import type { HardwareEndpoint } from "./hardware";
@@ -1726,13 +1727,28 @@ export async function getLiveConsumption(sessionId: number, portalToken?: string
     portalToken !== initial.unit.longTermPortalToken
   ) return null;
 
+  // Meters whose Shelly has announced itself offline aren't asked — each
+  // read would only wait for a 3 s timeout, on every 30 s poll.
+  const initialHw = initial.unit.hardware;
+  const meters = [
+    hardware.hasElectricityMeter(initialHw) ? { key: "el", label: "El", ep: hardware.electricityMeterEp(initialHw!) } : null,
+    hardware.hasHeatingMeter(initialHw) ? { key: "heat", label: "Varme", ep: hardware.heatingMeterEp(initialHw!) } : null,
+    hardware.hasWaterMeter(initialHw) ? { key: "water", label: "Vand", ep: hardware.waterMeterEp(initialHw!) } : null,
+  ].filter((m) => m !== null);
+  const reportedOffline = new Set<string>();
+  await Promise.all(meters.map(async (m) => {
+    if (await hardware.isReportedOffline(m.ep).catch(() => false)) reportedOffline.add(m.key);
+  }));
+
   // Opportunistic tick — keeps the accumulator fresh when someone is actively
   // viewing the booking. Cron is the guarantee (every 10 min); this is the
-  // nicety for the operator UI.
+  // nicety for the operator UI. Skipped when every meter is offline: the tick
+  // couldn't read anything and wouldn't change the stay.
   const STALE_TICK_MS = 60 * 1000;
   const isStale = !initial.lastTickAt || (Date.now() - initial.lastTickAt.getTime() > STALE_TICK_MS);
+  const allOffline = meters.length > 0 && reportedOffline.size === meters.length;
   let session = initial;
-  if (isStale) {
+  if (isStale && !allOffline) {
     try {
       await tickSessionConsumptionInternal(sessionId);
       // Reload with the fresh accumulator values
@@ -1769,14 +1785,28 @@ export async function getLiveConsumption(sessionId: number, portalToken?: string
   let currentKwh: number | null = null;
   let currentHeatingKwh: number | null = null;
   let currentWaterLiters: number | null = null;
-  if (hardware.hasElectricityMeter(hw)) {
+  if (hardware.hasElectricityMeter(hw) && !reportedOffline.has("el")) {
     currentKwh = await safeReadMeter(hardware.electricityMeterEp(hw!), `live:el session=${sessionId}`);
   }
-  if (hardware.hasHeatingMeter(hw)) {
+  if (hardware.hasHeatingMeter(hw) && !reportedOffline.has("heat")) {
     currentHeatingKwh = await safeReadMeter(hardware.heatingMeterEp(hw!), `live:heat session=${sessionId}`);
   }
-  if (hardware.hasWaterMeter(hw)) {
+  if (hardware.hasWaterMeter(hw) && !reportedOffline.has("water")) {
     currentWaterLiters = await safeReadMeter(hardware.waterMeterEp(hw!), `live:water session=${sessionId}`);
+  }
+
+  // Is anything actually being measured? The figures below are only as new
+  // as the last tick, so the desk must see when that was.
+  const readings: Record<string, number | null> = { el: currentKwh, heat: currentHeatingKwh, water: currentWaterLiters };
+  const silent = meters.filter((m) => readings[m.key] === null);
+  const meterOnline = meters.length === 0 ? null : silent.length === 0;
+  const lastReadingAt = session.lastTickAt ?? session.checkInTime;
+  const readingStale = meters.length > 0 && Date.now() - lastReadingAt.getTime() > METER_FRESH_MS;
+  // Device names and setup hints are for staff only, not the guest portal
+  let offlineReason: string | null = null;
+  if (portalToken === undefined && silent.length > 0) {
+    const reasons = await Promise.all(silent.map(async (m) => `${m.label} — ${await hardware.explainNoReply(m.ep).catch(() => "ingen svar")}`));
+    offlineReason = Array.from(new Set(reasons)).join(" · ");
   }
 
   // Ongoing deltas since the last tick (priced at the current rate)
@@ -1833,6 +1863,12 @@ export async function getLiveConsumption(sessionId: number, portalToken?: string
     pricePerKwh: effectiveElPrice,
     spotPrice,
     pricingMode: pricing.pricingMode,
+    hasMeters: meters.length > 0,
+    meterOnline,
+    /** Last successful tick (or check-in when there has been none). */
+    lastReadingAt: meters.length > 0 ? lastReadingAt.toISOString() : null,
+    readingStale,
+    offlineReason,
   };
 }
 
@@ -1860,14 +1896,15 @@ export async function getLivePowerDraw(unitId: number): Promise<{
   const hasHeatingPower = hardware.hasHeatingPower(hw);
   if (!hasElectricityPower && !hasHeatingPower) return null;
 
-  // Read the power sensors in parallel — each failure is isolated
+  // Read the power sensors in parallel — each failure is isolated. A Shelly
+  // that has announced itself offline isn't asked (5 s polling × 3 s timeout).
+  const readW = async (ep: HardwareEndpoint) => {
+    if (await hardware.isReportedOffline(ep).catch(() => false)) return null;
+    return hardware.readPowerWatts(ep).then((r) => r?.watts ?? null).catch(() => null);
+  };
   const [rawElec, rawHeat] = await Promise.all([
-    hasElectricityPower
-      ? hardware.readPowerWatts(hardware.electricityPowerEp(hw)).then((r) => r?.watts ?? null).catch(() => null)
-      : Promise.resolve(null),
-    hasHeatingPower
-      ? hardware.readPowerWatts(hardware.heatingPowerEp(hw)).then((r) => r?.watts ?? null).catch(() => null)
-      : Promise.resolve(null),
+    hasElectricityPower ? readW(hardware.electricityPowerEp(hw)) : Promise.resolve(null),
+    hasHeatingPower ? readW(hardware.heatingPowerEp(hw)) : Promise.resolve(null),
   ]);
 
   const totalW = rawElec !== null || rawHeat !== null
@@ -1886,6 +1923,22 @@ export async function getLivePowerDraw(unitId: number): Promise<{
 // ──────────────────────────────────────────────
 // HA State helpers
 // ──────────────────────────────────────────────
+
+// Read a relay for display. A Shelly that has announced itself offline isn't
+// asked (that only waits for a 3 s timeout); when there is no answer the
+// reason comes back in the cron's words, e.g. "MQTT: Camping-S001 er offline …".
+async function readSwitchForDisplay(ep: HardwareEndpoint): Promise<{ on: boolean | null; ageMs: number | null; reason: string | null }> {
+  try {
+    if (!(await hardware.isReportedOffline(ep))) {
+      const s = await hardware.getSwitchStateWithAge(ep);
+      if (s.on !== null) return { on: s.on, ageMs: s.ageMs, reason: null };
+    }
+    return { on: null, ageMs: null, reason: await hardware.explainNoReply(ep) };
+  } catch (e) {
+    return { on: null, ageMs: null, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function getUnitHAStates(unitId: number) {
   await requireAuth();
   const unit = await prisma.unit.findUnique({
@@ -1893,26 +1946,32 @@ export async function getUnitHAStates(unitId: number) {
     include: { hardware: true },
   });
 
-  if (!unit?.hardware) return null;
-  const hw = unit.hardware;
+  // Every unit has a hardware row; only switched-on features count, so a
+  // pitch without meters never probes Home Assistant or MQTT.
+  const hw = unit?.hardware;
+  if (!hw || !hasAnyHardware(hw)) return null;
 
   let powerOn: boolean | null = null;
+  let powerAgeMs: number | null = null;
   let heatingOn: boolean | null = null;
   let temperature: number | null = null;
   let locked: boolean | null = null;
   let anySuccess = false;
+  const problems: { label: string; reason: string }[] = [];
 
-  if (hardware.hasElectricitySwitch(hw)) {
-    try {
-      const s = await hardware.getSwitchState(hardware.electricitySwitchEp(hw));
-      if (s !== null) { powerOn = s; anySuccess = true; }
-    } catch { /* endpoint unavailable */ }
+  const hasPowerSwitch = hardware.hasElectricitySwitch(hw);
+  const hasHeatingSwitch = hardware.hasHeatingSwitch(hw);
+  const [power, heating] = await Promise.all([
+    hasPowerSwitch ? readSwitchForDisplay(hardware.electricitySwitchEp(hw)) : null,
+    hasHeatingSwitch ? readSwitchForDisplay(hardware.heatingSwitchEp(hw)) : null,
+  ]);
+  if (power) {
+    if (power.on !== null) { powerOn = power.on; powerAgeMs = power.ageMs; anySuccess = true; }
+    else if (power.reason) problems.push({ label: "Strøm", reason: power.reason });
   }
-  if (hardware.hasHeatingSwitch(hw)) {
-    try {
-      const s = await hardware.getSwitchState(hardware.heatingSwitchEp(hw));
-      if (s !== null) { heatingOn = s; anySuccess = true; }
-    } catch { /* endpoint unavailable */ }
+  if (heating) {
+    if (heating.on !== null) { heatingOn = heating.on; anySuccess = true; }
+    else if (heating.reason) problems.push({ label: "Varme", reason: heating.reason });
   }
   if (hw.hasClimate && hw.climateEntityId) {
     try {
@@ -1920,63 +1979,151 @@ export async function getUnitHAStates(unitId: number) {
       temperature = typeof state.attributes.current_temperature === "number"
         ? state.attributes.current_temperature : null;
       anySuccess = true;
-    } catch { /* entity unavailable */ }
+    } catch {
+      problems.push({ label: "Termostat", reason: await hardware.explainNoReply({ source: "HA", haEntityId: hw.climateEntityId }) });
+    }
   }
   if (hw.hasSmartLock && hw.lockEntityId) {
     try {
       const state = await ha.getEntityState(hw.lockEntityId);
       locked = state.state === "locked";
       anySuccess = true;
-    } catch { /* entity unavailable */ }
+    } catch {
+      problems.push({ label: "Lås", reason: await hardware.explainNoReply({ source: "HA", haEntityId: hw.lockEntityId }) });
+    }
+  }
+  // Meter-only units have no relay to read; a Shelly that has announced
+  // itself offline is still worth saying.
+  if (!hasPowerSwitch && hardware.hasElectricityMeter(hw)) {
+    const ep = hardware.electricityMeterEp(hw);
+    if (await hardware.isReportedOffline(ep).catch(() => false)) {
+      problems.push({ label: "Elmåler", reason: await hardware.explainNoReply(ep) });
+    }
   }
 
-  // If no endpoints were reachable, probe connectivity — prefer HA when any
-  // field is HA-sourced, otherwise report MQTT broker state.
-  if (!anySuccess) {
-    const anyHA = [
-      hw.electricitySource, hw.heatingSource, hw.waterSource,
-    ].some((s) => s !== "MQTT") || hw.hasClimate || hw.hasSmartLock;
-    const reachable = anyHA ? await ha.checkHAConnection() : mqttClient.isConnected();
-    return { powerOn, heatingOn, winterModeEnabled: hw.winterModeEnabled, temperature, locked, haReachable: reachable };
-  }
+  // The same device behind several features → one line, not one per feature
+  const byReason = new Map<string, string[]>();
+  for (const p of problems) byReason.set(p.reason, [...(byReason.get(p.reason) ?? []), p.label]);
+  const offlineReason = problems.length
+    ? Array.from(byReason, ([reason, labels]) => `${labels.join(" og ")} — ${reason}`).join(" · ")
+    : null;
 
-  return { powerOn, heatingOn, winterModeEnabled: hw.winterModeEnabled, temperature, locked, haReachable: true };
+  return {
+    powerOn,
+    powerAgeMs,
+    heatingOn,
+    winterModeEnabled: hw.winterModeEnabled,
+    temperature,
+    locked,
+    hasPowerSwitch,
+    hasHeatingSwitch,
+    // Kept for older callers: false only when something should have answered and nothing did
+    haReachable: anySuccess || problems.length === 0,
+    offlineReason,
+  };
 }
 
 // ──────────────────────────────────────────────
-// Manual HA controls
+// Manual HA controls — expected failures come back as Danish text
 // ──────────────────────────────────────────────
-export async function togglePower(unitId: number, turnOn: boolean) {
-  await requireAuth();
-  const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
-  if (!hardware.hasElectricitySwitch(unit?.hardware)) return;
-  await hardware.setSwitch(hardware.electricitySwitchEp(unit!.hardware!), turnOn);
-  revalidatePath(`/admin/units/${unitId}`);
+type ControlResult = { ok: boolean; message?: string };
+
+async function controlFailureText(ep: HardwareEndpoint, e: unknown): Promise<string> {
+  const msg = e instanceof Error ? e.message : String(e);
+  // No reply from the Shelly: say why (offline, never seen, RPC off …)
+  if (ep.source === "MQTT" && /bekræftede ikke/.test(msg)) {
+    return (await hardware.explainNoReply(ep).catch(() => null)) ?? msg;
+  }
+  if (ep.source === "HA") {
+    if (!(await ha.isHAConfigured())) return "HA: Home Assistant er ikke sat op";
+    // haFetch: "HA API error: 404 Not Found" when HA answered, otherwise a network error
+    return /^HA API error/.test(msg)
+      ? `HA: ${ep.haEntityId} — Home Assistant svarede med fejl (${msg.replace(/^HA API error:\s*/, "")})`
+      : `HA: Home Assistant svarer ikke (${msg})`;
+  }
+  return msg;
 }
 
-export async function toggleHeating(unitId: number, turnOn: boolean) {
+export async function togglePower(unitId: number, turnOn: boolean): Promise<ControlResult & { powerOn: boolean | null }> {
   await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
-  if (!hardware.hasHeatingSwitch(unit?.hardware)) return;
-  await hardware.setSwitch(hardware.heatingSwitchEp(unit!.hardware!), turnOn);
+  if (!hardware.hasElectricitySwitch(unit?.hardware)) {
+    return { ok: false, powerOn: null, message: "Enheden har intet strømrelæ sat op." };
+  }
+  const ep = hardware.electricitySwitchEp(unit!.hardware!);
+  // A Shelly that has announced itself offline can't receive the command —
+  // say so now instead of after a 4 s timeout.
+  if (await hardware.isReportedOffline(ep).catch(() => false)) {
+    return { ok: false, powerOn: null, message: `Strømmen er ikke ${turnOn ? "tændt" : "slukket"}. ${await hardware.explainNoReply(ep)}` };
+  }
+  try {
+    await hardware.setSwitch(ep, turnOn);
+  } catch (e) {
+    logger.error("hardware", `togglePower unit=${unitId} on=${turnOn}`, e);
+    return {
+      ok: false,
+      powerOn: null,
+      message: `Strømmen er ikke ${turnOn ? "tændt" : "slukket"}. ${await controlFailureText(ep, e)}`,
+    };
+  }
   revalidatePath(`/admin/units/${unitId}`);
+  return { ok: true, powerOn: turnOn };
 }
 
-export async function toggleLock(unitId: number, lock: boolean) {
+export async function toggleHeating(unitId: number, turnOn: boolean): Promise<ControlResult & { heatingOn: boolean | null }> {
   await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
-  if (!unit?.hardware?.lockEntityId) return;
-  if (lock) { await ha.lockDoor(unit.hardware.lockEntityId); }
-  else { await ha.unlockDoor(unit.hardware.lockEntityId); }
+  if (!hardware.hasHeatingSwitch(unit?.hardware)) {
+    return { ok: false, heatingOn: null, message: "Enheden har intet varmerelæ sat op." };
+  }
+  const ep = hardware.heatingSwitchEp(unit!.hardware!);
+  if (await hardware.isReportedOffline(ep).catch(() => false)) {
+    return { ok: false, heatingOn: null, message: `Varmen er ikke ${turnOn ? "tændt" : "slukket"}. ${await hardware.explainNoReply(ep)}` };
+  }
+  try {
+    await hardware.setSwitch(ep, turnOn);
+  } catch (e) {
+    logger.error("hardware", `toggleHeating unit=${unitId} on=${turnOn}`, e);
+    return {
+      ok: false,
+      heatingOn: null,
+      message: `Varmen er ikke ${turnOn ? "tændt" : "slukket"}. ${await controlFailureText(ep, e)}`,
+    };
+  }
   revalidatePath(`/admin/units/${unitId}`);
+  return { ok: true, heatingOn: turnOn };
 }
 
-export async function setTemperature(unitId: number, temp: number) {
+export async function toggleLock(unitId: number, lock: boolean): Promise<ControlResult> {
   await requireAuth();
   const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
-  if (!unit?.hardware?.climateEntityId) return;
-  await ha.setClimateTemperature(unit.hardware.climateEntityId, temp);
+  if (!unit?.hardware?.lockEntityId) return { ok: false, message: "Enheden har ingen lås sat op." };
+  try {
+    if (lock) { await ha.lockDoor(unit.hardware.lockEntityId); }
+    else { await ha.unlockDoor(unit.hardware.lockEntityId); }
+  } catch (e) {
+    logger.error("hardware", `toggleLock unit=${unitId} lock=${lock}`, e);
+    const reason = await controlFailureText({ source: "HA", haEntityId: unit.hardware.lockEntityId }, e);
+    return { ok: false, message: `Døren er ikke ${lock ? "låst" : "låst op"}. ${reason}` };
+  }
   revalidatePath(`/admin/units/${unitId}`);
+  return { ok: true };
+}
+
+export async function setTemperature(unitId: number, temp: number): Promise<ControlResult> {
+  await requireAuth();
+  const unit = await prisma.unit.findUnique({ where: { id: unitId }, include: { hardware: true } });
+  if (!unit?.hardware?.climateEntityId) return { ok: false, message: "Enheden har ingen termostat sat op." };
+  if (!Number.isFinite(temp)) return { ok: false, message: "Angiv en temperatur." };
+  try {
+    await ha.setClimateTemperature(unit.hardware.climateEntityId, temp);
+  } catch (e) {
+    logger.error("hardware", `setTemperature unit=${unitId} temp=${temp}`, e);
+    const reason = await controlFailureText({ source: "HA", haEntityId: unit.hardware.climateEntityId }, e);
+    return { ok: false, message: `Temperaturen er ikke ændret. ${reason}` };
+  }
+  revalidatePath(`/admin/units/${unitId}`);
+  return { ok: true };
 }
 
 // ──────────────────────────────────────────────
@@ -3711,20 +3858,31 @@ export async function getTotalUsage() {
   let totalKwhPerHour = 0;
   let totalWaterLitersPerHour = 0;
   let unitCount = 0;
-  const perUnit: { unitId: number; name: string; type: string; kwhPerHour: number | null; waterPerHour: number | null }[] = [];
+  let latestReadingAt: Date | null = null;
+  const now = Date.now();
 
-  for (const unit of units) {
-    // Try consumption log rate first (2 most recent logs)
+  // Only units with a meter or power sensor can contribute; the rest are
+  // listed with null rates without touching the database.
+  const isMetered = (hw: (typeof units)[number]["hardware"]) =>
+    hardware.hasElectricityMeter(hw) || hardware.hasWaterMeter(hw) || hardware.hasElectricityPower(hw);
+  const metered = units.filter((u) => isMetered(u.hardware));
+
+  const rates = new Map<number, { kwhPerHour: number | null; waterPerHour: number | null }>();
+  await Promise.all(metered.map(async (unit) => {
+    // Rate from the two most recent consumption logs — but only while the
+    // newest one is recent. A meter that went offline hours ago must not show
+    // its last rate as "now".
     const logs = await prisma.consumptionLog.findMany({
       where: { unitId: unit.id },
       orderBy: { recordedAt: "desc" },
       take: 2,
     });
+    if (logs[0] && (!latestReadingAt || logs[0].recordedAt > latestReadingAt)) latestReadingAt = logs[0].recordedAt;
 
     let kwhPerHour: number | null = null;
     let waterPerHour: number | null = null;
 
-    if (logs.length >= 2) {
+    if (logs.length >= 2 && now - logs[0].recordedAt.getTime() <= METER_FRESH_MS) {
       const [latest, previous] = logs;
       const hoursDiff = (new Date(latest.recordedAt).getTime() - new Date(previous.recordedAt).getTime()) / 3600000;
       if (hoursDiff > 0 && hoursDiff < 4) {
@@ -3739,10 +3897,13 @@ export async function getTotalUsage() {
 
     // Fallback: read live power (W) from the configured power sensor
     if (kwhPerHour === null && hardware.hasElectricityPower(unit.hardware)) {
+      const ep = hardware.electricityPowerEp(unit.hardware!);
       try {
-        const res = await hardware.readPowerWatts(hardware.electricityPowerEp(unit.hardware!));
-        if (res && res.watts >= 0) {
-          kwhPerHour = res.watts / 1000; // W to kW
+        if (!(await hardware.isReportedOffline(ep))) {
+          const res = await hardware.readPowerWatts(ep);
+          if (res && res.watts >= 0 && res.ageMs <= METER_FRESH_MS) {
+            kwhPerHour = res.watts / 1000; // W to kW
+          }
         }
       } catch {
         // endpoint unreachable
@@ -3751,12 +3912,15 @@ export async function getTotalUsage() {
 
     // If still no rate, try computing from meter endpoint + recent log
     if (kwhPerHour === null && hardware.hasElectricityMeter(unit.hardware)) {
+      const ep = hardware.electricityMeterEp(unit.hardware!);
       try {
-        const currentKwh = await hardware.readEnergyKwh(hardware.electricityMeterEp(unit.hardware!));
-        if (currentKwh !== null && logs.length >= 1 && logs[0].electricityKwh !== null) {
-          const hoursSinceLog = (Date.now() - new Date(logs[0].recordedAt).getTime()) / 3600000;
-          if (hoursSinceLog > 0 && hoursSinceLog < 4) {
-            kwhPerHour = Math.max(0, currentKwh - logs[0].electricityKwh) / hoursSinceLog;
+        if (!(await hardware.isReportedOffline(ep))) {
+          const currentKwh = await hardware.readEnergyKwh(ep);
+          if (currentKwh !== null && logs.length >= 1 && logs[0].electricityKwh !== null) {
+            const hoursSinceLog = (Date.now() - new Date(logs[0].recordedAt).getTime()) / 3600000;
+            if (hoursSinceLog > 0 && hoursSinceLog < 4) {
+              kwhPerHour = Math.max(0, currentKwh - logs[0].electricityKwh) / hoursSinceLog;
+            }
           }
         }
       } catch {
@@ -3764,18 +3928,32 @@ export async function getTotalUsage() {
       }
     }
 
-    if (kwhPerHour !== null) {
-      totalKwhPerHour += kwhPerHour;
+    rates.set(unit.id, { kwhPerHour, waterPerHour });
+  }));
+
+  const perUnit: { unitId: number; name: string; type: string; kwhPerHour: number | null; waterPerHour: number | null }[] = [];
+  for (const unit of units) {
+    const r = rates.get(unit.id) ?? { kwhPerHour: null, waterPerHour: null };
+    if (r.kwhPerHour !== null) {
+      totalKwhPerHour += r.kwhPerHour;
       unitCount++;
     }
-    if (waterPerHour !== null) {
-      totalWaterLitersPerHour += waterPerHour;
+    if (r.waterPerHour !== null) {
+      totalWaterLitersPerHour += r.waterPerHour;
     }
-
-    perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, kwhPerHour, waterPerHour });
+    perUnit.push({ unitId: unit.id, name: unit.name, type: unit.type, ...r });
   }
 
-  return { totalKwhPerHour, totalWaterLitersPerHour, unitCount, perUnit };
+  return {
+    totalKwhPerHour,
+    totalWaterLitersPerHour,
+    /** Units with a fresh electricity rate right now. */
+    unitCount,
+    /** Units that have a meter or power sensor at all. */
+    meteredUnits: metered.length,
+    latestReadingAt: (latestReadingAt as Date | null)?.toISOString() ?? null,
+    perUnit,
+  };
 }
 
 // ──────────────────────────────────────────────
@@ -7604,27 +7782,34 @@ export async function updateUnitMapPosition(unitId: number, mapX: number, mapY: 
 export async function getMapUnits() {
   await requireAuth();
   await ensureResourceTypes();
-  const units = await prisma.unit.findMany({
-    include: { hardware: true, resourceType: true },
-    orderBy: { name: "asc" },
-  });
+  const now = new Date();
+  const [units, activeStays, openReservations] = await Promise.all([
+    prisma.unit.findMany({
+      include: { hardware: true, resourceType: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.session.findMany({ where: { status: "ACTIVE" }, select: { unitId: true, guestName: true } }),
+    // One query for every unit's open reservation (earliest first), so a pitch
+    // with a booked guest is never drawn as "Ledig".
+    prisma.session.findMany({
+      where: openReservationWhere(now),
+      select: { unitId: true, guestName: true, status: true, checkInTime: true, expectedCheckOut: true },
+      orderBy: { checkInTime: "asc" },
+    }),
+  ]);
+  const activeByUnit = new Map(activeStays.map((s) => [s.unitId, s]));
+  const pendingByUnit = new Map<number, (typeof openReservations)[number]>();
+  for (const r of openReservations) if (!pendingByUnit.has(r.unitId)) pendingByUnit.set(r.unitId, r);
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
-      let haStates: { powerOn: boolean | null; temperature: number | null; locked: boolean | null; haReachable: boolean } | null = null;
-      let activeGuestName: string | null = null;
-
-      try {
-        haStates = await getUnitHAStates(unit.id);
-      } catch { /* ignore */ }
-
-      try {
-        const session = await prisma.session.findFirst({
-          where: { unitId: unit.id, status: "ACTIVE" },
-          select: { guestName: true },
-        });
-        activeGuestName = session?.guestName ?? null;
-      } catch { /* ignore */ }
+      // Units without meters/relays have nothing to ask
+      const haStates = hasAnyHardware(unit.hardware)
+        ? await getUnitHAStates(unit.id).catch(() => null)
+        : null;
+      const active = activeByUnit.get(unit.id) ?? null;
+      const pending = active ? null : pendingByUnit.get(unit.id) ?? null;
+      const pendingArrived = !!pending && hasArrivedNotCheckedIn(pending, now);
 
       return {
         id: unit.id,
@@ -7639,10 +7824,14 @@ export async function getMapUnits() {
         resourceTypeId: unit.resourceTypeId,
         resourceTypeIcon: unit.resourceType?.icon ?? null,
         resourceTypeName: unit.resourceType?.name ?? null,
+        state: unitStateKey(unit.status, !!pending, pendingArrived),
         powerOn: haStates?.powerOn ?? null,
         haReachable: haStates?.haReachable ?? false,
-        activeGuestName,
-        hasElectricity: unit.hardware?.hasElectricity ?? false,
+        offlineReason: haStates?.offlineReason ?? null,
+        activeGuestName: active?.guestName ?? null,
+        pendingGuestName: pending?.guestName ?? null,
+        pendingCheckIn: pending?.checkInTime.toISOString() ?? null,
+        hasPowerSwitch: haStates?.hasPowerSwitch ?? false,
       };
     }),
   );

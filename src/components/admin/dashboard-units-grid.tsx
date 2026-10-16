@@ -7,7 +7,7 @@ import {
   ChevronDown, LayoutGrid, List, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { UnitCard, UnitRow, STATUS, statusKey, type UnitStatusKey } from "@/components/admin/cabin-card";
+import { UnitCard, UnitRow, STATUS, statusKey, UNIT_ROW_COLS, type UnitStatusKey } from "@/components/admin/cabin-card";
 import { reorderUnits, moveUnitToResourceType } from "@/lib/actions";
 
 type LucideIcon = typeof Home;
@@ -20,11 +20,13 @@ interface UnitData {
     resourceTypeId: number | null; sortOrder: number;
     hardware: { hasElectricity: boolean; hasWater: boolean; hasClimate: boolean; hasSmartLock: boolean } | null;
   };
-  haStates: { powerOn: boolean | null; temperature: number | null; locked: boolean | null; haReachable: boolean } | null;
+  haStates: { powerOn: boolean | null; temperature: number | null; locked: boolean | null; haReachable: boolean; offlineReason?: string | null } | null;
   activeGuestName: string | null;
   pendingGuestName: string | null;
   activeCheckOut?: string | null;
   pendingCheckIn?: string | null;
+  pendingCheckOut?: string | null;
+  pendingArrived?: boolean;
 }
 
 interface ResourceTypeInfo { id: number; name: string; icon: string }
@@ -65,7 +67,7 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
   const filtering = q.length > 0 || filter !== "all";
 
   const matches = useCallback((d: UnitData) => {
-    const st = statusKey(d.unit.status, d.pendingGuestName);
+    const st = statusKey(d.unit.status, d.pendingGuestName, d.pendingArrived);
     if (filter !== "all" && st !== filter) return false;
     if (q) {
       const hay = `${d.unit.name} ${d.activeGuestName || d.pendingGuestName || d.unit.longTermGuestName || ""}`.toLowerCase();
@@ -112,21 +114,23 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
   }
 
   function renderGroupStats(items: UnitData[]) {
-    const occupied = items.filter((d) => d.unit.status === "OCCUPIED").length;
-    const reserved = items.filter((d) => d.unit.status !== "OCCUPIED" && !!d.pendingGuestName).length;
-    const vacant = items.length - occupied - reserved;
-    const pct = items.length ? (occupied / items.length) * 100 : 0;
-    const resPct = items.length ? (reserved / items.length) * 100 : 0;
+    const count = { occ: 0, arr: 0, res: 0, free: 0 };
+    for (const d of items) count[statusKey(d.unit.status, d.pendingGuestName, d.pendingArrived)]++;
+    const pct = (n: number) => (items.length ? (n / items.length) * 100 : 0);
     return (
       <div className="flex items-center gap-3">
         <div className="hidden md:flex w-[120px] h-1.5 rounded-full bg-muted overflow-hidden">
-          <span className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
-          <span className="h-full bg-amber-500" style={{ width: `${resPct}%` }} />
+          {(["occ", "arr", "res"] as const).map((k) => (
+            <span key={k} className={`h-full ${STATUS[k].dot}`} style={{ width: `${pct(count[k])}%` }} />
+          ))}
         </div>
         <div className="flex items-center gap-1.5 text-xs">
-          {occupied > 0 && <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full ${STATUS.occ.soft} ${STATUS.occ.text} font-semibold`}><span className={`h-1.5 w-1.5 rounded-full ${STATUS.occ.dot}`} />{occupied}</span>}
-          {reserved > 0 && <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full ${STATUS.res.soft} ${STATUS.res.text} font-semibold`}><span className={`h-1.5 w-1.5 rounded-full ${STATUS.res.dot}`} />{reserved}</span>}
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-semibold"><span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />{vacant}</span>
+          {(["occ", "arr", "res"] as const).map((k) => count[k] > 0 && (
+            <span key={k} title={STATUS[k].label} className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full ${STATUS[k].soft} ${STATUS[k].text} font-semibold`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${STATUS[k].dot}`} />{count[k]}
+            </span>
+          ))}
+          <span title={STATUS.free.label} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-semibold"><span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />{count.free}</span>
         </div>
       </div>
     );
@@ -149,13 +153,14 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
   function renderTable(items: UnitData[]) {
     return (
       <div className="rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-        <div className="grid grid-cols-[1.4fr_1fr_1.6fr_1fr_auto] gap-3 px-4 py-2.5 bg-muted/40 border-b border-border text-[11.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <span>Enhed</span><span>Status</span><span>Gæst</span><span>Afrejse</span><span />
+        <div className={`hidden ${UNIT_ROW_COLS} gap-3 px-4 py-2.5 bg-muted/40 border-b border-border text-[11.5px] font-semibold uppercase tracking-wide text-muted-foreground`}>
+          <span>Enhed</span><span>Status</span><span>Gæst</span><span>Ankomst / afrejse</span><span className="w-4" />
         </div>
         {items.map((d) => (
           <UnitRow key={d.unit.id} type={d.unit.type} unit={d.unit} haStates={d.haStates}
             activeGuestName={d.activeGuestName} pendingGuestName={d.pendingGuestName}
-            activeCheckOut={d.activeCheckOut} pendingCheckIn={d.pendingCheckIn} />
+            activeCheckOut={d.activeCheckOut} pendingCheckIn={d.pendingCheckIn}
+            pendingCheckOut={d.pendingCheckOut} pendingArrived={d.pendingArrived} />
         ))}
       </div>
     );
@@ -173,7 +178,7 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
 
     return (
       <section key={key}>
-        <div className="flex items-center gap-2.5 mb-4">
+        <div className="flex flex-wrap items-center gap-2.5 mb-4">
           <button type="button" onClick={() => toggleCollapsed(key)} className="flex items-center gap-2.5 text-left hover:opacity-80 transition-opacity">
             <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
             {rt && <Icon className="h-5 w-5 text-muted-foreground" />}
@@ -203,9 +208,9 @@ export function DashboardUnitsGrid({ unitData: initialUnitData, resourceTypes }:
             className="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-card text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition"
           />
         </div>
-        <div className="flex items-center gap-1.5">
-          {([["all", "Alle"], ["occ", "Optaget"], ["free", "Ledig"], ["res", "Reserveret"]] as const).map(([f, label]) => (
-            <button key={f} type="button" onClick={() => setFilter(f)}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {([["all", "Alle"], ["occ", STATUS.occ.short], ["arr", STATUS.arr.short], ["res", STATUS.res.short], ["free", STATUS.free.short]] as const).map(([f, label]) => (
+            <button key={f} type="button" onClick={() => setFilter(f)} title={f !== "all" ? STATUS[f].label : undefined}
               className={`text-[13px] font-medium px-3 py-2 rounded-lg border transition inline-flex items-center gap-1.5 ${
                 filter === f ? "bg-foreground text-background border-foreground" : "bg-card text-muted-foreground border-border hover:border-foreground/20"
               }`}>
@@ -256,7 +261,7 @@ interface DraggableProps {
 
 function DraggableUnitCard({ data, editMode, isDragging, isDragOver, resourceTypes, onDragStart, onDragEnd, onDragOver, onDrop, onMove, isMoving }: DraggableProps) {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
-  const { unit, haStates, activeGuestName, pendingGuestName, activeCheckOut, pendingCheckIn } = data;
+  const { unit, haStates, activeGuestName, pendingGuestName, activeCheckOut, pendingCheckIn, pendingCheckOut, pendingArrived } = data;
 
   return (
     <div draggable={editMode} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
@@ -284,11 +289,11 @@ function DraggableUnitCard({ data, editMode, isDragging, isDragOver, resourceTyp
       {editMode ? (
         <div onClick={(e) => e.preventDefault()}>
           <div style={{ pointerEvents: "none" }}>
-            <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} />
+            <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} pendingCheckOut={pendingCheckOut} pendingArrived={pendingArrived} />
           </div>
         </div>
       ) : (
-        <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} />
+        <UnitCard unit={unit} haStates={haStates} activeGuestName={activeGuestName} pendingGuestName={pendingGuestName} activeCheckOut={activeCheckOut} pendingCheckIn={pendingCheckIn} pendingCheckOut={pendingCheckOut} pendingArrived={pendingArrived} />
       )}
     </div>
   );

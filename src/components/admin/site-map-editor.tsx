@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Home, Building2, Caravan, MapPin, Tent, BedDouble, Anchor, GripVertical, X, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { updateUnitMapPosition } from "@/lib/actions";
+import { UNIT_STATE, type UnitStateKey } from "@/lib/unit-state";
 import Link from "next/link";
 
 interface MapUnit {
@@ -19,10 +20,16 @@ interface MapUnit {
   resourceTypeId: number | null;
   resourceTypeIcon: string | null;
   resourceTypeName: string | null;
+  /** Shared occupancy state (same words/colours as the dashboard). */
+  state: UnitStateKey;
   powerOn: boolean | null;
   haReachable: boolean;
+  offlineReason: string | null;
   activeGuestName: string | null;
-  hasElectricity: boolean;
+  pendingGuestName: string | null;
+  pendingCheckIn: string | null;
+  /** Has a power relay — only then is a power indicator drawn. */
+  hasPowerSwitch: boolean;
 }
 
 interface SiteMapEditorProps {
@@ -37,26 +44,37 @@ const ICONS: Record<string, LucideIcon> = {
 
 import { typeLabels } from "@/lib/utils";
 
+// The fill is the occupancy state — one palette with the dashboard. Power is
+// a small dot on top, and only on the few units with a relay.
 function getMarkerColor(unit: MapUnit): string {
-  const isOccupied = unit.status === "OCCUPIED" || unit.activeGuestName || unit.longTermGuestName;
+  return UNIT_STATE[unit.state].marker;
+}
 
-  if (!unit.hasElectricity) {
-    return isOccupied ? "bg-blue-500 border-blue-600" : "bg-gray-400 border-gray-500";
-  }
+type PowerMark = "on" | "off-occupied" | "unknown" | null;
 
-  if (unit.powerOn === true) {
-    return isOccupied
-      ? "bg-green-500 border-green-600"
-      : "bg-amber-400 border-amber-500";
-  }
+function getPowerMark(unit: MapUnit): PowerMark {
+  if (!unit.hasPowerSwitch) return null;
+  if (unit.powerOn === true) return "on";
+  // Off is normal on an empty unit; it only matters with a guest checked in
+  if (unit.powerOn === false) return unit.state === "occ" ? "off-occupied" : null;
+  return "unknown";
+}
 
-  if (unit.powerOn === false) {
-    return isOccupied
-      ? "bg-red-500 border-red-600"
-      : "bg-gray-400 border-gray-500";
-  }
+const POWER_MARK: Record<Exclude<PowerMark, null>, { dot: string; label: string }> = {
+  on: { dot: "bg-yellow-400 border-yellow-600", label: "Strøm til" },
+  "off-occupied": { dot: "bg-red-500 border-red-700", label: "Optaget uden strøm" },
+  unknown: { dot: "bg-gray-300 border-gray-500", label: "Strøm ukendt – relæ offline" },
+};
 
-  return isOccupied ? "bg-blue-500 border-blue-600" : "bg-gray-300 border-gray-400";
+function guestOf(unit: MapUnit): string | null {
+  return unit.activeGuestName || unit.pendingGuestName || unit.longTermGuestName;
+}
+
+function powerLine(unit: MapUnit): string | null {
+  if (!unit.hasPowerSwitch) return null;
+  if (unit.powerOn === true) return "Strøm: TIL";
+  if (unit.powerOn === false) return "Strøm: FRA";
+  return "Strøm: ukendt (relæ svarer ikke)";
 }
 
 /** Pick a shape for the marker so the user can tell pitches from cabins at a glance. */
@@ -77,14 +95,11 @@ function getMarkerLabel(name: string): string {
 }
 
 function getMarkerTooltip(unit: MapUnit): string {
-  const parts = [unit.name];
-  const guest = unit.activeGuestName || unit.longTermGuestName;
+  const parts = [unit.name, UNIT_STATE[unit.state].label];
+  const guest = guestOf(unit);
   if (guest) parts.push(guest);
-  if (unit.hasElectricity) {
-    if (unit.powerOn === true) parts.push("Strøm: TIL");
-    else if (unit.powerOn === false) parts.push("Strøm: FRA");
-    else parts.push("Strøm: Ukendt");
-  }
+  const power = powerLine(unit);
+  if (power) parts.push(power);
   return parts.join(" — ");
 }
 
@@ -222,28 +237,25 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
           </Button>
         )}
 
-        {/* Legend */}
+        {/* Legend — same palette as the dashboard */}
         <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-green-500" />
-            Optaget + strøm
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-amber-400" />
-            Ledig + strøm
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-red-500" />
-            Optaget, ingen strøm
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-blue-500" />
-            Optaget, uden måler
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-gray-400" />
-            Ledig
-          </span>
+          {(["occ", "arr", "res", "free"] as const).map((k) => (
+            <span key={k} className="flex items-center gap-1.5">
+              <span className={`h-3 w-3 rounded-full border ${UNIT_STATE[k].marker}`} />
+              {UNIT_STATE[k].label}
+            </span>
+          ))}
+          {units.some((u) => u.hasPowerSwitch) && (
+            <>
+              <span className="hidden sm:inline-block w-px h-4 bg-border" />
+              {(Object.keys(POWER_MARK) as (keyof typeof POWER_MARK)[]).map((k) => (
+                <span key={k} className="flex items-center gap-1.5">
+                  <span className={`h-2 w-2 rounded-full border ${POWER_MARK[k].dot}`} />
+                  {POWER_MARK[k].label}
+                </span>
+              ))}
+            </>
+          )}
           <span className="hidden sm:inline-block w-px h-4 bg-border" />
           <span className="flex items-center gap-1.5">
             <span className="h-3 w-3 rounded-full border-2 border-muted-foreground" />
@@ -283,7 +295,9 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
             const shape = getMarkerShape(unit);
             const label = getMarkerLabel(unit.name);
             const tooltip = getMarkerTooltip(unit);
-            const guest = unit.activeGuestName || unit.longTermGuestName;
+            const guest = guestOf(unit);
+            const power = getPowerMark(unit);
+            const powerText = powerLine(unit);
             const labelLength = label.length;
             const fontSize = labelLength <= 2 ? "text-[10px]" : labelLength === 3 ? "text-[9px]" : "text-[8px]";
 
@@ -296,8 +310,11 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
                 onPointerDown={(e) => handlePointerDown(e, id)}
               >
                 {/* Marker dot */}
-                <div className={`relative h-6 w-6 ${shape} border-2 ${color} flex items-center justify-center text-white shadow-md transition-transform hover:scale-150`}>
+                <div className={`relative h-6 w-6 ${shape} border-2 ${color} flex items-center justify-center shadow-md transition-transform hover:scale-150`}>
                   <span className={`font-bold tabular-nums leading-none ${fontSize}`}>{label}</span>
+                  {power && (
+                    <span className={`absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full border ${POWER_MARK[power].dot}`} aria-hidden="true" />
+                  )}
                 </div>
 
                 {/* Hover tooltip */}
@@ -307,10 +324,11 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
                     {unit.resourceTypeName && (
                       <p className="text-muted-foreground">{unit.resourceTypeName}</p>
                     )}
+                    <p className={UNIT_STATE[unit.state].text}>{UNIT_STATE[unit.state].label}</p>
                     {guest && <p className="text-foreground/80">{guest}</p>}
-                    {unit.hasElectricity && (
-                      <p className={unit.powerOn ? "text-green-600" : "text-red-500"}>
-                        {unit.powerOn ? "Strøm: TIL" : "Strøm: FRA"}
+                    {powerText && (
+                      <p className={unit.powerOn === true ? "text-green-600" : unit.powerOn === false ? "text-red-500" : "text-muted-foreground"}>
+                        {powerText}
                       </p>
                     )}
                     {!unit.resourceTypeName && (
@@ -368,15 +386,15 @@ export function SiteMapEditor({ units, siteMapUrl }: SiteMapEditorProps) {
       {!editMode && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
           {units.filter((u) => positions[u.id]).map((unit) => {
-            const color = getMarkerColor(unit);
-            const guest = unit.activeGuestName || unit.longTermGuestName;
+            const color = UNIT_STATE[unit.state].dot;
+            const guest = guestOf(unit);
             return (
               <Link
                 key={unit.id}
                 href={`/admin/units/${unit.id}`}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border/60 hover:bg-muted/50 transition-colors"
               >
-                <span className={`h-3 w-3 rounded-full ${color} shrink-0`} />
+                <span className={`h-3 w-3 rounded-full ${color} shrink-0`} title={UNIT_STATE[unit.state].label} />
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{unit.name}</p>
                   {guest && <p className="text-xs text-muted-foreground truncate">{guest}</p>}

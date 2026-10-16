@@ -168,6 +168,40 @@ export async function readEnergyKwhWithReason(
   }
 }
 
+/**
+ * Why an endpoint gave no answer, in the same words as
+ * readEnergyKwhWithReason — without reading it again, since an offline
+ * Shelly costs a 3 s RPC timeout per read. For display paths.
+ */
+export async function explainNoReply(ep: HardwareEndpoint): Promise<string> {
+  if (ep.source === "MQTT") {
+    if (!ep.mqttPrefix || !ep.mqttComponent) return "MQTT: prefix eller komponent mangler";
+    return mqttClient.isConnected()
+      ? `MQTT: ${await shellyNoReplyReason(ep.mqttPrefix, ep.mqttComponent)}`
+      : "MQTT: CampSense er ikke forbundet til brokeren";
+  }
+  if (!ep.haEntityId) return "HA: ingen entitet valgt";
+  if (!(await ha.isHAConfigured())) return "HA: Home Assistant er ikke sat op";
+  return `HA: ${ep.haEntityId} svarede ikke`;
+}
+
+/**
+ * True when the Shelly behind an MQTT endpoint has announced itself offline
+ * (its retained last-will). No RPC, so display code can ask first and skip
+ * a read that would only wait for a timeout. HA endpoints: always false.
+ */
+export async function isReportedOffline(ep: HardwareEndpoint): Promise<boolean> {
+  if (ep.source !== "MQTT" || !ep.mqttPrefix) return false;
+  const topic = `${ep.mqttPrefix}/online`;
+  if (!(await mqttClient.subscribe(topic))) return false;
+  let lwt = mqttClient.getCached(topic);
+  if (!lwt) {
+    await new Promise((r) => setTimeout(r, 300));
+    lwt = mqttClient.getCached(topic);
+  }
+  return lwt?.payload.trim() === "false";
+}
+
 /** Read instantaneous power in W. Returns null if unavailable. */
 export async function readPowerWatts(
   ep: HardwareEndpoint,
@@ -269,6 +303,20 @@ export async function getSwitchState(ep: HardwareEndpoint): Promise<boolean | nu
   } catch {
     return null;
   }
+}
+
+/**
+ * Switch state plus its age: when a Shelly doesn't answer, MQTT may serve a
+ * cached status up to 15 minutes old, which the UI should say.
+ */
+export async function getSwitchStateWithAge(ep: HardwareEndpoint): Promise<{ on: boolean | null; ageMs: number | null }> {
+  if (ep.source === "MQTT") {
+    if (!ep.mqttPrefix || !ep.mqttComponent) return { on: null, ageMs: null };
+    const res = await readShellyStatus(ep.mqttPrefix, ep.mqttComponent);
+    if (!res || typeof res.data.output !== "boolean") return { on: null, ageMs: null };
+    return { on: res.data.output, ageMs: res.ageMs };
+  }
+  return { on: await getSwitchState(ep), ageMs: 0 };
 }
 
 // ──────────────────────────────────────────────

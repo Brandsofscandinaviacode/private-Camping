@@ -9,7 +9,10 @@ import {
   ChevronRight,
   CalendarClock,
   LogIn,
+  WifiOff,
 } from "lucide-react";
+import { UNIT_STATE, unitStateKey, type UnitStateKey } from "@/lib/unit-state";
+import { fmtShortDate, fmtRelativeDay, siteDayKey } from "@/lib/format";
 
 const typeIcons: Record<string, typeof Home> = {
   CABIN: Home,
@@ -19,32 +22,20 @@ const typeIcons: Record<string, typeof Home> = {
 };
 
 // ──────────────────────────────────────────────────────────────
-// Disciplined status palette.
-// Brand orange (--primary) is reserved for actions/brand only — it is
-// NO LONGER a status colour. Status now reads at a glance:
-//   Optaget    → blue     Reserveret → amber     Ledig → emerald
-// To revert "occupied" to orange, swap the `occ` entry to primary classes.
+// Status palette lives in @/lib/unit-state so the dashboard, the unit page
+// and the site map share one set of words and colours:
+//   Optaget → blue · Ikke tjekket ind (på pladsen iflg. booking) → amber
+//   Reserveret → light amber · Ledig → emerald
+// Brand orange (--primary) is reserved for actions/brand only.
 // ──────────────────────────────────────────────────────────────
-export type UnitStatusKey = "occ" | "res" | "free";
+export type UnitStatusKey = UnitStateKey;
+export const STATUS = UNIT_STATE;
 
-export const STATUS: Record<UnitStatusKey, {
-  label: string; dot: string; text: string; soft: string; accent: string;
-}> = {
-  occ:  { label: "Optaget",    dot: "bg-blue-500",    text: "text-blue-600",    soft: "bg-blue-500/10",    accent: "bg-blue-500" },
-  res:  { label: "Reserveret", dot: "bg-amber-500",   text: "text-amber-600",   soft: "bg-amber-500/10",   accent: "bg-amber-500" },
-  free: { label: "Ledig",      dot: "bg-emerald-500", text: "text-emerald-600", soft: "bg-emerald-500/10", accent: "bg-emerald-500" },
-};
-
-export function statusKey(status: string, pendingGuestName?: string | null): UnitStatusKey {
-  if (status === "OCCUPIED") return "occ";
-  if (pendingGuestName) return "res";
-  return "free";
+export function statusKey(status: string, pendingGuestName?: string | null, pendingArrived = false): UnitStatusKey {
+  return unitStateKey(status, !!pendingGuestName, pendingArrived);
 }
 
-const fmtDate = (iso: string | null | undefined) =>
-  iso ? new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short" }).format(new Date(iso)) : null;
-const fmtTime = (iso: string | null | undefined) =>
-  iso ? new Intl.DateTimeFormat("da-DK", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : null;
+const isToday = (iso: string | null | undefined) => !!iso && siteDayKey(iso) === siteDayKey(new Date());
 
 interface UnitCardProps {
   unit: {
@@ -66,33 +57,56 @@ interface UnitCardProps {
     temperature: number | null;
     locked: boolean | null;
     haReachable: boolean;
+    offlineReason?: string | null;
   } | null;
   activeGuestName: string | null;
   pendingGuestName?: string | null;
   activeCheckOut?: string | null;
   pendingCheckIn?: string | null;
+  pendingCheckOut?: string | null;
+  /** The reservation's arrival day has come (computed on the server). */
+  pendingArrived?: boolean;
 }
 
 /** One short, glanceable meta line — guest-management info, not raw telemetry. */
 function metaLine(p: UnitCardProps, st: UnitStatusKey): string {
   if (st === "occ") {
-    const d = fmtDate(p.activeCheckOut);
-    return d ? `Afrejse ${d}` : "Indtjekket";
+    return p.activeCheckOut ? `Afrejse ${fmtRelativeDay(p.activeCheckOut)}` : "Tjekket ind";
+  }
+  if (st === "arr") {
+    const leaving = isToday(p.pendingCheckOut) ? " · afrejse i dag" : "";
+    if (isToday(p.pendingCheckIn)) return `Ankommer i dag${leaving}`;
+    return p.pendingCheckIn ? `Ankom ${fmtShortDate(p.pendingCheckIn)} · ikke tjekket ind${leaving}` : "Ikke tjekket ind";
   }
   if (st === "res") {
-    const d = fmtDate(p.pendingCheckIn);
-    const t = fmtTime(p.pendingCheckIn);
-    return d ? `Check-in ${d}${t ? ` · ${t}` : ""}` : "Reserveret";
+    return p.pendingCheckIn ? `Ankommer ${fmtRelativeDay(p.pendingCheckIn)}` : "Reserveret";
   }
   return "Klar til check-in";
+}
+
+/** Arrival/departure for the list's date column: always prefixed, never ambiguous. */
+function dateCell(p: UnitCardProps, st: UnitStatusKey): string {
+  if (st === "occ") return p.activeCheckOut ? `Afr. ${fmtRelativeDay(p.activeCheckOut)}` : "—";
+  if (st === "arr" || st === "res") return p.pendingCheckIn ? `Ank. ${fmtRelativeDay(p.pendingCheckIn)}` : "—";
+  return "—";
+}
+
+function OfflineMark({ reason }: { reason: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 shrink-0" title={reason}>
+      <WifiOff className="h-3 w-3" aria-hidden="true" />
+      <span className="sr-only">Hardware svarer ikke: </span>Offline
+    </span>
+  );
 }
 
 export function UnitCardCompact({
   unit,
   activeGuestName,
   pendingGuestName,
-}: Pick<UnitCardProps, "unit" | "activeGuestName" | "pendingGuestName">) {
-  const st = statusKey(unit.status, pendingGuestName);
+  pendingArrived,
+}: Pick<UnitCardProps, "unit" | "activeGuestName" | "pendingGuestName" | "pendingArrived">) {
+  const st = statusKey(unit.status, pendingGuestName, pendingArrived);
   const s = STATUS[st];
   const displayGuest = activeGuestName || pendingGuestName || unit.longTermGuestName;
 
@@ -107,7 +121,7 @@ export function UnitCardCompact({
           )}
           {st === "free" && <p className="text-xs text-muted-foreground/70">Ledig</p>}
         </div>
-        <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${s.dot}`} />
+        <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${s.dot}`} title={s.label} />
       </div>
     </Link>
   );
@@ -115,13 +129,14 @@ export function UnitCardCompact({
 
 export function UnitCard(props: UnitCardProps) {
   const { unit, haStates, activeGuestName, pendingGuestName } = props;
-  const st = statusKey(unit.status, pendingGuestName);
+  const st = statusKey(unit.status, pendingGuestName, props.pendingArrived);
   const s = STATUS[st];
   const TypeIcon = typeIcons[unit.type] || Home;
   const displayGuest = activeGuestName || pendingGuestName || unit.longTermGuestName;
-  // One optional live signal — only when the hardware backend is reachable.
-  // When it isn't, the card simply shows no live figure (no per-card error).
+  // One optional live signal — only when the hardware answered. When it
+  // didn't, a small "Offline" mark says so (only the few metered units).
   const showLive = !!haStates?.haReachable && st === "occ" && haStates?.powerOn !== null;
+  const offlineReason = haStates?.offlineReason ?? null;
 
   return (
     <Link href={`/admin/units/${unit.id}`} className="h-full block">
@@ -133,9 +148,9 @@ export function UnitCard(props: UnitCardProps) {
           <div className={`h-9 w-9 rounded-[10px] flex items-center justify-center shrink-0 ${st === "occ" ? s.soft : "bg-muted"}`}>
             <TypeIcon className={`h-[18px] w-[18px] ${st === "occ" ? s.text : "text-muted-foreground"}`} />
           </div>
-          <span className={`text-xs font-semibold inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full ${s.soft} ${s.text}`}>
+          <span className={`text-xs font-semibold inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full ${s.soft} ${s.text}`} title={s.label}>
             <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
-            {s.label}
+            {s.short}
           </span>
         </div>
 
@@ -150,13 +165,16 @@ export function UnitCard(props: UnitCardProps) {
         {/* Footer meta */}
         <div className="mt-auto pt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <CalendarClock className="h-3.5 w-3.5 opacity-70 shrink-0" />
-          <span className="truncate">{metaLine(props, st)}</span>
+          <span className={`truncate ${st === "arr" ? s.text : ""}`}>{metaLine(props, st)}</span>
           {unit.isLongTerm && (
             <span className="ml-auto shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300">
               Langtid
             </span>
           )}
-          {!unit.isLongTerm && showLive && (
+          {!unit.isLongTerm && offlineReason && (
+            <span className="ml-auto"><OfflineMark reason={offlineReason} /></span>
+          )}
+          {!unit.isLongTerm && !offlineReason && showLive && (
             <span className="ml-auto shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-foreground/60">
               <Zap className={`h-3 w-3 ${haStates?.powerOn ? "text-amber-500" : "text-muted-foreground/40"}`} />
               {haStates?.powerOn ? "Tændt" : "Slukket"}
@@ -171,42 +189,57 @@ export function UnitCard(props: UnitCardProps) {
 
 // ──────────────────────────────────────────────────────────────
 // Dense table row — used for large groups (e.g. 149 Pladser) instead
-// of a card wall. Far more scannable when counts are high.
+// of a card wall. Below md it folds into two lines (name on top, status ·
+// guest · date below) so a phone never cuts the unit name to "Pl…".
 // ──────────────────────────────────────────────────────────────
+export const UNIT_ROW_COLS = "md:grid md:grid-cols-[minmax(0,1.4fr)_8.5rem_minmax(0,1.6fr)_8.5rem_auto]";
+
 export function UnitRow(props: UnitCardProps & { type: string }) {
-  const { unit, activeGuestName, pendingGuestName } = props;
-  const st = statusKey(unit.status, pendingGuestName);
+  const { unit, activeGuestName, pendingGuestName, haStates } = props;
+  const st = statusKey(unit.status, pendingGuestName, props.pendingArrived);
   const s = STATUS[st];
   const TypeIcon = typeIcons[props.type] || MapPin;
   const displayGuest = activeGuestName || pendingGuestName || unit.longTermGuestName;
+  const date = dateCell(props, st);
+  const offlineReason = haStates?.offlineReason ?? null;
 
   return (
     <Link
       href={`/admin/units/${unit.id}`}
-      className="group grid grid-cols-[1.4fr_1fr_1.6fr_1fr_auto] items-center gap-3 px-4 py-3 border-b border-border/60 last:border-0 hover:bg-muted/40 transition-colors"
+      className={`group flex items-center gap-3 px-4 py-3 border-b border-border/60 last:border-0 hover:bg-muted/40 transition-colors ${UNIT_ROW_COLS} md:items-center`}
     >
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 flex-1 md:flex-none">
         <span className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${st === "occ" ? s.soft : "bg-muted"}`}>
           <TypeIcon className={`h-4 w-4 ${st === "occ" ? s.text : "text-muted-foreground"}`} />
         </span>
-        <span className="font-semibold text-sm truncate">{unit.name}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-semibold text-sm break-words md:truncate">{unit.name}</span>
+            {offlineReason && <OfflineMark reason={offlineReason} />}
+          </div>
+          {/* Phone: second line */}
+          <p className="md:hidden text-xs text-muted-foreground truncate mt-0.5">
+            <span className={`inline-flex items-center gap-1.5 font-semibold ${s.text}`} title={s.label}>
+              <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+              {s.short}
+            </span>
+            {displayGuest && <> · {displayGuest}</>}
+            {date !== "—" && <> · {date}</>}
+          </p>
+        </div>
       </div>
-      <span className={`inline-flex items-center gap-2 text-[13px] font-semibold ${s.text}`}>
-        <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
-        {s.label}
+      <span className={`hidden md:inline-flex items-center gap-2 text-[13px] font-semibold ${s.text}`} title={s.label}>
+        <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${s.dot}`} />
+        <span className="truncate">{s.short}</span>
       </span>
-      <span className={`text-sm truncate ${displayGuest ? "" : "text-muted-foreground"}`}>
+      <span className={`hidden md:block text-sm truncate ${displayGuest ? "" : "text-muted-foreground"}`}>
         {displayGuest || "—"}
       </span>
-      <span className="text-[13px] text-muted-foreground inline-flex items-center gap-1.5">
-        {st === "res" && <LogIn className="h-3.5 w-3.5" />}
-        {st === "occ"
-          ? (fmtDate(props.activeCheckOut) ? `Afrejse ${fmtDate(props.activeCheckOut)}` : "—")
-          : st === "res"
-            ? (fmtDate(props.pendingCheckIn) ? fmtDate(props.pendingCheckIn) : "Reserveret")
-            : "—"}
+      <span className={`hidden md:inline-flex text-[13px] items-center gap-1.5 ${st === "arr" ? s.text : "text-muted-foreground"}`}>
+        {(st === "arr" || st === "res") && <LogIn className="h-3.5 w-3.5 shrink-0" />}
+        <span className="truncate">{date}</span>
       </span>
-      <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-primary transition-colors" />
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30 group-hover:text-primary transition-colors" />
     </Link>
   );
 }

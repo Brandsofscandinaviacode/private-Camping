@@ -105,6 +105,16 @@ export async function setClimateTemperature(
   });
 }
 
+/** True when a Home Assistant URL and token are saved (no network call). */
+export async function isHAConfigured(): Promise<boolean> {
+  try {
+    await getHAConfig();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Check if HA is reachable */
 export async function checkHAConnection(): Promise<boolean> {
   try {

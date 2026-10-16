@@ -4,16 +4,21 @@ import {
   getUnpaidCount, getTotalUsage, checkConsumptionAlarms, getEffectiveElPricing, getTotalConsumptionHistory,
 } from "@/lib/actions";
 import { getBookingAttentionCounts, getDashboardMovements } from "@/lib/dashboard-actions";
+import { getStoppedMetering } from "@/lib/metering-actions";
+import { hasArrivedNotCheckedIn } from "@/lib/booking-status";
+import { hasAnyHardware, UNIT_STATE } from "@/lib/unit-state";
 import { AddUnitDialog } from "@/components/admin/add-cabin-dialog";
 import { DashboardUnitsGrid } from "@/components/admin/dashboard-units-grid";
 import { DashboardKpis } from "@/components/admin/dashboard-kpis";
 import { BookingSyncStatus } from "@/components/admin/booking-sync-status";
+import { MeteringStoppedBanner } from "@/components/admin/metering-stopped-banner";
+import { Button } from "@/components/ui/button";
 import { Tent, AlertCircle, AlertTriangle, LogIn, LogOut } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboard() {
-  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, history, attention] = await Promise.all([
+  const [units, resourceTypes, unpaidCount, totalUsage, alarmResult, elPricing, movements, history, attention, meteringStopped] = await Promise.all([
     getUnits(),
     getResourceTypes(),
     getUnpaidCount(),
@@ -23,12 +28,14 @@ export default async function AdminDashboard() {
     getDashboardMovements().catch(() => ({ arrivals: 0, departures: 0, nextCheckIn: null })),
     getTotalConsumptionHistory("week", 8).catch(() => []),
     getBookingAttentionCounts().catch(() => ({ arrived: 0, overdue: 0 })),
+    getStoppedMetering().catch(() => []),
   ]);
 
   const unitData = await Promise.all(
     units.map(async (unit) => {
       const [haStates, activeSession, pendingSession] = await Promise.allSettled([
-        getUnitHAStates(unit.id),
+        // Units without meters/relays (most of them) have nothing to ask
+        hasAnyHardware(unit.hardware) ? getUnitHAStates(unit.id) : Promise.resolve(null),
         getActiveSession(unit.id),
         getPendingSession(unit.id),
       ]);
@@ -51,13 +58,17 @@ export default async function AdminDashboard() {
         pendingGuestName: !active && pending ? pending.guestName : null,
         activeCheckOut: active?.expectedCheckOut ? active.expectedCheckOut.toISOString() : null,
         pendingCheckIn: !active && pending ? pending.checkInTime.toISOString() : null,
+        pendingCheckOut: !active && pending?.expectedCheckOut ? pending.expectedCheckOut.toISOString() : null,
+        // On site per the booking but not checked in (server clock = site time)
+        pendingArrived: !active && !!pending && hasArrivedNotCheckedIn(pending),
       };
     })
   );
 
   const occupiedCount = units.filter((u) => u.status === "OCCUPIED").length;
-  const reservedCount = unitData.filter((d) => d.unit.status !== "OCCUPIED" && !!d.pendingGuestName).length;
-  const vacantCount = units.length - occupiedCount - reservedCount;
+  const arrivedCount = unitData.filter((d) => d.unit.status !== "OCCUPIED" && !!d.pendingGuestName && d.pendingArrived).length;
+  const reservedCount = unitData.filter((d) => d.unit.status !== "OCCUPIED" && !!d.pendingGuestName && !d.pendingArrived).length;
+  const vacantCount = units.length - occupiedCount - arrivedCount - reservedCount;
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-7xl">
@@ -67,29 +78,26 @@ export default async function AdminDashboard() {
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground mt-1 text-sm">
             <b className="text-foreground font-semibold">{units.length}</b> enheder ·{" "}
-            <span className="text-blue-600 font-medium">{occupiedCount} optaget</span> ·{" "}
-            {reservedCount > 0 && <><span className="text-amber-600 font-medium">{reservedCount} reserveret</span> · </>}
+            <span className={`${UNIT_STATE.occ.text} font-medium`}>{occupiedCount} tjekket ind</span> ·{" "}
+            {arrivedCount > 0 && <><span className={`${UNIT_STATE.arr.text} font-medium`} title={UNIT_STATE.arr.label}>{arrivedCount} ikke tjekket ind</span> · </>}
+            {reservedCount > 0 && <><span className={`${UNIT_STATE.res.text} font-medium`}>{reservedCount} reserveret</span> · </>}
             <span className="font-medium">{vacantCount} ledige</span>
           </p>
           <BookingSyncStatus className="mt-2" />
         </div>
-        <AddUnitDialog />
+        <div className="flex items-center gap-2">
+          {/* Reception devices (phone/tablet): the day's work first, setup on desktop */}
+          <Link href="/admin/bookings?filter=arrived" className="lg:hidden">
+            <Button><LogIn className="h-4 w-4 mr-2" />Ankomster i dag</Button>
+          </Link>
+          <div className={units.length > 0 ? "hidden lg:block" : ""}>
+            <AddUnitDialog />
+          </div>
+        </div>
       </div>
 
-      {/* Attention zone */}
-      <DashboardKpis
-        total={units.length}
-        occupied={occupiedCount}
-        reserved={reservedCount}
-        vacant={vacantCount}
-        totalUsage={totalUsage}
-        elPricing={elPricing}
-        movements={movements}
-        history={history}
-      />
-
       {/* Consolidated alerts */}
-      {(unpaidCount > 0 || alarmResult.alerts.length > 0 || attention.arrived > 0 || attention.overdue > 0) && (
+      {(unpaidCount > 0 || alarmResult.alerts.length > 0 || attention.arrived > 0 || attention.overdue > 0 || meteringStopped.length > 0) && (
         <div className="space-y-2.5">
           {attention.arrived > 0 && (
             <Link href="/admin/bookings?filter=arrived">
@@ -133,6 +141,8 @@ export default async function AdminDashboard() {
             </Link>
           )}
 
+          <MeteringStoppedBanner stays={meteringStopped} />
+
           {alarmResult.alerts.map((alert, i) => (
             <Link key={i} href={`/admin/units/${alert.unitId}`}>
               <div className="flex items-center gap-3.5 rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 hover:bg-amber-100/80 transition-all cursor-pointer">
@@ -157,6 +167,19 @@ export default async function AdminDashboard() {
           ))}
         </div>
       )}
+
+      {/* Key figures — below the alerts, so the day's work is seen first */}
+      <DashboardKpis
+        total={units.length}
+        occupied={occupiedCount}
+        arrived={arrivedCount}
+        reserved={reservedCount}
+        vacant={vacantCount}
+        totalUsage={totalUsage}
+        elPricing={elPricing}
+        movements={movements}
+        history={history}
+      />
 
       {/* Inventory */}
       {units.length === 0 ? (
