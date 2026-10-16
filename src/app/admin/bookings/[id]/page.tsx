@@ -327,7 +327,7 @@ export default async function BookingDetailPage({
                     : "Udskriftsvenlig opgørelse — kan bruges som kvittering."}
               </p>
             </div>
-            <div className="shrink-0 flex flex-col items-stretch sm:items-end gap-2">
+            <div className="w-full sm:w-auto sm:shrink-0 flex flex-col items-stretch sm:items-end gap-2">
               {isCancelled ? (
                 <ReopenReservationButton sessionId={session.id} />
               ) : isExpiredReservation ? (
