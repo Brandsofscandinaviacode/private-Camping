@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ExternalLink, Mail, Phone, Hash, Calendar } from "lucide-react";
+import { ArrowLeft, ExternalLink, Mail, Phone, Hash, Calendar, Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -19,6 +19,8 @@ import { DeleteUnitButton } from "@/components/admin/delete-unit-button";
 import { LivePowerDraw } from "@/components/admin/live-power-draw";
 import { Breadcrumbs } from "@/components/admin/breadcrumbs";
 import { unitDisplayName as formatUnitName } from "@/lib/utils";
+import { hasArrivedNotCheckedIn } from "@/lib/booking-status";
+import { hasAnyHardware, unitStateKey, UNIT_STATE } from "@/lib/unit-state";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +46,10 @@ export default async function UnitDetailPage({
 
   const isOccupied = unit.status === "OCCUPIED";
   const hw = unit.hardware;
+  // Every unit has a hardware row; only switched-on features mean meters/relays
+  const hasHardware = hasAnyHardware(hw);
+  const pendingArrived = !!pendingSession && !activeSession && hasArrivedNotCheckedIn(pendingSession);
+  const state = UNIT_STATE[unitStateKey(unit.status, !!pendingSession && !activeSession, pendingArrived)];
   const completedSessions = unit.sessions.filter((s) => s.status === "COMPLETED");
   const unitDisplayName = formatUnitName(unit.type, unit.name);
 
@@ -66,10 +72,9 @@ export default async function UnitDetailPage({
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold">{unitDisplayName}</h1>
-              <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                isOccupied ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-              }`}>
-                {isOccupied ? "Optaget" : "Ledig"}
+              <span className={`text-xs px-2.5 py-1 rounded-full font-medium inline-flex items-center gap-1.5 ${state.soft} ${state.text}`} title={state.label}>
+                <span className={`h-1.5 w-1.5 rounded-full ${state.dot}`} />
+                {state.short}
               </span>
             </div>
           </div>
@@ -85,9 +90,9 @@ export default async function UnitDetailPage({
             <div className="rounded-xl border border-amber-200/60 bg-amber-50/30 shadow-sm">
               <div className="px-5 py-4 border-b border-amber-200/60 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-medium inline-flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                    Reserveret
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium inline-flex items-center gap-1.5 ${state.soft} ${state.text}`} title={state.label}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${state.dot}`} />
+                    {state.short}
                   </span>
                   <h2 className="font-semibold">Importeret booking</h2>
                 </div>
@@ -190,7 +195,7 @@ export default async function UnitDetailPage({
 
         {/* Right: Hardware Controls */}
         <div className="space-y-5">
-          {hw && (
+          {hw && hasHardware && (
             <CabinControls
               unitId={unit.id}
               hardware={{
@@ -201,16 +206,20 @@ export default async function UnitDetailPage({
                 hasSmartLock: hw.hasSmartLock,
               }}
               haStates={haStates}
+              occupied={isOccupied}
             />
           )}
-          {hw && (
+          {hasHardware && (
             <LivePowerDraw unitId={unit.id} />
           )}
-          {!hw && (
-            <div className="rounded-xl border border-border/60 bg-card shadow-sm p-8 text-center">
-              <p className="text-muted-foreground">Ingen hardware konfigureret</p>
-              <Link href="/admin/settings">
-                <Button variant="link" className="mt-2">Konfigurér i Indstillinger</Button>
+          {!hasHardware && (
+            <div className="rounded-xl border border-border/60 bg-card shadow-sm px-5 py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Gauge className="h-4 w-4 text-muted-foreground shrink-0" />
+                <p className="text-sm text-muted-foreground">Ingen målere/relæer – kun registrering</p>
+              </div>
+              <Link href="/admin/settings" title="Indstillinger → Enheder">
+                <Button variant="link" size="sm" className="px-0">Konfigurér</Button>
               </Link>
             </div>
           )}

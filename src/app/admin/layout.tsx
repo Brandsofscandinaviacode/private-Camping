@@ -20,12 +20,12 @@ export default async function AdminLayout({
 
   return (
     <AdminThemeProvider>
-    <div className="flex flex-col md:flex-row h-full min-h-screen">
-      {/* Mobile top bar + drawer */}
+    <div className="flex flex-col lg:flex-row h-full min-h-screen">
+      {/* Phone/tablet top bar + drawer (below lg, so tablets get the full width) */}
       <MobileSidebar username={session.username || "admin"} unpaidCount={unpaidCount} />
 
-      {/* Desktop Sidebar — hidden on mobile */}
-      <aside className="hidden md:flex w-60 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex-col shrink-0">
+      {/* Desktop Sidebar — hidden below lg */}
+      <aside className="hidden lg:flex w-60 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex-col shrink-0">
         <div className="px-5 py-5 border-b border-sidebar-border">
           <Link href="/admin" className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-sidebar-primary to-sidebar-primary/80 flex items-center justify-center shadow-md shadow-sidebar-primary/20">

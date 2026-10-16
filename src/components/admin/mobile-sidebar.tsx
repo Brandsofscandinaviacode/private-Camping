@@ -17,6 +17,7 @@ import {
   Map,
 } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { ThemeToggle } from "@/components/admin/theme-toggle";
 
 const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, section: "Oversigt", exact: true },
@@ -41,7 +42,7 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
   return (
     <>
       {/* Mobile top bar */}
-      <div className="md:hidden flex items-center justify-between px-4 py-3 bg-sidebar text-sidebar-foreground border-b border-sidebar-border">
+      <div className="lg:hidden flex items-center justify-between px-4 py-3 bg-sidebar text-sidebar-foreground border-b border-sidebar-border">
         <Link href="/admin" className="flex items-center gap-2.5">
           <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-sidebar-primary to-sidebar-primary/80 flex items-center justify-center">
             <Tent className="h-3.5 w-3.5 text-white" />
@@ -55,7 +56,7 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
 
       {/* Overlay */}
       {open && (
-        <div className="fixed inset-0 z-50 md:hidden">
+        <div className="fixed inset-0 z-50 lg:hidden">
           <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
           <aside className="absolute left-0 top-0 bottom-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col animate-in slide-in-from-left duration-200" role="dialog" aria-label="Navigation menu">
             <div className="px-5 py-4 border-b border-sidebar-border flex items-center justify-between">
@@ -111,7 +112,10 @@ export function MobileSidebar({ username, unpaidCount }: MobileSidebarProps) {
                   </div>
                   <span className="text-sm text-sidebar-foreground">{username}</span>
                 </div>
-                <LogoutButton />
+                <div className="flex items-center gap-1">
+                  <ThemeToggle />
+                  <LogoutButton />
+                </div>
               </div>
             </div>
           </aside>

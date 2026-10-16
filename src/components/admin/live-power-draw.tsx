@@ -71,6 +71,8 @@ export function LivePowerDraw({ unitId, refreshInterval = 5 }: LivePowerDrawProp
       <div className="p-5 space-y-3">
         {loading && !data ? (
           <p className="text-sm text-muted-foreground text-center py-2">Henter effekt...</p>
+        ) : data && data.totalW === null ? (
+          <p className="text-sm text-muted-foreground text-center py-2">Måleren svarer ikke lige nu — ingen aktuel effekt</p>
         ) : (
           <>
             {data?.hasElectricityPower && (

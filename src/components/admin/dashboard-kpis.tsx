@@ -1,4 +1,6 @@
 import { Users, CalendarDays, LogIn, LogOut, Zap, Droplets, TrendingUp } from "lucide-react";
+import { UNIT_STATE } from "@/lib/unit-state";
+import { fmtShortDate, fmtTime, siteDayKey } from "@/lib/format";
 
 // da-DK number helpers
 const kr = (n: number) => n.toFixed(2).replace(".", ",");
@@ -6,10 +8,16 @@ const one = (n: number) => n.toFixed(1).replace(".", ",");
 
 interface KpiProps {
   total: number;
+  /** Checked in. */
   occupied: number;
+  /** On site per the booking, not checked in. */
+  arrived?: number;
   reserved: number;
   vacant: number;
-  totalUsage: { totalKwhPerHour: number; totalWaterLitersPerHour: number; unitCount: number } | null;
+  totalUsage: {
+    totalKwhPerHour: number; totalWaterLitersPerHour: number; unitCount: number;
+    meteredUnits?: number; latestReadingAt?: string | null;
+  } | null;
   elPricing: { mode: string; pricePerKwh: number; spotPrice: number | null } | null;
   movements: {
     arrivals: number;
@@ -39,9 +47,9 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-card shadow-sm p-5">
+    <div className={`rounded-2xl border border-border/60 bg-card shadow-sm p-5 ${className}`}>
       {children}
     </div>
   );
@@ -58,10 +66,22 @@ function Label({ icon: Icon, tint, children }: { icon: typeof Users; tint: strin
   );
 }
 
-export function DashboardKpis({ total, occupied, reserved, vacant, totalUsage, elPricing, movements, history = [] }: KpiProps) {
-  const pct = total > 0 ? Math.round((occupied / total) * 100) : 0;
-  const occW = total > 0 ? (occupied / total) * 100 : 0;
-  const resW = total > 0 ? (reserved / total) * 100 : 0;
+/** "kl. 09.44" today, otherwise "13. sep. kl. 11.26". */
+function readingTime(iso: string): string {
+  const sameDay = siteDayKey(iso) === siteDayKey(new Date());
+  return sameDay ? `kl. ${fmtTime(iso)}` : `${fmtShortDate(iso)} kl. ${fmtTime(iso)}`;
+}
+
+export function DashboardKpis({ total, occupied, arrived = 0, reserved, vacant, totalUsage, elPricing, movements, history = [] }: KpiProps) {
+  // Occupancy follows the bookings: a guest Danplanner lists as on site is
+  // here, checked in or not (check-in stays manual).
+  const onSite = occupied + arrived;
+  const pct = total > 0 ? Math.round((onSite / total) * 100) : 0;
+  const share = (n: number) => (total > 0 ? (n / total) * 100 : 0);
+  const metered = totalUsage?.meteredUnits;
+  const answering = totalUsage?.unitCount ?? 0;
+  // Nothing fresh to show: "—", never an old rate as "now"
+  const usageLive = !!totalUsage && answering > 0;
   const nextTime = movements.nextCheckIn
     ? new Intl.DateTimeFormat("da-DK", { hour: "2-digit", minute: "2-digit" }).format(new Date(movements.nextCheckIn.time))
     : null;
@@ -75,13 +95,18 @@ export function DashboardKpis({ total, occupied, reserved, vacant, totalUsage, e
         <p className="text-[30px] font-bold tracking-tight tabular-nums mt-3 leading-none">
           {pct}<span className="text-sm font-medium text-muted-foreground ml-0.5">%</span>
         </p>
-        <div className="h-[7px] rounded-full bg-muted overflow-hidden mt-3.5 flex">
-          <span className="h-full bg-blue-500" style={{ width: `${occW}%` }} />
-          <span className="h-full bg-amber-500" style={{ width: `${resW}%` }} />
+        <p className="text-[12.5px] text-muted-foreground mt-2">
+          Optaget iflg. booking <b className="text-foreground font-semibold tabular-nums">{onSite}</b> · heraf <b className="text-foreground font-semibold tabular-nums">{occupied}</b> tjekket ind
+        </p>
+        <div className="h-[7px] rounded-full bg-muted overflow-hidden mt-3 flex">
+          <span className={`h-full ${UNIT_STATE.occ.dot}`} style={{ width: `${share(occupied)}%` }} />
+          <span className={`h-full ${UNIT_STATE.arr.dot}`} style={{ width: `${share(arrived)}%` }} />
+          <span className={`h-full ${UNIT_STATE.res.dot}`} style={{ width: `${share(reserved)}%` }} />
         </div>
         <div className="flex flex-wrap gap-x-3.5 gap-y-1 mt-2.5 text-[11.5px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-blue-500" />{occupied} optaget</span>
-          {reserved > 0 && <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-amber-500" />{reserved} res.</span>}
+          <span className="inline-flex items-center gap-1.5" title={UNIT_STATE.occ.label}><i className={`h-2 w-2 rounded-full ${UNIT_STATE.occ.dot}`} />{occupied} tjekket ind</span>
+          {arrived > 0 && <span className="inline-flex items-center gap-1.5" title={UNIT_STATE.arr.label}><i className={`h-2 w-2 rounded-full ${UNIT_STATE.arr.dot}`} />{arrived} ikke tjekket ind</span>}
+          {reserved > 0 && <span className="inline-flex items-center gap-1.5" title={UNIT_STATE.res.label}><i className={`h-2 w-2 rounded-full ${UNIT_STATE.res.dot}`} />{reserved} res.</span>}
           <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-muted-foreground/30" />{vacant} ledige</span>
         </div>
       </Card>
@@ -110,31 +135,41 @@ export function DashboardKpis({ total, occupied, reserved, vacant, totalUsage, e
         </p>
       </Card>
 
-      {/* Forbrug nu */}
-      <Card>
+      {/* Forbrug nu — only the few units with meters; hidden on phones */}
+      <Card className="hidden sm:block">
         <Label icon={Zap} tint="bg-amber-500/10 text-amber-600">Forbrug nu</Label>
         <p className="text-[30px] font-bold tracking-tight tabular-nums mt-3 leading-none">
-          {totalUsage ? (totalUsage.totalKwhPerHour * 1000).toFixed(0) : "—"}
+          {usageLive ? (totalUsage!.totalKwhPerHour * 1000).toFixed(0) : "—"}
           <span className="text-sm font-medium text-muted-foreground ml-0.5">W</span>
         </p>
-        {totalUsage ? (
-          <div className="flex items-center gap-4 mt-3 text-[12.5px] text-muted-foreground">
+        {usageLive ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[12.5px] text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
-              <Zap className="h-3.5 w-3.5 text-amber-500" />{kr(totalUsage.totalKwhPerHour)} kWh/t
+              <Zap className="h-3.5 w-3.5 text-amber-500" />{kr(totalUsage!.totalKwhPerHour)} kWh/t
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <Droplets className="h-3.5 w-3.5 text-blue-500" />{one(totalUsage.totalWaterLitersPerHour)} L/t
+              <Droplets className="h-3.5 w-3.5 text-blue-500" />{one(totalUsage!.totalWaterLitersPerHour)} L/t
             </span>
+            {metered !== undefined && answering < metered && (
+              <span className="text-amber-700">{answering} af {metered} målere svarer</span>
+            )}
           </div>
-        ) : (
+        ) : !totalUsage ? (
           <p className="mt-3 text-[12.5px] text-muted-foreground">Ingen forbindelse til målerne lige nu</p>
+        ) : metered === 0 ? (
+          <p className="mt-3 text-[12.5px] text-muted-foreground">Ingen enheder med målere</p>
+        ) : (
+          <p className="mt-3 text-[12.5px] text-amber-700">
+            {metered !== undefined ? `0 af ${metered} målere svarer` : "Ingen målere svarer"}
+            {totalUsage.latestReadingAt && <> · senest målt {readingTime(totalUsage.latestReadingAt)}</>}
+          </p>
         )}
         <Sparkline values={history.slice(-8).map((h) => h.el)} />
       </Card>
 
       {/* Elpris nu */}
       {showPrice && (
-        <Card>
+        <Card className="hidden sm:block">
           <Label icon={TrendingUp} tint="bg-emerald-500/10 text-emerald-600">Elpris nu</Label>
           <p className="text-[30px] font-bold tracking-tight tabular-nums mt-3 leading-none">
             {kr(elPricing!.pricePerKwh)}<span className="text-sm font-medium text-muted-foreground ml-1">kr/kWh</span>
