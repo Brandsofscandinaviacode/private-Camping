@@ -13,6 +13,7 @@ import { requireAuth } from "./auth";
 import { typeLabels, unitDisplayName } from "./utils";
 import { logger } from "./logger";
 import { getBaseUrl } from "./base-url";
+import { cleanupMcpOAuth } from "./mcp/oauth";
 import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "./prepaid";
 
 // How long a PENDING laundry/shower row waits for its card payment before it
@@ -78,7 +79,11 @@ export async function getEffectiveElPricing() {
 
 export async function getGlobalSettings() {
   await requireAuth();
-  return readGlobalSettings();
+  const settings = await readGlobalSettings();
+  // The MCP key is stored as a hash only and never shown again — don't ship
+  // even the hash to the settings forms in the browser.
+  for (const key of Object.keys(settings)) if (key.startsWith("mcp_api_key")) delete settings[key];
+  return settings;
 }
 
 // ──────────────────────────────────────────────
@@ -4761,7 +4766,15 @@ export async function cleanupOldData() {
   const fails = await prisma.globalSetting.deleteMany({
     where: { key: { startsWith: "_meter_fail_" }, value: { lt: failCutoff } },
   });
-  return { consumptionLogs: logs.count, meterFailKeys: fails.count };
+  // Last, so a failure here can't stop the cleanup above.
+  const mcp = await cleanupMcpOAuth();
+  return {
+    consumptionLogs: logs.count,
+    meterFailKeys: fails.count,
+    mcpCodes: mcp.codes,
+    mcpTokens: mcp.tokens,
+    mcpClients: mcp.clients,
+  };
 }
 
 // How long an expiry sweep keeps retrying a relay that won't switch off

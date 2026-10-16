@@ -1,11 +1,19 @@
 import { redirect } from "next/navigation";
 import { isAuthenticated } from "@/lib/auth";
 import { LoginForm } from "@/components/auth/login-form";
+import { safeNextPath } from "@/lib/safe-next";
 import { Tent } from "lucide-react";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>;
+}) {
+  const { next: rawNext } = await searchParams;
+  // Where to go after login, e.g. back to a Claude approval (/oauth/authorize).
+  const next = safeNextPath(Array.isArray(rawNext) ? rawNext[0] : rawNext);
   if (await isAuthenticated()) {
-    redirect("/admin");
+    redirect(next ?? "/admin");
   }
 
   return (
@@ -20,7 +28,7 @@ export default async function LoginPage() {
             Log ind for at administrere campingpladsen
           </p>
         </div>
-        <LoginForm />
+        <LoginForm next={next} />
       </div>
     </div>
   );

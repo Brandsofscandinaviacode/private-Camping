@@ -8,12 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { changePassword } from "@/lib/auth";
 
-interface ChangePasswordFormProps {
-  userId: number;
-}
-
-export function ChangePasswordForm({ userId }: ChangePasswordFormProps) {
+export function ChangePasswordForm() {
   const [isPending, startTransition] = useTransition();
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
@@ -35,8 +32,13 @@ export function ChangePasswordForm({ userId }: ChangePasswordFormProps) {
 
     startTransition(async () => {
       try {
-        await changePassword(userId, newPassword);
-        setMessage("Adgangskode ændret!");
+        const res = await changePassword(currentPassword, newPassword);
+        if (res.error) {
+          setError(res.error);
+          return;
+        }
+        setMessage("Adgangskode ændret! Forbundne Claude-apps skal godkendes igen.");
+        setCurrentPassword("");
         setNewPassword("");
         setConfirmPassword("");
         setTimeout(() => setMessage(""), 3000);
@@ -57,6 +59,16 @@ export function ChangePasswordForm({ userId }: ChangePasswordFormProps) {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div>
+            <Label htmlFor="current-password">Nuværende adgangskode</Label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          </div>
           <div>
             <Label htmlFor="new-password">Ny adgangskode</Label>
             <Input
@@ -87,7 +99,7 @@ export function ChangePasswordForm({ userId }: ChangePasswordFormProps) {
 
           <Button
             onClick={handleSubmit}
-            disabled={isPending || !newPassword || !confirmPassword}
+            disabled={isPending || !currentPassword || !newPassword || !confirmPassword}
           >
             {isPending ? "Gemmer..." : "Skift adgangskode"}
           </Button>

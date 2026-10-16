@@ -63,9 +63,13 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(httpsUrl, 301);
   }
 
-  // Rate limit guest-facing endpoints
+  // Rate limit guest-facing endpoints and the public OAuth endpoints
+  // (client registration / token / consent) used by Claude connectors.
   const path = request.nextUrl.pathname;
-  if (path.startsWith("/guest") || path.startsWith("/shower") || path.startsWith("/laundry") || path.startsWith("/services")) {
+  if (
+    path.startsWith("/guest") || path.startsWith("/shower") || path.startsWith("/laundry") || path.startsWith("/services") ||
+    path.startsWith("/api/oauth") || path.startsWith("/oauth")
+  ) {
     const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
       || request.headers.get("x-real-ip")
       || "unknown";

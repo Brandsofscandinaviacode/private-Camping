@@ -7,16 +7,26 @@ import { SystemStatus } from "@/components/admin/system-status";
 import { SettingsTabs } from "@/components/admin/settings-tabs";
 import { ResourceTypesManager } from "@/components/admin/resource-types-manager";
 import { PageShell, PageHeader } from "@/components/admin/admin-ui";
+import { McpSettings } from "@/components/admin/mcp-settings";
+import { getMcpSettingsState } from "@/lib/mcp/admin-actions";
+import { logger } from "@/lib/logger";
+import { unstable_rethrow } from "next/navigation";
 import { Home, Settings } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const session = await requireAuth();
-  const [settings, units, resourceTypes] = await Promise.all([
+  await requireAuth();
+  const [settings, units, resourceTypes, mcpState] = await Promise.all([
     getGlobalSettings(),
     getUnits(),
     getResourceTypes(),
+    // A missing MCP migration must not take the whole settings page down.
+    getMcpSettingsState().catch((e) => {
+      unstable_rethrow(e);
+      logger.error("mcp", "Kunne ikke indlæse MCP-indstillinger", e);
+      return null;
+    }),
   ]);
 
   const sortedUnits = [...units].sort((a, b) => {
@@ -92,7 +102,7 @@ export default async function SettingsPage() {
     <div className="space-y-6">
       <SystemStatus />
       <div className="border-t border-border" />
-      <ChangePasswordForm userId={session.userId!} />
+      <ChangePasswordForm />
     </div>
   );
 
@@ -115,6 +125,7 @@ export default async function SettingsPage() {
           booking: <BookingSettings settings={settings} resourceTypes={resourceTypes.map((rt) => ({ id: rt.id, name: rt.name, externalId: rt.externalId, externalProvider: rt.externalProvider }))} />,
           guest: <GuestPortalSettings settings={settings} />,
           hardware: hardwareContent,
+          mcp: <McpSettings state={mcpState} />,
           system: systemContent,
         }}
       </SettingsTabs>

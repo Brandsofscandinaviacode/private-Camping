@@ -272,28 +272,36 @@ export async function registerClient(input: Record<string, unknown>): Promise<
   const clientName = typeof input.client_name === "string" ? input.client_name.slice(0, 100) : null;
 
   // Registration is open by design (MCP clients self-register). Keep the
-  // table bounded: drop stale clients that never obtained a token.
-  const total = await prisma.mcpOAuthClient.count();
-  if (total >= MAX_REGISTERED_CLIENTS) {
-    await prisma.mcpOAuthClient.deleteMany({
-      where: { tokens: { none: {} }, createdAt: { lt: new Date(Date.now() - 60 * 60_000) } },
-    });
-    if ((await prisma.mcpOAuthClient.count()) >= MAX_REGISTERED_CLIENTS) {
-      return { ok: false, status: 429, error: "temporarily_unavailable", description: "Too many registered clients" };
-    }
-  }
-
+  // table bounded by evicting the oldest registrations that never obtained a
+  // token — never by refusing new ones, or 50 junk registrations would lock
+  // out the real connector. 15 min covers code TTL + admin approval time.
   const clientId = newSecret("csc_");
   const clientSecret = method === "none" ? null : newSecret("cscs_");
-  const created = await prisma.mcpOAuthClient.create({
-    data: {
-      clientId,
-      clientSecretHash: clientSecret ? sha256(clientSecret) : null,
-      clientName,
-      redirectUris: JSON.stringify(redirectUris),
-      tokenEndpointAuthMethod: method,
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const total = await tx.mcpOAuthClient.count();
+    if (total >= MAX_REGISTERED_CLIENTS) {
+      const stale = await tx.mcpOAuthClient.findMany({
+        where: { tokens: { none: {} }, createdAt: { lt: new Date(Date.now() - 15 * 60_000) } },
+        orderBy: { createdAt: "asc" },
+        take: total - MAX_REGISTERED_CLIENTS + 1,
+        select: { id: true },
+      });
+      if (total - stale.length >= MAX_REGISTERED_CLIENTS) return null;
+      await tx.mcpOAuthClient.deleteMany({ where: { id: { in: stale.map((c) => c.id) } } });
+    }
+    return tx.mcpOAuthClient.create({
+      data: {
+        clientId,
+        clientSecretHash: clientSecret ? sha256(clientSecret) : null,
+        clientName,
+        redirectUris: JSON.stringify(redirectUris),
+        tokenEndpointAuthMethod: method,
+      },
+    });
   });
+  if (!created) {
+    return { ok: false, status: 429, error: "temporarily_unavailable", description: "Too many pending registrations — try again in a few minutes" };
+  }
 
   return {
     ok: true,
@@ -321,6 +329,12 @@ function parseRedirectUris(json: string): string[] {
 }
 
 // ── Authorization request (/oauth/authorize) ──────────────────
+
+/** The authorize parameters the consent page round-trips as hidden fields. */
+export const AUTHORIZE_FIELDS = [
+  "response_type", "client_id", "redirect_uri", "state",
+  "code_challenge", "code_challenge_method", "scope", "resource",
+] as const;
 
 export interface AuthorizeRequest {
   clientId: string;
@@ -482,11 +496,6 @@ export async function handleTokenRequest(form: URLSearchParams, authHeader: stri
 
     const row = await prisma.mcpOAuthCode.findUnique({ where: { codeHash: sha256(code) } });
     if (!row || row.clientId !== client.clientId) return tokenError("invalid_grant", "Unknown authorization code");
-    if (row.usedAt) {
-      // A replayed code may have been intercepted — kill what it produced.
-      await revokeClientTokens(client.clientId);
-      return tokenError("invalid_grant", "Authorization code already used");
-    }
     if (row.expiresAt <= new Date()) return tokenError("invalid_grant", "Authorization code expired");
     if (redirectUri && redirectUri !== row.redirectUri) return tokenError("invalid_grant", "redirect_uri mismatch");
     if (!redirectUri && parseRedirectUris(client.redirectUris).length !== 1) {
@@ -494,6 +503,13 @@ export async function handleTokenRequest(form: URLSearchParams, authHeader: stri
     }
     const challenge = base64url(createHash("sha256").update(verifier).digest());
     if (challenge !== row.codeChallenge) return tokenError("invalid_grant", "PKCE verification failed");
+    if (row.usedAt) {
+      // Checked after PKCE: only the verifier holder gets here, so a replay
+      // really means the code was intercepted — kill what it produced. (Before
+      // PKCE, anyone with a leaked used code could revoke a working grant.)
+      await revokeClientTokens(client.clientId);
+      return tokenError("invalid_grant", "Authorization code already used");
+    }
 
     // Single use, atomically — two concurrent exchanges can't both win.
     const claimed = await prisma.mcpOAuthCode.updateMany({

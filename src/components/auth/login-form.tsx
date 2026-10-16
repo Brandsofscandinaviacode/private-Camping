@@ -1,15 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/lib/auth";
+import { safeNextPath } from "@/lib/safe-next";
 
-export function LoginForm() {
-  const router = useRouter();
+export function LoginForm({ next }: { next?: string | null }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -26,7 +25,8 @@ export function LoginForm() {
         setError(result.error);
       } else {
         // Full page navigation ensures the cookie is sent on the next request
-        window.location.href = "/admin";
+        // Re-validated here too: the prop is the only thing deciding the target.
+        window.location.href = safeNextPath(next) ?? "/admin";
       }
     } catch {
       setError("Der opstod en fejl. Prøv igen.");

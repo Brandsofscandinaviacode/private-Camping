@@ -39,3 +39,19 @@ export function openReservationWhere(now: Date = new Date()) {
     ],
   };
 }
+
+/**
+ * Prisma `where` for PENDING reservations whose stay is over — the exact
+ * complement of openReservationWhere() within PENDING. Spelled out instead of
+ * `NOT: openReservationWhere()`, which SQL NULL semantics would get wrong for
+ * rows without an expectedCheckOut.
+ */
+export function expiredReservationWhere(now: Date = new Date()) {
+  return {
+    status: "PENDING" as const,
+    OR: [
+      { expectedCheckOut: { lt: startOfToday(now) } },
+      { expectedCheckOut: null, checkInTime: { lt: noCheckoutCutoff(now) } },
+    ],
+  };
+}
