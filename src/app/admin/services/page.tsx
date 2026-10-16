@@ -1,4 +1,5 @@
-import { getServiceStatus, getLaundryGroups, getGlobalSettings } from "@/lib/actions";
+import { getLaundryGroups, getGlobalSettings } from "@/lib/actions";
+import { getServicesOverview } from "@/lib/service-actions";
 import { ServicesDashboard } from "@/components/admin/services-dashboard";
 import { LaundryGroupManager } from "@/components/admin/laundry-group-manager";
 import { ServicesSubnav } from "@/components/admin/services-subnav";
@@ -9,8 +10,8 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 
 export default async function ServicesPage() {
-  const [machines, groups, settings, allMachines] = await Promise.all([
-    getServiceStatus(),
+  const [overview, groups, settings, allMachines] = await Promise.all([
+    getServicesOverview(),
     getLaundryGroups(),
     getGlobalSettings(),
     prisma.laundryMachine.findMany({ select: { id: true, name: true, groupId: true }, orderBy: { id: "asc" } }),
@@ -28,7 +29,7 @@ export default async function ServicesPage() {
       />
       <ServicesSubnav />
       <div className="space-y-8 pt-2">
-        <ServicesDashboard initialMachines={machines} />
+        <ServicesDashboard initial={overview} />
         <LaundryGroupManager initialGroups={groups} allMachines={allMachines} baseUrl={baseUrl} />
       </div>
     </PageShell>

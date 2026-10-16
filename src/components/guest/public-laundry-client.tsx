@@ -34,6 +34,8 @@ interface Props {
   token: string;
   groupName: string;
   machines: Machine[];
+  /** Card payments on; otherwise QR guests pay at the desk. */
+  cardPayment: boolean;
 }
 
 function formatDuration(min: number, locale: Locale): string {
@@ -44,7 +46,7 @@ function formatDuration(min: number, locale: Locale): string {
   return m === 0 ? `${h} ${hLabel}` : `${h} ${hLabel} ${m} min`;
 }
 
-export function PublicLaundryClient({ token, groupName, machines: initialMachines }: Props) {
+export function PublicLaundryClient({ token, groupName, machines: initialMachines, cardPayment }: Props) {
   const [locale, setLocale] = useState<Locale>(detectLocale);
   const tx = getTranslations(locale);
   const [machines, setMachines] = useState(initialMachines);
@@ -126,6 +128,13 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
       </div>
 
       <div className="max-w-md mx-auto px-4 py-4 space-y-3 -mt-4">
+        {!cardPayment && machines.length > 0 && (
+          <Card>
+            <CardContent className="py-4">
+              <p className="text-sm font-medium text-amber-800">{tx.payAtReception}</p>
+            </CardContent>
+          </Card>
+        )}
         {message && (
           <Card>
             <CardContent className="py-4">
@@ -176,7 +185,7 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
                         </div>
                         <p className="text-xs">{tx.reserveExplain.replace("{amount}", (m.maxReservationDKK ?? 0).toFixed(0))}</p>
                       </div>
-                      <Button className="w-full" size="lg" disabled={!m.available || startingId !== null} onClick={() => handleStart(m.id)}>
+                      <Button className="w-full" size="lg" disabled={!m.available || startingId !== null || !cardPayment} onClick={() => handleStart(m.id)}>
                         {startingId === m.id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                         {startingId === m.id ? tx.creatingPayment : tx.startMachine}
                       </Button>
@@ -189,7 +198,7 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
                           <button
                             key={p.id}
                             type="button"
-                            disabled={!m.available || startingId !== null}
+                            disabled={!m.available || startingId !== null || !cardPayment}
                             onClick={() => handleStart(m.id, p.id)}
                             className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left disabled:opacity-50"
                           >
@@ -211,7 +220,7 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
                         </Button>
                       </div>
                     ) : (
-                      <Button className="w-full" size="lg" disabled={!m.available || startingId !== null} onClick={() => setPickingProgramFor(m.id)}>
+                      <Button className="w-full" size="lg" disabled={!m.available || startingId !== null || !cardPayment} onClick={() => setPickingProgramFor(m.id)}>
                         {tx.selectProgram}
                       </Button>
                     )
@@ -224,9 +233,9 @@ export function PublicLaundryClient({ token, groupName, machines: initialMachine
                         </div>
                         <span className="font-semibold text-foreground">{m.pricePerUse.toFixed(0)} DKK</span>
                       </div>
-                      <Button className="w-full" size="lg" disabled={!m.available || startingId !== null} onClick={() => handleStart(m.id)}>
+                      <Button className="w-full" size="lg" disabled={!m.available || startingId !== null || !cardPayment} onClick={() => handleStart(m.id)}>
                         {startingId === m.id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                        {startingId === m.id ? tx.creatingPayment : tx.payAndStart.replace("{amount}", m.pricePerUse.toFixed(0))}
+                        {startingId === m.id ? tx.creatingPayment : (cardPayment ? tx.payAndStart : tx.startWithAmount).replace("{amount}", m.pricePerUse.toFixed(0))}
                       </Button>
                     </>
                   )}

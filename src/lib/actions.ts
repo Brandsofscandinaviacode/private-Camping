@@ -40,6 +40,25 @@ import {
   type ReceiptLine,
 } from "./check-in";
 import { checkInHardwarePrecheck, startStayHardware } from "./check-in-hardware";
+import {
+  planGuestFunding,
+  fundingPaymentFields,
+  fundingNote,
+  serviceChannel,
+  servicePaymentBadge,
+  refundPlan,
+  countsAsServiceRevenue,
+  type FundedGuestFunding,
+  type RefundPlan,
+  type ServiceTone,
+} from "./service-billing";
+import {
+  serviceDeviceOnline,
+  drawStayFunds,
+  logCreditUse,
+  cancelAndRefundService,
+  InsufficientFunds,
+} from "./service-ops";
 
 // How long a PENDING laundry/shower row waits for its card payment before it
 // is auto-cancelled. Must comfortably exceed the time a guest can spend on the
@@ -2875,12 +2894,21 @@ export async function getSessionById(sessionId: number) {
 export interface SessionCharge {
   id: string;
   kind: "LAUNDRY" | "SHOWER";
+  /** The LaundrySess/ShowerSess id. */
+  rowId: number;
   label: string;
   detail: string | null;
   occurredAt: Date;
   amount: number;
   paymentStatus: string;
   pending: boolean;
+  /** How it was paid, for the badge ("Betalt · Kontant", "På regning", "Gratis"…). */
+  payment: { label: string; tone: ServiceTone };
+  creditUsed: number;
+  /** Cancelled and refunded — shown struck through, not in the totals. */
+  cancelled: boolean;
+  /** What "Annullér og refundér" would give back. */
+  refund: RefundPlan;
 }
 
 /**
@@ -2901,10 +2929,14 @@ export async function getSessionCharges(sessionId: number): Promise<{
 }> {
   await requireAuth();
 
+  // Cancelled rows: only the ones the desk cancelled (abandoned card payments
+  // and metered auto-cancels never cost anything).
+  const shownStatus = { OR: [{ status: { not: "CANCELLED" } }, { cancelledAt: { not: null } }] };
   const [session, laundry, showers] = await Promise.all([
     prisma.session.findUnique({
       where: { id: sessionId },
       select: {
+        status: true,
         accumulatedElCost: true,
         accumulatedElKwh: true,
         accumulatedWaterCost: true,
@@ -2912,16 +2944,17 @@ export async function getSessionCharges(sessionId: number): Promise<{
       },
     }),
     prisma.laundrySess.findMany({
-      where: { sessionId, status: { not: "CANCELLED" } },
+      where: { sessionId, ...shownStatus },
       include: { machine: { select: { name: true } } },
       orderBy: { startedAt: "desc" },
     }),
     prisma.showerSess.findMany({
-      where: { sessionId, status: { not: "CANCELLED" } },
+      where: { sessionId, ...shownStatus },
       include: { shower: { select: { name: true } } },
       orderBy: { startedAt: "desc" },
     }),
   ]);
+  const stayActive = session?.status === "ACTIVE";
 
   const charges: SessionCharge[] = [];
 
@@ -2939,12 +2972,17 @@ export async function getSessionCharges(sessionId: number): Promise<{
     charges.push({
       id: `laundry-${l.id}`,
       kind: "LAUNDRY",
+      rowId: l.id,
       label: l.machine.name,
       detail,
       occurredAt: l.startedAt,
       amount,
       paymentStatus: l.paymentStatus,
       pending: running,
+      payment: servicePaymentBadge(l),
+      creditUsed: l.creditUsed,
+      cancelled: !!l.cancelledAt,
+      refund: refundPlan(l, { stayActive }),
     });
   }
 
@@ -2952,12 +2990,17 @@ export async function getSessionCharges(sessionId: number): Promise<{
     charges.push({
       id: `shower-${s.id}`,
       kind: "SHOWER",
+      rowId: s.id,
       label: s.shower.name,
       detail: s.minutesPaid ? `${s.minutesPaid} min` : null,
       occurredAt: s.startedAt,
       amount: s.pricePaid,
       paymentStatus: s.paymentStatus,
       pending: s.status === "ACTIVE" || s.status === "PAUSED",
+      payment: servicePaymentBadge(s),
+      creditUsed: s.creditUsed,
+      cancelled: !!s.cancelledAt,
+      refund: refundPlan(s, { stayActive }),
     });
   }
 
@@ -2971,7 +3014,7 @@ export async function getSessionCharges(sessionId: number): Promise<{
     liters: session?.accumulatedWaterLiters ?? 0,
     cost: session?.accumulatedWaterCost ?? 0,
   };
-  const servicesTotal = charges.reduce((sum, c) => sum + c.amount, 0);
+  const servicesTotal = charges.reduce((sum, c) => sum + (c.cancelled ? 0 : c.amount), 0);
 
   return {
     charges,
@@ -3738,7 +3781,7 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
     "Total forbrug (DKK)",
     "Ekstern pris (DKK)",
     "Ekstern beskrivelse",
-    "Vaskerikredit (DKK)",
+    "Ubrugt servicekredit (DKK)",
     "Grand total (DKK)",
     "Afregningsmåde",
     "Forudbetalt (DKK)",
@@ -3783,9 +3826,9 @@ export async function exportSessionsCSV(filter?: "all" | "unpaid" | "paid") {
     const waterCost = s.totalWaterCost ?? (isActive && s.accumulatedWaterCost > 0 ? s.accumulatedWaterCost : null);
     const totalCost = s.totalCost ?? (elCost !== null || waterCost !== null ? (elCost ?? 0) + (waterCost ?? 0) : null);
 
-    // Grand total = forbrug + ekstern pris − vaskerikredit. This matches how
-    // the booking detail page computes the amount to charge the guest.
-    const grandTotal = (totalCost ?? 0) + (s.externalPrice ?? 0) - s.laundryCredit;
+    // Grand total = forbrug + ekstern pris. Unused service credit is credit the
+    // guest still holds, not a payment against the stay — don't subtract it.
+    const grandTotal = (totalCost ?? 0) + (s.externalPrice ?? 0);
 
     return [
       esc(s.id),
@@ -4267,8 +4310,20 @@ export interface MonthlyEconomySummary {
   totalWater: number;
   totalKwhUsed: number;
   totalWaterUsed: number;
+  /** Laundry used this month (value, any payment channel, cancelled excluded). */
   totalLaundry: number;
   laundryCount: number;
+  totalShowers: number;
+  showerCount: number;
+  /**
+   * Service money counted in totalRevenue/totalPaid: card, prepaid balance and
+   * the desk (SERVICE payments, net of refunds). On-account/invoiced services
+   * are already inside the stay's or invoice's total and are not added again.
+   */
+  servicesRevenue: number;
+  servicesOnBill: number;
+  /** Old PAID rows with no payment behind them (card payments were off) — not counted. */
+  servicesUnverified: number;
 }
 
 export async function getEconomySummary(): Promise<{
@@ -4280,7 +4335,11 @@ export async function getEconomySummary(): Promise<{
   await requireAuth();
 
 
-  const [sessions, invoices, laundrySessions] = await Promise.all([
+  const serviceSelect = {
+    startedAt: true, status: true, pricePaid: true, creditUsed: true,
+    paymentStatus: true, paymentMethod: true, paymentId: true,
+  } as const;
+  const [sessions, invoices, laundrySessions, showerSessions, deskServicePayments] = await Promise.all([
     prisma.session.findMany({
       where: { status: "COMPLETED" },
       include: { unit: true },
@@ -4292,8 +4351,14 @@ export async function getEconomySummary(): Promise<{
     }),
     prisma.laundrySess.findMany({
       where: { status: { in: ["ACTIVE", "COMPLETED"] } },
-      include: { machine: true },
+      select: serviceSelect,
     }),
+    prisma.showerSess.findMany({
+      where: { status: { in: ["ACTIVE", "PAUSED", "COMPLETED"] } },
+      select: serviceSelect,
+    }),
+    // Money taken/refunded at the desk for laundry, showers and service credit
+    prisma.payment.findMany({ where: { kind: "SERVICE" }, select: { amount: true, createdAt: true } }),
   ]);
 
   // Group by month
@@ -4314,6 +4379,11 @@ export async function getEconomySummary(): Promise<{
         totalWaterUsed: 0,
         totalLaundry: 0,
         laundryCount: 0,
+        totalShowers: 0,
+        showerCount: 0,
+        servicesRevenue: 0,
+        servicesOnBill: 0,
+        servicesUnverified: 0,
       });
     }
     return monthMap.get(month)!;
@@ -4347,18 +4417,34 @@ export async function getEconomySummary(): Promise<{
     if (inv.endWaterLiters !== null && inv.startWaterLiters !== null) m.totalWaterUsed += Math.max(0, inv.endWaterLiters - inv.startWaterLiters);
   }
 
-  // Laundry revenue
-  for (const ls of laundrySessions) {
-    const date = ls.startedAt || ls.createdAt;
-    if (!date) continue;
-    const month = (date instanceof Date ? date : new Date(date)).toISOString().slice(0, 7);
-    const m = getOrCreate(month);
-    m.laundryCount++;
-    const price = ls.pricePaid ?? 0;
-    m.totalLaundry += price;
-    m.totalRevenue += price;
-    if (ls.paymentStatus === "PAID") m.totalPaid += price;
-    else m.totalUnpaid += price;
+  // Laundry and showers. Only money that isn't already in a stay's totalCost
+  // or an invoice is added to revenue: card and prepaid-balance uses here, desk
+  // payments (incl. credit sold, minus refunds) from the payments ledger below.
+  // On-account/invoiced uses were counted twice before; old PAID rows without
+  // any payment behind them (card payments off) were counted as paid.
+  for (const [rows, isLaundry] of [[laundrySessions, true], [showerSessions, false]] as const) {
+    for (const r of rows) {
+      const m = getOrCreate(r.startedAt.toISOString().slice(0, 7));
+      const price = r.pricePaid ?? 0;
+      if (isLaundry) { m.laundryCount++; m.totalLaundry += price; }
+      else { m.showerCount++; m.totalShowers += price; }
+      const channel = serviceChannel(r);
+      if (countsAsServiceRevenue(channel)) {
+        m.servicesRevenue += price;
+        m.totalRevenue += price;
+        m.totalPaid += price;
+      } else if (channel === "ACCOUNT" || channel === "INVOICED") {
+        m.servicesOnBill += price;
+      } else if (channel === "UNVERIFIED") {
+        m.servicesUnverified += price;
+      }
+    }
+  }
+  for (const p of deskServicePayments) {
+    const m = getOrCreate(p.createdAt.toISOString().slice(0, 7));
+    m.servicesRevenue += p.amount;
+    m.totalRevenue += p.amount;
+    m.totalPaid += p.amount;
   }
 
   const months = [...monthMap.values()].sort((a, b) => b.month.localeCompare(a.month));
@@ -4391,7 +4477,9 @@ export async function getEconomySummary(): Promise<{
   const laundryTotals = {
     total: laundrySessions.reduce((sum, ls) => sum + (ls.pricePaid ?? 0), 0),
     count: laundrySessions.length,
-    paid: laundrySessions.filter((ls) => ls.paymentStatus === "PAID").reduce((sum, ls) => sum + (ls.pricePaid ?? 0), 0),
+    paid: laundrySessions
+      .filter((ls) => countsAsServiceRevenue(serviceChannel(ls)))
+      .reduce((sum, ls) => sum + (ls.pricePaid ?? 0), 0),
   };
 
   return { months, unpaidSessions, unpaidInvoices, laundryTotals };
@@ -4809,192 +4897,137 @@ export async function createLaundryPayment(
     chosenProgram = { id: p.id, name: p.name, durationMinutes: p.durationMinutes, pricePerUse: p.pricePerUse };
   }
 
-  // Find guest session and check laundry credit
   const guestSession = await prisma.session.findUnique({
     where: { guestPortalToken },
   });
-  let credit = guestSession?.laundryCredit ?? 0;
   const price = chosenProgram ? chosenProgram.pricePerUse : machine.pricePerUse;
   const duration = chosenProgram ? chosenProgram.durationMinutes : machine.durationMinutes;
 
-  // PREPAID guests always use their balance for services
-  const globalSettings = await readGlobalSettings();
-  let prepaidCreditUsed = 0;
-  if (guestSession?.billingMode === "PREPAID" && guestSession.prepaidAmount) {
-    const prepaidRemaining = guestSession.prepaidAmount;
-    const shortfall = Math.max(0, price - credit);
-    prepaidCreditUsed = Math.min(prepaidRemaining, shortfall);
-    credit += prepaidCreditUsed;
-  }
+  // Credit first, then balance (PREPAID) or the stay's bill (ON_ACCOUNT),
+  // otherwise card. Without card payments the guest pays at the desk — a
+  // start is never recorded as paid when nothing was collected.
+  const settings = await readGlobalSettings();
+  const funding = planGuestFunding(price, guestSession, {
+    cardEnabled: settings.quickpay_enabled === "true",
+    servicesOnAccount: settings.postpaid_services_mode === "ON_ACCOUNT",
+    payAtDeskMessage: `Betal i receptionen — så starter vi ${machine.name} for dig.`,
+  });
+  if (funding.kind === "BLOCKED") return { ok: false, message: funding.message };
 
-  const amountToPay = Math.max(0, price - credit);
-  const creditUsed = Math.min(guestSession?.laundryCredit ?? 0, price);
-
-  // PREPAID guests pay from balance only — never card. Consistent with
-  // showers: reject when the balance (plus laundry credit) doesn't cover
-  // the price. Guests without a session can still pay by card via the
-  // public QR flow (createPublicLaundryPayment).
-  if (guestSession?.billingMode === "PREPAID" && amountToPay > 0) {
-    return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${credit.toFixed(0)} DKK` };
-  }
-
-  const endsAt = new Date();
-  endsAt.setMinutes(endsAt.getMinutes() + duration);
-
-  // If guest has enough credit, start immediately (no payment needed)
-  if (amountToPay <= 0) {
-    // Atomic conditional deduct — prevents double-spend from concurrent requests
-    if (guestSession) {
-      const res = await prisma.session.updateMany({
-        where: {
-          id: guestSession.id,
-          ...(creditUsed > 0 && { laundryCredit: { gte: creditUsed } }),
-          ...(prepaidCreditUsed > 0 && { prepaidAmount: { gte: prepaidCreditUsed } }),
-        },
-        data: {
-          ...(creditUsed > 0 && { laundryCredit: { decrement: creditUsed } }),
-          ...(prepaidCreditUsed > 0 && { prepaidAmount: { decrement: prepaidCreditUsed } }),
-        },
-      });
-      if (res.count === 0) {
-        return { ok: false, message: `Utilstrækkelig saldo — prøv igen` };
-      }
-    }
-
-    await prisma.laundrySess.create({
-      data: {
-        machineId,
-        sessionId: guestSession?.id || null,
-        guestPortalToken,
-        endsAt,
-        pricePaid: price,
-        durationMinutes: duration,
-        programId: chosenProgram?.id ?? null,
-        programName: chosenProgram?.name ?? null,
-        status: "ACTIVE",
-        // Funded from the prepaid balance → keep the marker so the deposit
-        // reconstruction and the charges list can tell it apart from card.
-        paymentStatus: prepaidCreditUsed > 0 ? "PREPAID" : "PAID",
-      },
+  if (funding.kind !== "CARD") {
+    return startFundedGuestLaundry(machine, {
+      stayId: guestSession?.id ?? null,
+      guestPortalToken,
+      funding,
+      duration,
+      program: chosenProgram,
     });
-
-    try {
-      const autoOffSec = duration * 60 + 120;
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
-    } catch (e) { logger.error("laundry", "laundry on", e); }
-    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
-    return { ok: true, message: `${machine.name}${programLabel} startet med kredit — kører i ${duration} minutter` };
   }
 
-  // POSTPAID ON_ACCOUNT: start immediately, bill at checkout/invoice
-  const servicesOnAccount =
-    guestSession?.billingMode === "POSTPAID" &&
-    globalSettings.postpaid_services_mode === "ON_ACCOUNT";
-
-  if (servicesOnAccount && guestSession) {
-    if (creditUsed > 0) {
-      await prisma.session.update({
-        where: { id: guestSession.id },
-        data: { laundryCredit: Math.max(0, (guestSession.laundryCredit ?? 0) - creditUsed) },
-      });
-    }
-    await prisma.laundrySess.create({
-      data: {
-        machineId,
-        sessionId: guestSession.id,
-        guestPortalToken,
-        endsAt,
-        pricePaid: price,
-        durationMinutes: duration,
-        programId: chosenProgram?.id ?? null,
-        programName: chosenProgram?.name ?? null,
-        status: "ACTIVE",
-        paymentStatus: "ON_ACCOUNT",
-      },
-    });
-    try {
-      const autoOffSec = duration * 60 + 120;
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
-    } catch (e) { logger.error("laundry", "laundry on (on_account)", e); }
-    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
-    return { ok: true, message: `${machine.name}${programLabel} startet — ${amountToPay.toFixed(0)} DKK på regning` };
-  }
-
-  // Create laundry session in PENDING state (waiting for payment)
+  // Card: PENDING until the QuickPay callback activates it. The credit part is
+  // taken on activation, so an abandoned payment doesn't eat the guest's credit.
+  const endsAt = new Date(Date.now() + duration * 60_000);
   const laundrySess = await prisma.laundrySess.create({
     data: {
       machineId,
       sessionId: guestSession?.id || null,
       guestPortalToken,
       endsAt,
-      pricePaid: price,
+      pricePaid: funding.amount,
+      creditUsed: funding.creditUsed,
       durationMinutes: duration,
       programId: chosenProgram?.id ?? null,
       programName: chosenProgram?.name ?? null,
       status: "PENDING",
       paymentStatus: "UNPAID",
+      paymentMethod: "QUICKPAY",
       // The QuickPay link is for price minus laundry credit; the callback
       // validates the paid amount against this, not the full price.
-      chargedAmount: amountToPay,
+      chargedAmount: funding.amount,
     },
   });
 
-  // Create QuickPay payment for remaining amount
-  const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
-
-  if (settings.quickpay_enabled !== "true") {
-    // No payment configured — start directly
-    if (guestSession && creditUsed > 0) {
-      await prisma.session.update({
-        where: { id: guestSession.id },
-        data: { laundryCredit: Math.max(0, credit - creditUsed) },
-      });
-    }
-    await prisma.laundrySess.update({
-      where: { id: laundrySess.id },
-      data: { status: "ACTIVE", paymentStatus: "PAID" },
-    });
-    try {
-      const autoOffSec = duration * 60 + 120;
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
-    } catch (e) { logger.error("laundry", "laundry on", e); }
-    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
-    return { ok: true, message: `${machine.name}${programLabel} startet — kører i ${duration} minutter` };
-  }
-
   try {
     const { createPaymentLink, generateOrderId } = await import("./quickpay");
     const orderId = generateOrderId("L", laundrySess.id);
 
     const { paymentId, paymentLink } = await createPaymentLink({
       orderId,
-      amount: amountToPay,
+      amount: funding.amount,
       currency: settings.currency || "DKK",
       continueUrl: `${baseUrl}/guest/${guestPortalToken}?laundry_paid=1`,
       cancelUrl: `${baseUrl}/guest/${guestPortalToken}?laundry_cancelled=1`,
       callbackUrl: `${baseUrl}/api/quickpay/callback`,
     });
 
-    // Store credit info so callback can deduct it
     await prisma.laundrySess.update({
       where: { id: laundrySess.id },
       data: { paymentId: String(paymentId) },
     });
 
-    // Deduct credit now (it will be used regardless of payment)
-    if (guestSession && creditUsed > 0) {
-      await prisma.session.update({
-        where: { id: guestSession.id },
-        data: { laundryCredit: Math.max(0, credit - creditUsed) },
-      });
-    }
-
-    return { ok: true, message: `Betaler ${amountToPay.toFixed(0)} DKK (${creditUsed.toFixed(0)} DKK kredit brugt)...`, paymentLink };
+    const creditLabel = funding.creditUsed > 0 ? ` (${funding.creditUsed.toFixed(0)} DKK kredit brugt)` : "";
+    return { ok: true, message: `Betaler ${funding.amount.toFixed(0)} DKK${creditLabel}...`, paymentLink };
   } catch (e) {
     await prisma.laundrySess.delete({ where: { id: laundrySess.id } });
     return { ok: false, message: `Betaling kunne ikke oprettes: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+/**
+ * Start a guest laundry use that needs no card payment (credit, balance, on
+ * the stay's bill, or a 0 DKK program). The relay is switched on first: a
+ * machine that doesn't start must not cost anything. Money is then drawn and
+ * the row created in one transaction; if that fails, the relay goes off again.
+ */
+async function startFundedGuestLaundry(
+  machine: { id: number; name: string; source: string; switchEntityId: string | null; mqttPrefix: string | null; mqttComponent: string | null },
+  p: {
+    stayId: number | null;
+    guestPortalToken: string;
+    funding: Exclude<FundedGuestFunding, { kind: "CARD" }>;
+    duration: number;
+    program: { id: number; name: string } | null;
+  },
+): Promise<{ ok: boolean; message: string }> {
+  const ep = hardware.switchRowEp(machine);
+  const programLabel = p.program ? ` (${p.program.name})` : "";
+  try {
+    await hardware.setSwitchTimed(ep, p.duration * 60 + 120);
+  } catch (e) {
+    logger.error("laundry", `${machine.name}: kunne ikke tænde ved gæstestart`, e);
+    return { ok: false, message: `${machine.name} kunne ikke startes — kontakt receptionen. Der er ikke trukket noget.` };
+  }
+
+  const f = p.funding;
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (p.stayId) await drawStayFunds(tx, p.stayId, f);
+      const row = await tx.laundrySess.create({
+        data: {
+          machineId: machine.id,
+          sessionId: p.stayId,
+          guestPortalToken: p.guestPortalToken,
+          endsAt: new Date(Date.now() + p.duration * 60_000),
+          pricePaid: f.amount,
+          creditUsed: f.creditUsed,
+          durationMinutes: p.duration,
+          programId: p.program?.id ?? null,
+          programName: p.program?.name ?? null,
+          status: "ACTIVE",
+          ...fundingPaymentFields(f),
+        },
+      });
+      if (p.stayId) await logCreditUse(tx, p.stayId, f.creditUsed, `laundry:${row.id}`, `${machine.name}${programLabel}`);
+    });
+  } catch (e) {
+    try { await hardware.setSwitch(ep, false); } catch { /* best effort — the device timer still ends it */ }
+    if (e instanceof InsufficientFunds) return { ok: false, message: "Saldoen eller kreditten slår ikke til længere — prøv igen" };
+    logger.error("laundry", `${machine.name}: gæstestart kunne ikke gemmes`, e);
+    return { ok: false, message: "Maskinen kunne ikke startes — prøv igen" };
+  }
+
+  return { ok: true, message: `${machine.name}${programLabel} startet — kører i ${p.duration} minutter (${fundingNote(f)})` };
 }
 
 // Start a laundry machine after payment is confirmed (called from callback)
@@ -5020,7 +5053,7 @@ async function activateLaundrySessionInternal(laundrySessionId: number) {
       where: { id: laundrySessionId },
       // startedAt = activation, so the "no power within 10 min" auto-cancel
       // doesn't count the time the guest spent on the payment page.
-      data: { status: "ACTIVE", paymentStatus: "PAID", endsAt, startedAt: new Date() },
+      data: { status: "ACTIVE", paymentStatus: "PAID", paymentMethod: "QUICKPAY", endsAt, startedAt: new Date() },
     });
     try {
       await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), maxHours * 3600);
@@ -5037,14 +5070,38 @@ async function activateLaundrySessionInternal(laundrySessionId: number) {
 
   await prisma.laundrySess.update({
     where: { id: laundrySessionId },
-    data: { status: "ACTIVE", paymentStatus: "PAID", endsAt },
+    data: { status: "ACTIVE", paymentStatus: "PAID", paymentMethod: "QUICKPAY", endsAt },
   });
+  await takeCreditOnCardActivation("laundry", sess.id, sess.sessionId, sess.creditUsed, sess.machine.name);
 
   try {
     const autoOffSec = duration * 60 + 120;
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), autoOffSec);
   } catch (e) {
     logger.error("laundry", "Failed to turn on laundry machine", e);
+  }
+}
+
+/**
+ * A card start that also used service credit: the credit is taken once the
+ * card payment is through, not when the link was made, so an abandoned
+ * payment doesn't cost the guest their credit.
+ */
+async function takeCreditOnCardActivation(
+  kind: "laundry" | "shower",
+  rowId: number,
+  stayId: number | null,
+  creditUsed: number,
+  label: string,
+) {
+  if (!stayId || creditUsed <= 0) return;
+  try {
+    await prisma.$transaction(async (tx) => {
+      await drawStayFunds(tx, stayId, { kind: "CREDIT", creditUsed, amount: 0 });
+      await logCreditUse(tx, stayId, creditUsed, `${kind}:${rowId}`, label);
+    });
+  } catch (e) {
+    logger.warn(kind, `${kind}:${rowId}: ${creditUsed} DKK kredit kunne ikke trækkes ved kortaktivering`, e instanceof Error ? e.message : e);
   }
 }
 
@@ -5186,171 +5243,80 @@ async function checkLaundryMachinesInternal() {
 }
 
 // ──────────────────────────────────────────────
-// SERVICES — Admin overview & control
+// SERVICES — Admin control (overview, "Start for gæst", refunds and history
+// live in service-actions.ts)
 // ──────────────────────────────────────────────
-export async function getServiceStatus() {
-  await requireAuth();
-  // Auto-expire stale PENDING sessions (older than 5 minutes)
-  const pendingCutoff = new Date(Date.now() - PENDING_PAYMENT_TTL_MS);
-  await prisma.laundrySess.updateMany({
-    where: { status: "PENDING", createdAt: { lte: pendingCutoff } },
-    data: { status: "CANCELLED" },
-  });
-
-  const machines = await prisma.laundryMachine.findMany({
-    include: {
-      sessions: {
-        where: { status: { in: ["ACTIVE", "PENDING"] } },
-        orderBy: { startedAt: "desc" },
-        take: 1,
-        include: { session: { select: { guestName: true, unit: { select: { name: true } } } } },
-      },
-    },
-    orderBy: { name: "asc" },
-  });
-
-  return machines.map((m) => {
-    const active = m.sessions[0];
-    const now = new Date();
-    const isRunning = active?.status === "ACTIVE" && new Date(active.endsAt) > now;
-    const minutesLeft = isRunning ? Math.max(0, Math.round((new Date(active.endsAt).getTime() - now.getTime()) / 60000)) : 0;
-
-    return {
-      id: m.id,
-      name: m.name,
-      switchEntityId: m.switchEntityId,
-      durationMinutes: m.durationMinutes,
-      pricePerUse: m.pricePerUse,
-      enabled: m.enabled,
-      isRunning,
-      isPending: active?.status === "PENDING",
-      minutesLeft,
-      endsAt: isRunning ? active.endsAt.toISOString() : null,
-      activeSession: active ? {
-        id: active.id,
-        guestName: active.session?.guestName || null,
-        unitName: active.session?.unit?.name || null,
-        pricePaid: active.pricePaid,
-        paymentStatus: active.paymentStatus,
-        startedAt: active.startedAt.toISOString(),
-      } : null,
-    };
-  });
-}
-
-export async function adminStartLaundry(machineId: number, durationMinutes: number) {
-  await requireAuth();
-  const machine = await prisma.laundryMachine.findUnique({ where: { id: machineId } });
-  if (!machine) return { ok: false, message: "Maskine ikke fundet" };
-
-  // Mark any expired active session as completed
-  await prisma.laundrySess.updateMany({
-    where: { machineId, status: "ACTIVE", endsAt: { lte: new Date() } },
-    data: { status: "COMPLETED" },
-  });
-
-  // Check if already running
-  const running = await prisma.laundrySess.findFirst({
-    where: { machineId, status: "ACTIVE", endsAt: { gt: new Date() } },
-  });
-  if (running) return { ok: false, message: "Maskinen kører allerede" };
-
-  const endsAt = new Date();
-  endsAt.setMinutes(endsAt.getMinutes() + durationMinutes);
-
-  await prisma.laundrySess.create({
-    data: {
-      machineId,
-      endsAt,
-      status: "ACTIVE",
-      pricePaid: 0,
-      paymentStatus: "PAID",
-    },
-  });
-
-  try {
-    const autoOffSec = durationMinutes * 60 + 120;
-    await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
-  } catch (e) {
-    return { ok: false, message: `Kunne ikke tænde: ${e instanceof Error ? e.message : String(e)}` };
+/**
+ * "Forlæng" from the desk. A fixed wash runs on the Shelly's own auto-off
+ * timer, so moving endsAt alone cut the power at the original time while the
+ * card still said "Kører" — re-arm the device first, and only extend if it
+ * confirmed. Free of charge (a courtesy, like the old button).
+ */
+export async function adminExtendLaundry(laundrySessionId: number, extraMinutes: number) {
+  const auth = await requireAuth();
+  const extra = Math.round(Number(extraMinutes));
+  if (!Number.isFinite(extra) || extra < 1 || extra > 240) return { ok: false, message: "Ugyldigt antal minutter" };
+  const sess = await prisma.laundrySess.findUnique({ where: { id: laundrySessionId }, include: { machine: true } });
+  if (!sess || sess.status !== "ACTIVE") return { ok: false, message: "Ingen aktiv session" };
+  if (sess.billingMode === "METERED") {
+    return { ok: false, message: "En målt vask kører til maskinen er færdig — den skal ikke forlænges" };
   }
 
-  return { ok: true, message: `Startet i ${durationMinutes} minutter` };
-}
+  // From now if the end has already passed (the sweep may not have run yet).
+  const base = Math.max(Date.now(), sess.endsAt.getTime());
+  const newEndsAt = new Date(base + extra * 60_000);
+  const remainingSec = Math.ceil((newEndsAt.getTime() - Date.now()) / 1000);
+  try {
+    await hardware.setSwitchTimed(hardware.switchRowEp(sess.machine), remainingSec + 120);
+  } catch (e) {
+    return {
+      ok: false,
+      message: `Kunne ikke forlænge — ${sess.machine.name} svarede ikke (${e instanceof Error ? e.message : "offline?"}). Sluttiden er uændret.`,
+    };
+  }
 
-export async function adminExtendLaundry(laundrySessionId: number, extraMinutes: number) {
-  await requireAuth();
-  const sess = await prisma.laundrySess.findUnique({ where: { id: laundrySessionId } });
-  if (!sess || sess.status !== "ACTIVE") return { ok: false, message: "Ingen aktiv session" };
-
-  const newEndsAt = new Date(sess.endsAt);
-  newEndsAt.setMinutes(newEndsAt.getMinutes() + extraMinutes);
-
-  await prisma.laundrySess.update({
-    where: { id: laundrySessionId },
-    data: { endsAt: newEndsAt },
+  const res = await prisma.laundrySess.updateMany({
+    where: { id: laundrySessionId, status: "ACTIVE" },
+    data: { endsAt: newEndsAt, durationMinutes: sess.durationMinutes + extra },
   });
-
-  return { ok: true, message: `Forlænget med ${extraMinutes} minutter` };
+  if (res.count === 0) return { ok: false, message: "Vasken er afsluttet imens" };
+  logger.info("laundry", `${sess.machine.name} (laundry:${sess.id}) forlænget ${extra} min af ${auth.username ?? "?"}`);
+  return { ok: true, message: `Forlænget med ${extra} minutter` };
 }
 
 export async function adminStopLaundry(laundrySessionId: number) {
-  await requireAuth();
+  const auth = await requireAuth();
   const sess = await prisma.laundrySess.findUnique({
     where: { id: laundrySessionId },
     include: { machine: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
 
-  await prisma.laundrySess.update({
-    where: { id: laundrySessionId },
+  // A metered wash is settled on completion (final price, refund of the rest).
+  if (sess.billingMode === "METERED" && sess.status === "ACTIVE") {
+    await completeMeteredSession(sess);
+    logger.info("laundry", `${sess.machine.name} (laundry:${sess.id}) stoppet af ${auth.username ?? "?"}`);
+    return { ok: true, message: "Maskine stoppet — forbruget er afregnet" };
+  }
+  // Only a running wash — never turn a cancelled (refunded) one into COMPLETED.
+  const res = await prisma.laundrySess.updateMany({
+    where: { id: laundrySessionId, status: "ACTIVE" },
     data: { status: "COMPLETED", endsAt: new Date() },
   });
+  if (res.count === 0) return { ok: false, message: "Maskinen kører ikke" };
+  logger.info("laundry", `${sess.machine.name} (laundry:${sess.id}) stoppet af ${auth.username ?? "?"}`);
 
   try {
     await hardware.setSwitch(hardware.switchRowEp(sess.machine), false);
   } catch (e) {
-    return { ok: false, message: `Stoppet i DB men kunne ikke slukke relæ: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, message: `Stoppet — men relæet svarede ikke, sluk manuelt (${e instanceof Error ? e.message : String(e)})` };
   }
 
   return { ok: true, message: "Maskine stoppet" };
 }
 
-// ──────────────────────────────────────────────
-// LAUNDRY CREDIT — Admin adds credit to booking
-// ──────────────────────────────────────────────
-export async function addLaundryCredit(sessionId: number, amount: number) {
-  await requireAuth();
-  if (amount <= 0) return { ok: false, message: "Beløb skal være positivt" };
-  const session = await prisma.session.findUnique({ where: { id: sessionId } });
-  if (!session) return { ok: false, message: "Booking ikke fundet" };
-
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { laundryCredit: (session.laundryCredit ?? 0) + amount },
-  });
-
-  return { ok: true, message: `${amount.toFixed(2)} DKK kredit tilføjet` };
-}
-
-export async function removeLaundryCredit(sessionId: number, amount: number) {
-  "use server";
-  await requireAuth();
-  if (amount <= 0) return { ok: false, message: "Beløb skal være positivt" };
-  const session = await prisma.session.findUnique({ where: { id: sessionId } });
-  if (!session) return { ok: false, message: "Booking ikke fundet" };
-
-  const currentCredit = session.laundryCredit ?? 0;
-  const newCredit = Math.max(0, currentCredit - amount);
-
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { laundryCredit: newCredit },
-  });
-
-  const removed = currentCredit - newCredit;
-  return { ok: true, message: `${removed.toFixed(2)} DKK kredit fjernet` };
-}
+// Service credit (laundry and showers) is added/removed with a trace in
+// service-actions.ts (addServiceCredit / removeServiceCredit).
 
 export async function getSessionLaundryCredit(sessionId: number): Promise<number> {
   await requireAuth();
@@ -5449,6 +5415,8 @@ export async function getPublicLaundryGroup(token: string) {
   return {
     id: group.id,
     name: group.name,
+    // QR guests have no stay to charge: without card payments they pay at the desk
+    cardPayment: (await readGlobalSettings()).quickpay_enabled === "true",
     machines: group.machines.map((m) => {
       const active = m.sessions[0];
       const isRunning = active && new Date(active.endsAt) > now;
@@ -5521,6 +5489,7 @@ export async function getPublicLaundryMachine(machineId: number) {
       durationMinutes: p.durationMinutes,
       pricePerUse: p.pricePerUse,
     })),
+    cardPayment: (await readGlobalSettings()).quickpay_enabled === "true",
   };
 }
 
@@ -5590,26 +5559,21 @@ export async function createPublicLaundryPayment(
   const endsAt = new Date();
   endsAt.setMinutes(endsAt.getMinutes() + duration);
 
-  if (settings.quickpay_enabled !== "true") {
-    await prisma.laundrySess.create({
-      data: {
-        machineId,
-        guestPortalToken: `qr:${returnToken}`,
-        endsAt,
-        pricePaid: price,
-        durationMinutes: duration,
-        programId: chosenProgram?.id ?? null,
-        programName: chosenProgram?.name ?? null,
-        status: "ACTIVE",
-        paymentStatus: "PAID",
-      },
+  // No stay behind a QR scan: card, or pay at the desk.
+  const funding = planGuestFunding(price, null, {
+    cardEnabled: settings.quickpay_enabled === "true",
+    servicesOnAccount: false,
+    payAtDeskMessage: `Betal i receptionen — så starter vi ${machine.name} for dig.`,
+  });
+  if (funding.kind === "BLOCKED") return { ok: false, message: funding.message };
+  if (funding.kind !== "CARD") {
+    return startFundedGuestLaundry(machine, {
+      stayId: null,
+      guestPortalToken: `qr:${returnToken}`,
+      funding,
+      duration,
+      program: chosenProgram,
     });
-    try {
-      const autoOffSec = duration * 60 + 120;
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), autoOffSec);
-    } catch (e) { logger.error("laundry", "laundry on", e); }
-    const programLabel = chosenProgram ? ` (${chosenProgram.name})` : "";
-    return { ok: true, message: `${machine.name}${programLabel} startet — kører i ${duration} minutter` };
   }
 
   const laundrySess = await prisma.laundrySess.create({
@@ -5623,6 +5587,7 @@ export async function createPublicLaundryPayment(
       programName: chosenProgram?.name ?? null,
       status: "PENDING",
       paymentStatus: "UNPAID",
+      paymentMethod: "QUICKPAY",
     },
   });
 
@@ -5664,25 +5629,9 @@ async function createMeteredLaundryPayment(
   const maxHours = 4;
   const endsAt = new Date(Date.now() + maxHours * 60 * 60 * 1000);
 
+  // Without card payments a QR guest has no way to pay — never start for free.
   if (settings.quickpay_enabled !== "true") {
-    const sess = await prisma.laundrySess.create({
-      data: {
-        machineId: machine.id,
-        guestPortalToken: `qr:${returnToken}`,
-        accessToken,
-        endsAt,
-        pricePaid: 0,
-        billingMode: "METERED",
-        pricePerMinute: machine.pricePerMinute,
-        reservedAmount: machine.maxReservationDKK,
-        status: "ACTIVE",
-        paymentStatus: "PAID",
-      },
-    });
-    try {
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
-    } catch (e) { logger.error("laundry", "metered laundry on", e); }
-    return { ok: true, message: `${machine.name} startet — strømmåler overvåger forbruget`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
+    return { ok: false, message: `Betal i receptionen — så starter vi ${machine.name} for dig.` };
   }
 
   const sess = await prisma.laundrySess.create({
@@ -5697,6 +5646,7 @@ async function createMeteredLaundryPayment(
       reservedAmount: machine.maxReservationDKK,
       status: "PENDING",
       paymentStatus: "UNPAID",
+      paymentMethod: "QUICKPAY",
     },
   });
 
@@ -5739,24 +5689,43 @@ async function createMeteredLaundryPaymentPortal(
   const endsAt = new Date(Date.now() + maxHours * 60 * 60 * 1000);
 
   const guestSession = await prisma.session.findUnique({ where: { guestPortalToken } });
+  const stay = guestSession?.status === "ACTIVE" ? guestSession : null;
 
-  // PREPAID guests reserve from balance instead of QuickPay pre-auth.
-  // The reservation amount is refunded (partially) in completeMeteredSession.
-  if (guestSession?.billingMode === "PREPAID") {
-    const reserve = machine.maxReservationDKK;
-    const remaining = guestSession.prepaidAmount ?? 0;
+  // PREPAID guests reserve from balance instead of QuickPay pre-auth; a
+  // POSTPAID stay with services on account gets the final price on its bill.
+  // The reservation is refunded (partially) in completeMeteredSession.
+  const reserve = machine.maxReservationDKK;
+  const viaStay: "PREPAID" | "ON_ACCOUNT" | null =
+    stay?.billingMode === "PREPAID" ? "PREPAID"
+      : stay && settings.postpaid_services_mode === "ON_ACCOUNT" ? "ON_ACCOUNT"
+      : null;
+  if (stay && viaStay) {
+    const remaining = stay.prepaidAmount ?? 0;
+    if (viaStay === "PREPAID" && remaining < reserve) {
+      return { ok: false, message: `Utilstrækkelig saldo — behøver ${reserve.toFixed(0)} DKK reservation, har ${remaining.toFixed(0)} DKK` };
+    }
+    // Relay first — a machine that doesn't start must not hold the guest's money.
+    const ep = hardware.switchRowEp(machine);
+    try {
+      await hardware.setSwitchTimed(ep, maxHours * 3600);
+    } catch (e) {
+      logger.error("laundry", `${machine.name}: kunne ikke tænde (målt vask)`, e);
+      return { ok: false, message: `${machine.name} kunne ikke startes — kontakt receptionen. Der er ikke trukket noget.` };
+    }
     // Reservation and session row in one transaction: a failed create must
     // not leave the balance decremented with nothing to refund it.
     const sess = await prisma.$transaction(async (tx) => {
-      const res = await tx.session.updateMany({
-        where: { id: guestSession.id, prepaidAmount: { gte: reserve } },
-        data: { prepaidAmount: { decrement: reserve } },
-      });
-      if (res.count === 0) return null;
+      if (viaStay === "PREPAID") {
+        const res = await tx.session.updateMany({
+          where: { id: stay.id, prepaidAmount: { gte: reserve } },
+          data: { prepaidAmount: { decrement: reserve } },
+        });
+        if (res.count === 0) return null;
+      }
       return tx.laundrySess.create({
         data: {
           machineId: machine.id,
-          sessionId: guestSession.id,
+          sessionId: stay.id,
           guestPortalToken,
           accessToken,
           endsAt,
@@ -5765,39 +5734,21 @@ async function createMeteredLaundryPaymentPortal(
           pricePerMinute: machine.pricePerMinute,
           reservedAmount: reserve,
           status: "ACTIVE",
-          paymentStatus: "PREPAID",
+          paymentStatus: viaStay,
+          paymentMethod: viaStay === "PREPAID" ? "BALANCE" : "ACCOUNT",
         },
       });
     });
     if (!sess) {
+      try { await hardware.setSwitch(ep, false); } catch { /* device timer still ends it */ }
       return { ok: false, message: `Utilstrækkelig saldo — behøver ${reserve.toFixed(0)} DKK reservation, har ${remaining.toFixed(0)} DKK` };
     }
-    try {
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
-    } catch (e) { logger.error("laundry", "metered laundry on (prepaid)", e); }
-    return { ok: true, message: `${machine.name} startet — ${reserve.toFixed(0)} DKK reserveret fra saldo`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
+    const how = viaStay === "PREPAID" ? `${reserve.toFixed(0)} DKK reserveret fra saldo` : "prisen skrives på regningen";
+    return { ok: true, message: `${machine.name} startet — ${how}`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
   }
 
   if (settings.quickpay_enabled !== "true") {
-    const sess = await prisma.laundrySess.create({
-      data: {
-        machineId: machine.id,
-        sessionId: guestSession?.id ?? null,
-        guestPortalToken,
-        accessToken,
-        endsAt,
-        pricePaid: 0,
-        billingMode: "METERED",
-        pricePerMinute: machine.pricePerMinute,
-        reservedAmount: machine.maxReservationDKK,
-        status: "ACTIVE",
-        paymentStatus: "PAID",
-      },
-    });
-    try {
-      await hardware.setSwitchTimed(hardware.switchRowEp(machine), maxHours * 3600);
-    } catch (e) { logger.error("laundry", "metered laundry on", e); }
-    return { ok: true, message: `${machine.name} startet — strømmåler overvåger forbruget`, paymentLink: `${baseUrl}/laundry/meter/${sess.accessToken}` };
+    return { ok: false, message: `Betal i receptionen — så starter vi ${machine.name} for dig.` };
   }
 
   const sess = await prisma.laundrySess.create({
@@ -5813,6 +5764,7 @@ async function createMeteredLaundryPaymentPortal(
       reservedAmount: machine.maxReservationDKK,
       status: "PENDING",
       paymentStatus: "UNPAID",
+      paymentMethod: "QUICKPAY",
     },
   });
 
@@ -5936,58 +5888,6 @@ export async function deleteShower(id: number) {
   revalidatePath("/admin/services");
 }
 
-// Admin view of all showers with status
-export async function getShowerStatus() {
-  await requireAuth();
-  await expireStaleShowerPendings();
-  const showers = await prisma.shower.findMany({
-    orderBy: { name: "asc" },
-    include: {
-      sessions: {
-        where: { status: { in: ["ACTIVE", "PAUSED", "PENDING"] } },
-        take: 1,
-        orderBy: { startedAt: "desc" },
-      },
-    },
-  });
-
-  const now = new Date();
-  return showers.map((s) => {
-    const active = s.sessions[0];
-    const isRunning = !!active && active.status === "ACTIVE" && new Date(active.endsAt) > now;
-    const isPaused = !!active && active.status === "PAUSED";
-    const isPending = !!active && active.status === "PENDING";
-    const secondsLeft = isRunning
-      ? Math.max(0, Math.ceil((new Date(active.endsAt).getTime() - now.getTime()) / 1000))
-      : isPaused && active.pauseRemainingMs
-      ? Math.max(0, Math.ceil(active.pauseRemainingMs / 1000))
-      : 0;
-
-    return {
-      id: s.id,
-      name: s.name,
-      location: s.location,
-      switchEntityId: s.switchEntityId,
-      pricePerMinute: s.pricePerMinute,
-      minMinutes: s.minMinutes,
-      maxMinutes: s.maxMinutes,
-      enabled: s.enabled,
-      code: s.code,
-      isRunning,
-      isPaused,
-      isPending,
-      secondsLeft,
-      activeSession: active ? {
-        id: active.id,
-        status: active.status,
-        minutesPaid: active.minutesPaid,
-        pricePaid: active.pricePaid,
-        endsAt: active.endsAt.toISOString(),
-      } : null,
-    };
-  });
-}
-
 // ── Public lookup ─────────────────────────────────────────────
 export async function getPublicShower(showerId: number) {
   await expireStaleShowerPendings();
@@ -6018,6 +5918,8 @@ export async function getPublicShower(showerId: number) {
     minMinutes: shower.minMinutes,
     maxMinutes: shower.maxMinutes,
     available: !isBusy,
+    // Without card payments only a guest with a stay (portal link) can start one
+    cardPayment: (await readGlobalSettings()).quickpay_enabled === "true",
   };
 }
 
@@ -6139,72 +6041,65 @@ export async function createShowerPayment(
   const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
 
-  // POSTPAID ON_ACCOUNT: start immediately, bill at checkout/invoice
-  const servicesOnAccount =
-    guestSession?.billingMode === "POSTPAID" &&
-    settings.postpaid_services_mode === "ON_ACCOUNT";
+  // Same rules as laundry: credit, then balance / the stay's bill, else card —
+  // and without card payments the guest pays at the desk instead.
+  const funding = planGuestFunding(price, guestSession, {
+    cardEnabled: settings.quickpay_enabled === "true",
+    servicesOnAccount: settings.postpaid_services_mode === "ON_ACCOUNT",
+    payAtDeskMessage: `Betal i receptionen — så starter vi ${shower.name} for dig.`,
+  });
+  if (funding.kind === "BLOCKED") return { ok: false, message: funding.message };
 
-  if (servicesOnAccount && guestSession) {
-    const sess = await prisma.showerSess.create({
-      data: {
-        showerId,
-        sessionId: guestSession.id,
-        endsAt,
-        status: "PENDING",
-        pricePaid: price,
-        minutesPaid: mins,
-        pendingMinutes: mins,
-        paymentStatus: "ON_ACCOUNT",
-      },
-    });
-    await activateShowerSessionInternal(sess.id);
-    return { ok: true, message: `Bad startet i ${mins} min — ${price.toFixed(0)} DKK på regning`, showerSessionId: sess.id, accessToken: sess.accessToken };
+  // The valve only opens after the warm-up, so a dead Shelly would otherwise
+  // be found after the money is taken — refuse up front when it's known offline.
+  if ((await serviceDeviceOnline(shower)) === false) {
+    return { ok: false, message: `${shower.name} er ude af drift lige nu — kontakt receptionen.` };
   }
 
-  // PREPAID guests pay from balance — atomic conditional decrement
-  if (guestSession?.billingMode === "PREPAID") {
-    const remaining = guestSession.prepaidAmount ?? 0;
-    const res = await prisma.session.updateMany({
-      where: { id: guestSession.id, prepaidAmount: { gte: price } },
-      data: { prepaidAmount: { decrement: price } },
-    });
-    if (res.count === 0) {
-      return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${remaining.toFixed(0)} DKK` };
+  if (funding.kind !== "CARD") {
+    let sess;
+    try {
+      sess = await prisma.$transaction(async (tx) => {
+        if (guestSession) await drawStayFunds(tx, guestSession.id, funding);
+        const s = await tx.showerSess.create({
+          data: {
+            showerId,
+            sessionId: guestSession?.id ?? null,
+            endsAt,
+            status: "PENDING",
+            pricePaid: funding.amount,
+            creditUsed: funding.creditUsed,
+            minutesPaid: mins,
+            pendingMinutes: mins,
+            ...fundingPaymentFields(funding),
+          },
+        });
+        if (guestSession) await logCreditUse(tx, guestSession.id, funding.creditUsed, `shower:${s.id}`, shower.name);
+        return s;
+      });
+    } catch (e) {
+      if (e instanceof InsufficientFunds) return { ok: false, message: "Saldoen eller kreditten slår ikke til længere — prøv igen" };
+      throw e;
     }
-    const sess = await prisma.showerSess.create({
-      data: {
-        showerId,
-        sessionId: guestSession.id,
-        endsAt,
-        status: "PENDING",
-        pricePaid: price,
-        minutesPaid: mins,
-        pendingMinutes: mins,
-        paymentStatus: "PREPAID",
-      },
-    });
     await activateShowerSessionInternal(sess.id);
-    return { ok: true, message: `Bad startet i ${mins} min (trukket fra saldo)`, showerSessionId: sess.id, accessToken: sess.accessToken };
+    return { ok: true, message: `Bad startet i ${mins} min (${fundingNote(funding)})`, showerSessionId: sess.id, accessToken: sess.accessToken };
   }
 
+  // Card: the credit part is taken when the payment comes through.
   const pending = await prisma.showerSess.create({
     data: {
       showerId,
       sessionId: guestSession?.id ?? null,
       endsAt,
       status: "PENDING",
-      pricePaid: 0,
+      pricePaid: funding.amount,
+      creditUsed: funding.creditUsed,
       minutesPaid: 0,
       pendingMinutes: mins,
       paymentStatus: "UNPAID",
+      paymentMethod: "QUICKPAY",
     },
   });
-
-  // No QuickPay configured → start immediately (dev / free mode)
-  if (settings.quickpay_enabled !== "true") {
-    await activateShowerSessionInternal(pending.id);
-    return { ok: true, message: `Bad startet i ${mins} minutter`, showerSessionId: pending.id, accessToken: pending.accessToken };
-  }
 
   try {
     const { createPaymentLink, generateOrderId } = await import("./quickpay");
@@ -6212,7 +6107,7 @@ export async function createShowerPayment(
 
     const { paymentId, paymentLink } = await createPaymentLink({
       orderId,
-      amount: price,
+      amount: funding.amount,
       currency: settings.currency || "DKK",
       continueUrl: `${baseUrl}/shower/active/${pending.id}?token=${pending.accessToken}&paid=1`,
       cancelUrl: `${baseUrl}/shower/${showerId}?cancelled=1`,
@@ -6232,8 +6127,9 @@ export async function createShowerPayment(
 }
 
 /**
- * Called when the QuickPay callback accepts the payment, OR when QuickPay
- * is disabled and we start immediately. Opens the valve + flips status.
+ * Called when the QuickPay callback accepts the payment, or right after a
+ * start paid from credit / balance / the stay's bill. Flips the status; the
+ * client opens the valve after the warm-up.
  */
 /** Auth-guarded entry point (server action). Cron/webhooks call it inside
  *  runWithApiAuth; in-module callers use activateShowerSessionInternal directly. */
@@ -6253,6 +6149,7 @@ async function activateShowerSessionInternal(pendingId: number) {
   const mins = sess.pendingMinutes ?? 0;
   // Add warmup time so purchased minutes start AFTER the 10s warmup
   const endsAt = new Date(Date.now() + SHOWER_WARMUP_MS + mins * 60 * 1000);
+  const fromCard = sess.paymentStatus === "UNPAID";
 
   await prisma.showerSess.update({
     where: { id: pendingId },
@@ -6260,14 +6157,18 @@ async function activateShowerSessionInternal(pendingId: number) {
       status: "ACTIVE",
       // Card payments arrive as UNPAID → PAID; ON_ACCOUNT / PREPAID rows keep
       // their marker, otherwise they'd never be billed (or double-counted).
-      paymentStatus: sess.paymentStatus === "UNPAID" ? "PAID" : sess.paymentStatus,
+      paymentStatus: fromCard ? "PAID" : sess.paymentStatus,
+      ...(fromCard && { paymentMethod: "QUICKPAY" }),
       startedAt: new Date(),
       endsAt,
-      pricePaid: +(mins * sess.shower.pricePerMinute).toFixed(2),
+      // pricePaid is set when the row is created (card: what the link was
+      // for, net of credit). Rows from before that kept 0 here.
+      pricePaid: sess.pricePaid > 0 || sess.creditUsed > 0 ? sess.pricePaid : +(mins * sess.shower.pricePerMinute).toFixed(2),
       minutesPaid: mins,
       pendingMinutes: null,
     },
   });
+  if (fromCard) await takeCreditOnCardActivation("shower", sess.id, sess.sessionId, sess.creditUsed, sess.shower.name);
 
   // Relay is NOT turned on here — client calls startShowerRelay() after the 10s warmup countdown
 }
@@ -6290,7 +6191,18 @@ export async function startShowerRelay(showerSessionId: number, accessToken?: st
     await hardware.setSwitchTimed(hardware.switchRowEp(sess.shower), remainingSec + 60);
   } catch (e) {
     logger.error("shower", "Shower relay start failed", e);
-    return { ok: false, message: "Kunne ikke tænde bruser" };
+    // No water, no charge: cancel and put the money back where it came from.
+    await cancelAndRefundService("SHOWER", sess.id, {
+      reason: "Bruseren kunne ikke tændes (relæet svarede ikke)",
+      by: null,
+      auto: true,
+    });
+    return {
+      ok: false,
+      message: serviceChannel(sess) === "CARD"
+        ? "Bruseren kunne ikke tændes — kontakt receptionen for at få pengene tilbage."
+        : "Bruseren kunne ikke tændes — der er ikke trukket noget. Kontakt receptionen.",
+    };
   }
 
   return { ok: true, message: "Bruser startet" };
@@ -6307,7 +6219,7 @@ export async function applyShowerExtension(...args: Parameters<typeof applyShowe
   return applyShowerExtensionInternal(...args);
 }
 
-async function applyShowerExtensionInternal(showerSessionId: number): Promise<boolean> {
+async function applyShowerExtensionInternal(showerSessionId: number, opts: { viaCredit?: number } = {}): Promise<boolean> {
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
@@ -6334,7 +6246,14 @@ async function applyShowerExtensionInternal(showerSessionId: number): Promise<bo
       endsAt: newEndsAt,
       pauseRemainingMs: newPauseRemainingMs,
       minutesPaid: sess.minutesPaid + extra,
-      pricePaid: +(sess.pricePaid + extra * sess.shower.pricePerMinute).toFixed(2),
+      // Paid from service credit: the price goes on creditUsed, not pricePaid.
+      ...(opts.viaCredit
+        ? { creditUsed: +(sess.creditUsed + opts.viaCredit).toFixed(2) }
+        : {
+            pricePaid: +(sess.pricePaid + extra * sess.shower.pricePerMinute).toFixed(2),
+            // A credit-paid shower topped up by card is now partly a card payment.
+            ...(sess.paymentMethod === "CREDIT" && { paymentMethod: "QUICKPAY" }),
+          }),
       pendingMinutes: null,
       paymentStatus: sess.paymentStatus === "UNPAID" ? "PAID" : sess.paymentStatus,
     },
@@ -6414,6 +6333,9 @@ export async function getShowerSessionState(showerSessionId: number, accessToken
     minutesPaid: sess.minutesPaid,
     pricePaid: sess.pricePaid,
     paymentStatus: sess.paymentStatus,
+    // Cancelled by the desk or because the valve never opened (money refunded)
+    cancelled: !!sess.cancelledAt,
+    cardPayment: (await readGlobalSettings()).quickpay_enabled === "true",
   };
 }
 
@@ -6514,40 +6436,74 @@ export async function extendShowerPayment(
   const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
 
-  // PREPAID guests extend from their balance — same rules as the initial
-  // purchase: deduct if it covers the price, otherwise reject. Never card.
-  if (sess.sessionId) {
-    const guestSession = await prisma.session.findUnique({ where: { id: sess.sessionId } });
-    if (guestSession?.billingMode === "PREPAID") {
-      const remaining = guestSession.prepaidAmount ?? 0;
-      // Conditional decrement — closes the race between concurrent extensions
-      const res = await prisma.session.updateMany({
-        where: { id: guestSession.id, prepaidAmount: { gte: price } },
-        data: { prepaidAmount: { decrement: price } },
-      });
-      if (res.count === 0) {
-        return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${remaining.toFixed(0)} DKK` };
-      }
-      await prisma.showerSess.update({
-        where: { id: showerSessionId },
-        data: { pendingMinutes: extra },
-      });
-      const applied = await applyShowerExtensionInternal(showerSessionId);
-      if (!applied) {
-        await prisma.session.update({ where: { id: guestSession.id }, data: { prepaidAmount: { increment: price } } });
-        return { ok: false, message: "Badet er ikke længere aktivt — beløbet er ført tilbage til din saldo" };
-      }
-      return { ok: true, message: `Forlænget med ${extra} minutter (trukket fra saldo)` };
-    }
+  // Extra minutes are paid the same way as the shower itself.
+  const channel = serviceChannel(sess);
+  const stay = sess.sessionId ? await prisma.session.findUnique({ where: { id: sess.sessionId } }) : null;
+  const stayActive = stay?.status === "ACTIVE";
+
+  // On the stay's bill: add the minutes, the price follows on pricePaid.
+  if (channel === "ACCOUNT" && stayActive) {
+    await prisma.showerSess.update({ where: { id: showerSessionId }, data: { pendingMinutes: extra } });
+    const applied = await applyShowerExtensionInternal(showerSessionId);
+    if (!applied) return { ok: false, message: "Badet er ikke længere aktivt" };
+    return { ok: true, message: `Forlænget med ${extra} minutter (${price.toFixed(0)} DKK på regning)` };
   }
 
-  if (settings.quickpay_enabled !== "true") {
+  // PREPAID guests extend from their balance — same rules as the initial
+  // purchase: deduct if it covers the price, otherwise reject. Never card.
+  if (stay && (channel === "BALANCE" || stay.billingMode === "PREPAID")) {
+    const remaining = stay.prepaidAmount ?? 0;
+    if (!stayActive) return { ok: false, message: "Køb mere tid i receptionen" };
+    // Conditional decrement — closes the race between concurrent extensions
+    const res = await prisma.session.updateMany({
+      where: { id: stay.id, prepaidAmount: { gte: price } },
+      data: { prepaidAmount: { decrement: price } },
+    });
+    if (res.count === 0) {
+      return { ok: false, message: `Utilstrækkelig saldo — behøver ${price.toFixed(0)} DKK, har ${remaining.toFixed(0)} DKK` };
+    }
     await prisma.showerSess.update({
       where: { id: showerSessionId },
       data: { pendingMinutes: extra },
     });
-    await applyShowerExtensionInternal(showerSessionId);
-    return { ok: true, message: `Forlænget med ${extra} minutter` };
+    const applied = await applyShowerExtensionInternal(showerSessionId);
+    if (!applied) {
+      await prisma.session.update({ where: { id: stay.id }, data: { prepaidAmount: { increment: price } } });
+      return { ok: false, message: "Badet er ikke længere aktivt — beløbet er ført tilbage til din saldo" };
+    }
+    return { ok: true, message: `Forlænget med ${extra} minutter (trukket fra saldo)` };
+  }
+
+  // Paid with service credit: more credit if there is enough of it.
+  if (stay && stayActive && channel === "CREDIT" && stay.laundryCredit >= price) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await drawStayFunds(tx, stay.id, { kind: "CREDIT", creditUsed: price, amount: 0 });
+        await logCreditUse(tx, stay.id, price, `shower:${sess.id}`, `${sess.shower.name} +${extra} min`);
+      });
+    } catch (e) {
+      if (e instanceof InsufficientFunds) return { ok: false, message: "Kreditten slår ikke til længere — prøv igen" };
+      throw e;
+    }
+    await prisma.showerSess.update({ where: { id: showerSessionId }, data: { pendingMinutes: extra } });
+    const applied = await applyShowerExtensionInternal(showerSessionId, { viaCredit: price });
+    if (!applied) {
+      await prisma.$transaction([
+        prisma.session.update({ where: { id: stay.id }, data: { laundryCredit: { increment: price } } }),
+        prisma.serviceCreditEntry.create({
+          data: { sessionId: stay.id, amount: price, reason: "REFUNDED", note: `${sess.shower.name}: badet var slut`, serviceRef: `shower:${sess.id}` },
+        }),
+      ]);
+      return { ok: false, message: "Badet er ikke længere aktivt — kreditten er ført tilbage" };
+    }
+    return { ok: true, message: `Forlænget med ${extra} minutter (${price.toFixed(0)} DKK kredit)` };
+  }
+
+  // Without card payments, more time is bought at the desk — never for free.
+  // A card top-up only goes on a card/credit shower, so one row never mixes
+  // card money with desk money or the stay's bill.
+  if (settings.quickpay_enabled !== "true" || (channel !== "CARD" && channel !== "CREDIT")) {
+    return { ok: false, message: "Køb mere tid i receptionen" };
   }
 
   try {
@@ -6576,20 +6532,23 @@ export async function extendShowerPayment(
 
 /** Admin manual stop. */
 export async function adminStopShower(showerSessionId: number) {
-  await requireAuth();
+  const auth = await requireAuth();
   const sess = await prisma.showerSess.findUnique({
     where: { id: showerSessionId },
     include: { shower: true },
   });
   if (!sess) return { ok: false, message: "Session ikke fundet" };
 
-  await prisma.showerSess.update({
-    where: { id: showerSessionId },
+  // Only a running/paused shower — never turn a cancelled (refunded) one into COMPLETED.
+  const res = await prisma.showerSess.updateMany({
+    where: { id: showerSessionId, status: { in: ["ACTIVE", "PAUSED"] } },
     data: { status: "COMPLETED", endsAt: new Date(), pausedAt: null, pauseRemainingMs: null },
   });
+  if (res.count === 0) return { ok: false, message: "Badet kører ikke" };
+  logger.info("shower", `${sess.shower.name} (shower:${sess.id}) stoppet af ${auth.username ?? "?"}`);
 
   try { await hardware.setSwitch(hardware.switchRowEp(sess.shower), false); } catch (e) {
-    return { ok: false, message: `Stoppet i DB men kunne ikke slukke relæ: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, message: `Stoppet — men relæet svarede ikke, luk vandet manuelt (${e instanceof Error ? e.message : String(e)})` };
   }
   return { ok: true, message: "Bad stoppet" };
 }
@@ -6875,7 +6834,8 @@ async function completeMeteredSession(sess: {
       meterEndedAt: now,
       billedMinutes: finalMinutes,
       pricePaid: finalCost,
-      paymentStatus: sess.paymentStatus === "PREPAID" ? "PREPAID" : "PAID",
+      // On the stay's bill the final price is charged at checkout/invoice.
+      paymentStatus: sess.paymentStatus === "PREPAID" || sess.paymentStatus === "ON_ACCOUNT" ? sess.paymentStatus : "PAID",
     },
   });
 

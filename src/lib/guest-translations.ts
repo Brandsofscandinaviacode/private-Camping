@@ -124,6 +124,11 @@ const translations = {
     payAndAdd: "Betal & tilføj",
     showering: "Bruser",
     onPause: "På pause",
+    startWithAmount: "Start · {amount} DKK",
+    addTime: "Tilføj tid",
+    payAtReception: "Betal i receptionen — så starter vi den for dig.",
+    showerFailed: "Badet kunne ikke startes",
+    showerFailedInfo: "Bruseren svarede ikke, så badet er annulleret. Kontakt receptionen, hvis du har brug for hjælp.",
   },
   en: {
     welcome: "Welcome",
@@ -227,6 +232,11 @@ const translations = {
     payAndAdd: "Pay & add",
     showering: "Showering",
     onPause: "Paused",
+    startWithAmount: "Start · {amount} DKK",
+    addTime: "Add time",
+    payAtReception: "Please pay at reception — we will start it for you.",
+    showerFailed: "The shower could not be started",
+    showerFailedInfo: "The shower did not respond, so it has been cancelled. Please contact reception if you need help.",
   },
   de: {
     welcome: "Willkommen",
@@ -330,6 +340,11 @@ const translations = {
     payAndAdd: "Bezahlen & hinzufügen",
     showering: "Duscht",
     onPause: "Pausiert",
+    startWithAmount: "Starten · {amount} DKK",
+    addTime: "Zeit hinzufügen",
+    payAtReception: "Bitte an der Rezeption bezahlen — wir starten es für Sie.",
+    showerFailed: "Die Dusche konnte nicht gestartet werden",
+    showerFailedInfo: "Die Dusche hat nicht reagiert und wurde storniert. Bitte wenden Sie sich bei Bedarf an die Rezeption.",
   },
 } as const;
 

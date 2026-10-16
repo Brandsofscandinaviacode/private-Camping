@@ -1,5 +1,14 @@
 import { WashingMachine, ShowerHead, Zap, Droplets } from "lucide-react";
 import { getSessionCharges } from "@/lib/actions";
+import { ServiceLineCancel } from "@/components/admin/service-cancel-dialog";
+
+const BADGE_CLASSES = {
+  emerald: "bg-green-50 text-green-700 border border-green-200",
+  blue: "bg-blue-50 text-blue-700 border border-blue-200",
+  amber: "bg-amber-50 text-amber-700 border border-amber-200",
+  red: "bg-red-50 text-red-700 border border-red-200",
+  muted: "bg-muted text-muted-foreground border border-border",
+} as const;
 
 /**
  * Running account for a stay — what the guest has spent so far, without
@@ -37,41 +46,28 @@ export async function SessionCharges({ sessionId }: { sessionId: number }) {
                   I gang
                 </span>
               )}
-              {c.paymentStatus === "PAID" ? (
-                <span className="text-[11px] leading-4 bg-green-50 text-green-700 border border-green-200 px-1.5 py-px rounded-md">
-                  Betalt
-                </span>
-              ) : c.paymentStatus === "PREPAID" ? (
-                <span className="text-[11px] leading-4 bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-px rounded-md">
-                  Forudbetalt
-                </span>
-              ) : c.paymentStatus === "INVOICED" ? (
-                <span className="text-[11px] leading-4 bg-muted text-muted-foreground border border-border px-1.5 py-px rounded-md">
-                  Faktureret
-                </span>
-              ) : c.paymentStatus === "ON_ACCOUNT" ? (
-                <span className="text-[11px] leading-4 bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-px rounded-md">
-                  På regning
-                </span>
-              ) : (
-                <span className="text-[11px] leading-4 bg-muted text-muted-foreground px-1.5 py-px rounded-md">
-                  Ikke betalt
-                </span>
-              )}
+              <span className={`text-[11px] leading-4 px-1.5 py-px rounded-md ${BADGE_CLASSES[c.payment.tone]}`}>
+                {c.payment.label}
+              </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               {new Date(c.occurredAt).toLocaleString("da-DK", {
+                timeZone: "Europe/Copenhagen",
                 day: "numeric",
                 month: "short",
                 hour: "2-digit",
                 minute: "2-digit",
               })}
               {c.detail && ` · ${c.detail}`}
+              {c.creditUsed > 0 && ` · + ${c.creditUsed.toFixed(2)} DKK kredit`}
             </p>
           </div>
-          <span className="text-sm font-medium tabular-nums whitespace-nowrap">
-            {c.amount.toFixed(2)} DKK
-          </span>
+          <div className="flex flex-col items-end gap-0.5 shrink-0">
+            <span className={`text-sm font-medium tabular-nums whitespace-nowrap ${c.cancelled ? "line-through text-muted-foreground" : ""}`}>
+              {c.amount.toFixed(2)} DKK
+            </span>
+            <ServiceLineCancel kind={c.kind} id={c.rowId} label={c.label} plan={c.refund} />
+          </div>
         </div>
       ))}
 

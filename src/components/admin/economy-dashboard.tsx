@@ -53,8 +53,9 @@ export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardPr
       revenue: acc.revenue + m.totalRevenue, paid: acc.paid + m.totalPaid, unpaid: acc.unpaid + m.totalUnpaid,
       kwh: acc.kwh + m.totalKwhUsed, water: acc.water + m.totalWaterUsed,
       laundry: acc.laundry + m.totalLaundry, laundryCount: acc.laundryCount + m.laundryCount,
+      showers: acc.showers + m.totalShowers, showerCount: acc.showerCount + m.showerCount,
     }),
-    { revenue: 0, paid: 0, unpaid: 0, kwh: 0, water: 0, laundry: 0, laundryCount: 0 }
+    { revenue: 0, paid: 0, unpaid: 0, kwh: 0, water: 0, laundry: 0, laundryCount: 0, showers: 0, showerCount: 0 }
   );
 
   const monthIndex = months.findIndex((m) => m.month === selectedMonth);
@@ -124,8 +125,8 @@ export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardPr
           valueClass={totals.unpaid > 0 ? "text-red-600" : ""} />
         <Kpi label="Total el-forbrug" icon={Zap} tint="amber" value={fmt(totals.kwh)} unit="kWh" />
         <Kpi label="Total vandforbrug" icon={Droplets} tint="blue" value={totals.water.toFixed(0)} unit="L" />
-        <Kpi label="Vaskerum" icon={WashingMachine} tint="violet" value={fmt(totals.laundry)} unit="DKK"
-          meta={`${totals.laundryCount} vaske`} />
+        <Kpi label="Vask og bad" icon={WashingMachine} tint="violet" value={fmt(totals.laundry + totals.showers)} unit="DKK"
+          meta={`${totals.laundryCount} vaske · ${totals.showerCount} bade`} />
       </KpiGrid>
 
       {/* Unpaid items */}
@@ -189,7 +190,13 @@ export function EconomyDashboard({ data, accountingEnabled }: EconomyDashboardPr
                     <Stat label="El-forbrug" value={`${fmt(m.totalKwhUsed)} kWh`} />
                     <Stat label="El-indtægt" value={`${fmt(m.totalElectricity)} DKK`} />
                     <Stat label="Vandforbrug" value={`${m.totalWaterUsed.toFixed(0)} L`} />
-                    {m.laundryCount > 0 && <Stat label="Vaskerum" value={`${fmt(m.totalLaundry)} DKK (${m.laundryCount} vaske)`} />}
+                    {m.laundryCount > 0 && <Stat label="Vask" value={`${fmt(m.totalLaundry)} DKK (${m.laundryCount} vaske)`} />}
+                    {m.showerCount > 0 && <Stat label="Bad" value={`${fmt(m.totalShowers)} DKK (${m.showerCount} bade)`} />}
+                    {m.servicesRevenue !== 0 && <Stat label="Services i omsætningen" value={`${fmt(m.servicesRevenue)} DKK`} />}
+                    {m.servicesOnBill > 0 && <Stat label="Services på regning (i ophold/faktura)" value={`${fmt(m.servicesOnBill)} DKK`} />}
+                    {m.servicesUnverified > 0 && (
+                      <Stat label="Services uden registreret betaling" value={`${fmt(m.servicesUnverified)} DKK`} valueClass="text-amber-600" />
+                    )}
                   </div>
                 )}
               </div>
