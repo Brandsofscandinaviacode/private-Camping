@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { updateMultipleSettings, testHAConnection, testSMS, testEmail, testQuickPay, testSendInvoice, addShellyDevice, testMqttConnection, reloadMqttClient, listMqttDevices, testAccountingConnection, syncInvoicesToAccounting, syncSessionsToAccounting, initBookingLogin, verifyBooking2FA, testBookingConnection, syncBookingResources, fetchBookingResourceTypes, getBookingLogs, updateResourceType, syncBookings } from "@/lib/actions";
 import type { MqttDeviceWithUsage } from "@/lib/actions";
+import { fmtDateWith } from "@/lib/format";
 
 interface SettingsFormProps {
   settings: Record<string, string>;
@@ -2520,7 +2521,7 @@ export function BookingSettings({ settings, resourceTypes: localResourceTypes = 
                 <div className="font-mono text-xs space-y-1 max-h-96 overflow-y-auto bg-muted/40 rounded-lg p-3">
                   {logs.map((entry, i) => (
                     <div key={i} className="flex gap-2 border-b border-border/40 pb-1 last:border-0">
-                      <span className="text-muted-foreground shrink-0">{new Date(entry.timestamp).toLocaleTimeString("da-DK")}</span>
+                      <span className="text-muted-foreground shrink-0">{fmtDateWith(entry.timestamp, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
                       <span className={`shrink-0 ${entry.level === "error" ? "text-red-500" : entry.level === "warn" ? "text-amber-500" : "text-blue-500"}`}>
                         {entry.level.toUpperCase()}
                       </span>

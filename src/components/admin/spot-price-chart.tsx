@@ -16,6 +16,7 @@ import {
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getSpotPricesForDate, getHourlyConsumptionForDate, getLatestSpotPriceDate, testEdsApi, getAverageHourlyConsumption } from "@/lib/actions";
+import { fmtDateWith, siteDayKey } from "@/lib/format";
 
 interface ChartEntry {
   hour: string;
@@ -26,12 +27,13 @@ interface ChartEntry {
   estForbrug: number | null;
 }
 
+// Prices come per Danish hour, so the days are Danish days too
 function formatDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return siteDayKey(date)!;
 }
 
-function formatDanishDate(date: Date): string {
-  return date.toLocaleDateString("da-DK", {
+function formatDanishDate(key: string): string {
+  return fmtDateWith(`${key}T12:00:00Z`, {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -165,9 +167,9 @@ export function SpotPriceChart() {
 
   function changeDate(delta: number) {
     if (!selectedDate) return;
-    const d = new Date(selectedDate);
-    d.setDate(d.getDate() + delta);
-    setSelectedDate(formatDate(d));
+    const d = new Date(`${selectedDate}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + delta);
+    setSelectedDate(d.toISOString().slice(0, 10));
   }
 
   if (initializing) {
@@ -211,7 +213,7 @@ export function SpotPriceChart() {
           <span className="hidden sm:inline">Forrige dag</span>
         </Button>
         <div className="text-center min-w-0">
-          <p className="font-semibold capitalize text-sm sm:text-base truncate">{formatDanishDate(new Date(displayDate))}</p>
+          <p className="font-semibold capitalize text-sm sm:text-base truncate">{formatDanishDate(displayDate)}</p>
           {isToday && <span className="text-xs text-primary font-medium">I dag</span>}
           {isTomorrow && <span className="text-xs text-blue-600 font-medium">I morgen</span>}
           {latestDate && displayDate === latestDate && !isToday && !isTomorrow && (

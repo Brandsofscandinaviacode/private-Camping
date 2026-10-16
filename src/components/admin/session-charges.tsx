@@ -1,6 +1,7 @@
 import { WashingMachine, ShowerHead, Zap, Droplets } from "lucide-react";
 import { getSessionCharges } from "@/lib/actions";
 import { ServiceLineCancel } from "@/components/admin/service-cancel-dialog";
+import { fmtShortDate, fmtTime } from "@/lib/format";
 
 const BADGE_CLASSES = {
   emerald: "bg-green-50 text-green-700 border border-green-200",
@@ -51,13 +52,7 @@ export async function SessionCharges({ sessionId }: { sessionId: number }) {
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {new Date(c.occurredAt).toLocaleString("da-DK", {
-                timeZone: "Europe/Copenhagen",
-                day: "numeric",
-                month: "short",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {fmtShortDate(c.occurredAt)} {fmtTime(c.occurredAt)}
               {c.detail && ` · ${c.detail}`}
               {c.creditUsed > 0 && ` · + ${c.creditUsed.toFixed(2)} DKK kredit`}
             </p>

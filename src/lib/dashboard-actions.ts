@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
 import { arrivedNotCheckedInWhere, overdueStayWhere } from "@/lib/booking-status";
+import { siteDayStart } from "@/lib/format";
 
 /**
  * Today's guest movements for the dashboard "I dag" KPI.
@@ -17,10 +18,9 @@ import { arrivedNotCheckedInWhere, overdueStayWhere } from "@/lib/booking-status
 export async function getDashboardMovements() {
   await requireAuth();
 
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+  // The campsite's day, not the server's
+  const start = siteDayStart();
+  const end = siteDayStart(start, 1);
 
   const [arrivals, departures, nextCheckIn] = await Promise.all([
     prisma.session.count({
@@ -31,7 +31,8 @@ export async function getDashboardMovements() {
       where: { status: "ACTIVE", expectedCheckOut: { gte: start, lt: end } },
     }),
     prisma.session.findFirst({
-      where: { status: "PENDING", cancelledAt: null, checkInTime: { gte: new Date() } },
+      // Arrival is a day, not a time: today's arrivals count until checked in
+      where: { status: "PENDING", cancelledAt: null, checkInTime: { gte: start } },
       orderBy: { checkInTime: "asc" },
       include: { unit: { select: { name: true } } },
     }),

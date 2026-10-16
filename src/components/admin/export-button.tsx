@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { exportSessionsCSV, exportInvoicesCSV } from "@/lib/actions";
+import { siteDayKey } from "@/lib/format";
 
 export function ExportButton() {
   const [loading, setLoading] = useState(false);
@@ -20,7 +21,7 @@ export function ExportButton() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `campsense-${type}-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `campsense-${type}-${siteDayKey(new Date())}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

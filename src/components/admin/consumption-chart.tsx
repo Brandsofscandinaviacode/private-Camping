@@ -12,6 +12,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { getConsumptionChartData } from "@/lib/actions";
+import { fmtShortDate, fmtTime } from "@/lib/format";
 
 interface ConsumptionChartProps {
   unitId: number;
@@ -50,12 +51,7 @@ export function ConsumptionChart({ unitId, days = 7 }: ConsumptionChartProps) {
         const baseWater = logs[0].waterLiters;
 
         const chartData = logs.map((log) => ({
-          time: new Date(log.recordedAt).toLocaleString("da-DK", {
-            day: "numeric",
-            month: "short",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          time: `${fmtShortDate(log.recordedAt)} ${fmtTime(log.recordedAt)}`,
           el:
             log.electricityKwh !== null && baseEl !== null
               ? parseFloat((log.electricityKwh - baseEl).toFixed(2))

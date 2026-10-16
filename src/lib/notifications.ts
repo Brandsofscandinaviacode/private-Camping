@@ -2,6 +2,7 @@ import twilio from "twilio";
 import nodemailer from "nodemailer";
 import { prisma } from "./prisma";
 import { logger } from "./logger";
+import { fmtDate } from "./format";
 
 async function getSettings() {
   const settings = await prisma.globalSetting.findMany();
@@ -168,7 +169,7 @@ export async function sendCheckInNotification(
     navn: guestName,
     enhed: unitName,
     link: portalUrl,
-    dato: new Date().toLocaleDateString("da-DK"),
+    dato: fmtDate(new Date()),
     email: guestEmail || "",
     telefon: guestPhone || "",
     beløb: "",
@@ -215,7 +216,7 @@ export async function sendInvoiceNotification(
     navn: guestName,
     enhed: unitName,
     link: portalUrl,
-    dato: new Date().toLocaleDateString("da-DK"),
+    dato: fmtDate(new Date()),
     email: guestEmail || "",
     telefon: guestPhone || "",
     beløb: totalAmount.toFixed(2),

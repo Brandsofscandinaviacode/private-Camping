@@ -16,7 +16,7 @@ import {
   undoCheckIn,
   undoCheckOut,
 } from "@/lib/stay-actions";
-import { fmtTime } from "@/lib/format";
+import { fmtShortDate, fmtTime } from "@/lib/format";
 import { type CancelReason, type StayActionResult } from "@/lib/stay-corrections";
 import { showStayReceipt } from "./stay-receipt";
 
@@ -325,7 +325,7 @@ export function UndoCheckOutButton({
             <strong>{guestName}</strong> bliver tjekket ind på <strong>{unitName}</strong> igen. Opgørelsen nulstilles og laves
             på ny ved næste udtjek, og strømmen tændes. Forbrug siden udtjek kommer med.
           </p>
-          <p className="text-xs text-muted-foreground">Muligt til {fmtTime(deadline)} ({new Date(deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}), så længe der ikke er registreret betaling eller faktura efter udtjek.</p>
+          <p className="text-xs text-muted-foreground">Muligt til {fmtTime(deadline)} ({fmtShortDate(deadline)}), så længe der ikke er registreret betaling eller faktura efter udtjek.</p>
           <ErrorText message={error} />
           <div className="flex gap-2">
             <Button onClick={submit} disabled={pending}>

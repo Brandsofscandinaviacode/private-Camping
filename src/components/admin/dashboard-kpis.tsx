@@ -1,6 +1,6 @@
 import { Users, CalendarDays, LogIn, LogOut, Zap, Droplets, TrendingUp } from "lucide-react";
 import { UNIT_STATE } from "@/lib/unit-state";
-import { fmtShortDate, fmtTime, siteDayKey } from "@/lib/format";
+import { fmtRelativeDay, fmtShortDate, fmtTime, siteDayKey } from "@/lib/format";
 
 // da-DK number helpers
 const kr = (n: number) => n.toFixed(2).replace(".", ",");
@@ -82,9 +82,8 @@ export function DashboardKpis({ total, occupied, arrived = 0, reserved, vacant, 
   const answering = totalUsage?.unitCount ?? 0;
   // Nothing fresh to show: "—", never an old rate as "now"
   const usageLive = !!totalUsage && answering > 0;
-  const nextTime = movements.nextCheckIn
-    ? new Intl.DateTimeFormat("da-DK", { hour: "2-digit", minute: "2-digit" }).format(new Date(movements.nextCheckIn.time))
-    : null;
+  // A reservation only has an arrival day — its stored time is a placeholder
+  const nextTime = movements.nextCheckIn ? fmtRelativeDay(movements.nextCheckIn.time) : null;
   const showPrice = elPricing && elPricing.mode !== "fixed";
 
   return (

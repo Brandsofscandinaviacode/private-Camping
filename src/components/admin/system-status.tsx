@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getSystemStatus, updateMultipleSettings } from "@/lib/actions";
+import { fmtDateTime } from "@/lib/format";
 
 interface StatusData {
   cronLastRun: string | null;
@@ -112,7 +113,7 @@ export function SystemStatus() {
     if (diffMin < 60) return `${diffMin} min. siden`;
     const diffHours = Math.floor(diffMin / 60);
     if (diffHours < 24) return `${diffHours} time${diffHours > 1 ? "r" : ""} siden`;
-    return d.toLocaleString("da-DK");
+    return fmtDateTime(d);
   }
 
   function cronIsHealthy(): boolean {

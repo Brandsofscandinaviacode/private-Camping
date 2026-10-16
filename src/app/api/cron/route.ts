@@ -18,6 +18,7 @@ import { authenticateAPI } from "@/lib/api-auth";
 import { runWithApiAuth } from "@/lib/auth-context";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import { siteHour } from "@/lib/format";
 
 // GET /api/cron — Called every 2 minutes.
 //
@@ -151,7 +152,7 @@ async function runCron() {
       overdueResult = await step("forfaldne", () => checkOverdueInvoices());
       prepaidResult = await step("forudbetalt", () => checkPrepaidBalances());
       // Nightly housekeeping (runs on the heavy ticks between 03:00 and 04:00)
-      if (new Date().getHours() === 3) await step("oprydning", () => cleanupOldData());
+      if (siteHour(new Date()) === 3) await step("oprydning", () => cleanupOldData());
 
       heavyStatus = heavyErrors.length ? `fejl: ${heavyErrors.join("; ")}` : "ok";
     }
