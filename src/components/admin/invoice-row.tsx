@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Check, ChevronDown, ChevronRight, Zap, Droplets, Send, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight, Zap, Droplets, Send, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { markInvoicePaid, sendInvoiceToCustomer } from "@/lib/actions";
+import { sendInvoiceToCustomer } from "@/lib/actions";
+import { fmtMoney, roundOre } from "@/lib/settlement-shared";
+import { RegisterPaymentDialog } from "./payment-dialog";
 
 interface InvoiceRowProps {
   invoice: {
@@ -22,16 +24,18 @@ interface InvoiceRowProps {
     paymentToken: string | null;
   };
   unitId: number;
+  /** Paid on the invoice so far (payments ledger, net of counter-entries). */
+  paidSoFar?: number;
 }
 
-export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
+export function InvoiceRow({ invoice, unitId, paidSoFar = 0 }: InvoiceRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [isPending, startTransition] = useTransition();
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [markError, setMarkError] = useState<string | null>(null);
 
   const isPaid = invoice.status === "PAID";
+  const remaining = roundOre(invoice.totalAmount - paidSoFar);
+  const partlyPaid = !isPaid && paidSoFar > 0.005;
   const usedKwh = (invoice.endKwh != null && invoice.startKwh != null)
     ? Math.max(0, invoice.endKwh - invoice.startKwh) : null;
   const usedWater = (invoice.endWaterLiters != null && invoice.startWaterLiters != null)
@@ -73,7 +77,7 @@ export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
             invoice.status === "OVERDUE" ? "bg-red-50 text-red-600" :
             "bg-muted text-muted-foreground"
           }`}>
-            {statusLabel}
+            {partlyPaid ? "Delvist betalt" : statusLabel}
           </span>
         </div>
       </button>
@@ -136,24 +140,26 @@ export function InvoiceRow({ invoice, unitId }: InvoiceRowProps) {
               Betalt {new Date(invoice.paidAt).toLocaleString("da-DK")}
             </p>
           )}
+          {partlyPaid && (
+            <p className="text-xs text-muted-foreground">
+              Betalt indtil nu {fmtMoney(paidSoFar)} · mangler {fmtMoney(remaining)}
+            </p>
+          )}
 
           {/* Actions */}
           <div className="space-y-2">
+            {/* Stays mounted once paid, so the receipt step survives the refresh. */}
+            <RegisterPaymentDialog
+              purpose="INVOICE"
+              invoiceId={invoice.id}
+              suggested={remaining}
+              max={remaining}
+              context={`Faktura nr. ${invoice.id}`}
+              triggerLabel="Registrér betaling"
+              hideTrigger={isPaid || remaining < 0.005}
+            />
             {!isPaid && (
               <>
-                <Button
-                  size="sm"
-                  className="w-full"
-                  disabled={isPending}
-                  onClick={() => startTransition(async () => {
-                    try { setMarkError(null); await markInvoicePaid(invoice.id); }
-                    catch (e) { setMarkError(e instanceof Error ? e.message : "Kunne ikke markere som betalt"); }
-                  })}
-                >
-                  <Check className="h-4 w-4 mr-2" />
-                  {isPending ? "Markerer..." : "Markér som betalt"}
-                </Button>
-                {markError && <p className="text-xs p-2 rounded-lg bg-red-50 text-red-600">{markError}</p>}
                 <Button
                   size="sm"
                   variant="outline"

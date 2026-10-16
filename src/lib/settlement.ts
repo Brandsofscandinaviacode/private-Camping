@@ -215,11 +215,16 @@ export function buildSettlement(input: SettlementInput, opts: SettlementOptions 
   const servicesCost = servicesPaidAtPurchase + servicesFromBalance + servicesOnAccount + invServices;
   const totalCost = electricityCost + waterCost + servicesCost + stayPrice;
 
-  // Payments: SETTLEMENT rows (and their reversals) pay the stay.
+  // Payments: SETTLEMENT rows (and their reversals) pay the stay. INVOICE rows
+  // on an invoice that is still open are part payments of it; once an invoice
+  // is PAID it has left `due`, so its rows must not count again. BALANCE rows
+  // never count here — deposits are already in the prepaid balance.
   const reversedIds = new Set(input.payments.filter((p) => p.reversesId != null).map((p) => p.reversesId!));
   const settlementIds = new Set(input.payments.filter((p) => p.kind === "SETTLEMENT").map((p) => p.id));
   const isSettlementRow = (p: PaymentRow) => p.kind === "SETTLEMENT" || (p.reversesId != null && settlementIds.has(p.reversesId));
-  const paid = roundOre(input.payments.filter(isSettlementRow).reduce((t, p) => t + p.amount, 0));
+  const openInvoiceIds = new Set(invoices.filter((i) => i.status !== "PAID").map((i) => i.id));
+  const isOpenInvoiceRow = (p: PaymentRow) => p.kind === "INVOICE" && p.invoiceId != null && openInvoiceIds.has(p.invoiceId);
+  const paid = roundOre(input.payments.filter((p) => isSettlementRow(p) || isOpenInvoiceRow(p)).reduce((t, p) => t + p.amount, 0));
 
   let prepaid: Settlement["prepaid"] = null;
   let due: number;
@@ -265,7 +270,7 @@ export function buildSettlement(input: SettlementInput, opts: SettlementOptions 
     .slice()
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     .map((p) => ({ ...p, reversed: reversedIds.has(p.id) }));
-  const lastRow = [...payments].reverse().find((p) => isSettlementRow(p) && p.amount > 0 && !p.reversed);
+  const lastRow = [...payments].reverse().find((p) => (isSettlementRow(p) || p.kind === "INVOICE") && p.amount > 0 && !p.reversed);
   const lastPayment = lastRow
     ? { at: lastRow.createdAt, method: lastRow.method }
     : paidWithoutRecord && s.paidAt ? { at: s.paidAt, method: null } : null;

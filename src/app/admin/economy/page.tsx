@@ -1,6 +1,7 @@
 import { requireAuth } from "@/lib/auth";
 import { getEconomySummary, getGlobalSettings } from "@/lib/actions";
 import { EconomyDashboard } from "@/components/admin/economy-dashboard";
+import { EconomySubnav } from "@/components/admin/economy-subnav";
 import { PageShell, PageHeader } from "@/components/admin/admin-ui";
 import { Wallet } from "lucide-react";
 
@@ -18,6 +19,7 @@ export default async function EconomyPage() {
         icon={Wallet}
         subtitle="Overblik over omsætning, forbrug og udestående betalinger."
       />
+      <EconomySubnav />
       <EconomyDashboard data={data} accountingEnabled={!!accountingEnabled} />
     </PageShell>
   );

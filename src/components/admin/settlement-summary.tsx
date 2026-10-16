@@ -6,7 +6,7 @@ import {
   type Settlement,
   type SettlementTone,
 } from "@/lib/settlement-shared";
-import { fmtDate, fmtDateTime } from "@/lib/format";
+import { fmtDate } from "@/lib/format";
 
 const TONE: Record<SettlementTone, { box: string; amount: string }> = {
   red: { box: "bg-red-50 border-red-200/70", amount: "text-red-600" },
@@ -83,30 +83,14 @@ export function SettlementSummary({ settlement: s, children }: { settlement: Set
                   {t.invoicesOpen > 0 && <p className="text-[11px] text-muted-foreground">Heraf faktureret, ikke betalt: {fmtMoney(t.invoicesOpen, cur)}</p>}
                 </>
               )}
-              {s.paid !== 0 && <Row label="Betalinger" value={`-${fmtMoney(s.paid, cur)}`} />}
+              {Math.abs(s.paid) > 0.005 && <Row label="Betalinger" value={`-${fmtMoney(s.paid, cur)}`} />}
               {s.paidWithoutRecord && <p className="text-[11px] text-muted-foreground">Markeret som betalt uden registreret beløb.</p>}
             </div>
           </details>
         )}
 
-        {s.payments.length > 0 && (
-          <div>
-            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1.5">Betalinger</p>
-            <ul className="space-y-1 text-xs">
-              {s.payments.map((p) => (
-                <li key={p.id} className={`flex justify-between gap-3 ${p.reversed ? "text-muted-foreground line-through" : ""}`}>
-                  <span className="min-w-0 truncate">
-                    {fmtDateTime(p.createdAt)} · {paymentMethodLabel(p.method)}
-                    {p.reversesId != null ? " · modpost" : ""}
-                    {p.createdBy ? ` · ${p.createdBy}` : ""}
-                  </span>
-                  <span className="tabular-nums shrink-0">{fmtMoney(p.amount, cur)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
+        {/* The payments themselves are listed (with receipt and "Fortryd") in
+            their own card on the booking page. */}
         {children}
       </div>
     </section>

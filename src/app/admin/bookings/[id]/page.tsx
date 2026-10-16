@@ -28,6 +28,8 @@ import { getBaseUrl, isPlaceholderBaseUrl } from "@/lib/base-url";
 import { fmtDate, fmtDateTime, siteDayKey } from "@/lib/format";
 import { unitHardwareSummary } from "@/lib/check-in-hardware";
 import { BookingSyncNotice } from "@/components/admin/booking-sync-notice";
+import { PaymentList } from "@/components/admin/payment-list";
+import { getInvoicePaidAmounts } from "@/lib/payment-actions";
 
 import { unitDisplayName } from "@/lib/utils";
 import { resolvePrepaidDeposited } from "@/lib/prepaid";
@@ -89,6 +91,11 @@ export default async function BookingDetailPage({
     || session.startKwh != null || session.startHeatingKwh != null || session.startWaterLiters != null;
   // Deposit total for prepaid stays (prepaidAmount is the live balance, not the deposit)
   const prepaidDeposited = session.billingMode === "PREPAID" ? await resolvePrepaidDeposited(session) : null;
+  // Part payments on the unit's invoices (ledger), and who the payment dialog is about.
+  const invoicePaid = session.unit.invoices.length > 0
+    ? await getInvoicePaidAmounts(session.unit.invoices.filter((i) => i.status !== "PAID").map((i) => i.id))
+    : {};
+  const payContext = `${unitDisplayName(session.unit.type, session.unit.name)} · ${session.guestName}`;
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 space-y-6 max-w-7xl">
@@ -507,6 +514,7 @@ export default async function BookingDetailPage({
               prepaidDeposited={prepaidDeposited ?? 0}
               accumulatedCost={(session.accumulatedElCost ?? 0) + (session.accumulatedWaterCost ?? 0)}
               isActive={isActive}
+              context={payContext}
             />
           )}
 
@@ -516,16 +524,25 @@ export default async function BookingDetailPage({
                 <SessionActions
                   sessionId={session.id}
                   owed={settlement.owed}
+                  refundDue={settlement.refundDue}
                   currency={settlement.currency}
-                  canUndo={
-                    settlement.paid > 0.005 ||
-                    settlement.paidWithoutRecord ||
-                    settlement.payments.some((p) => (p.kind === "SETTLEMENT" || p.kind === "INVOICE") && p.amount > 0 && p.reversesId == null && !p.reversed)
-                  }
-                  openInvoiceCount={settlement.invoices.filter((i) => i.status !== "PAID").length}
+                  paidWithoutRecord={settlement.paidWithoutRecord}
+                  context={payContext}
                 />
               )}
             </SettlementSummary>
+          )}
+
+          {settlement.payments.length > 0 && (
+            <section className="rounded-xl border border-border/60 bg-card shadow-sm" aria-label="Betalinger">
+              <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-2">
+                <h2 className="font-semibold">Betalinger</h2>
+                <Link href="/admin/economy/kasse" className="text-xs text-muted-foreground hover:text-foreground">Kasse i dag</Link>
+              </div>
+              <div className="p-5">
+                <PaymentList payments={settlement.payments.map((p) => ({ ...p, sessionId: session.id }))} currency={settlement.currency} />
+              </div>
+            </section>
           )}
 
           {session.billingMode !== "PREPAID" && session.status !== "PENDING" && (() => {
@@ -555,7 +572,7 @@ export default async function BookingDetailPage({
                   ) : (
                     <div className="space-y-2">
                       {invoices.map((inv) => (
-                        <InvoiceRow key={inv.id} invoice={inv} unitId={session.unit.id} />
+                        <InvoiceRow key={inv.id} invoice={inv} unitId={session.unit.id} paidSoFar={invoicePaid[inv.id] ?? 0} />
                       ))}
                     </div>
                   )}

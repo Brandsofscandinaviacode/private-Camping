@@ -17,6 +17,7 @@ import { activateBookingSession } from "@/lib/actions";
 import { checkOutDateError, prepaidAmountError } from "@/lib/check-in";
 import { bookingRefLabel, isProviderBookingRef } from "@/lib/booking-ref";
 import { fmtRelativeDay, fmtShortDate } from "@/lib/format";
+import { parseAmount, type DeskPaymentMethod } from "@/lib/payments-shared";
 import {
   BillingModeField,
   CheckOutDateField,
@@ -72,6 +73,7 @@ export function BookingActivateButton({
   const [expectedCheckOut, setExpectedCheckOut] = useState(initialExpectedCheckOut ?? "");
   const [billingMode, setBillingMode] = useState<"PREPAID" | "POSTPAID">("POSTPAID");
   const [prepaidAmount, setPrepaidAmount] = useState("");
+  const [prepaidMethod, setPrepaidMethod] = useState<DeskPaymentMethod>("CASH");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -89,6 +91,7 @@ export function BookingActivateButton({
       setExpectedCheckOut(initialExpectedCheckOut ?? "");
       setBillingMode("POSTPAID");
       setPrepaidAmount("");
+      setPrepaidMethod("CASH");
       setError(null);
     }
     setOpen(next);
@@ -108,7 +111,7 @@ export function BookingActivateButton({
     }
     let amount: number | undefined;
     if (billingMode === "PREPAID") {
-      amount = parseFloat(prepaidAmount);
+      amount = parseAmount(prepaidAmount) ?? undefined;
       const amountError = prepaidAmountError(amount);
       if (amountError) {
         setError(amountError);
@@ -128,7 +131,13 @@ export function BookingActivateButton({
     setError(null);
     startTransition(async () => {
       try {
-        const res = await activateBookingSession(sessionId, billingMode, amount, updates);
+        const res = await activateBookingSession(
+          sessionId,
+          billingMode,
+          amount,
+          updates,
+          billingMode === "PREPAID" ? { method: prepaidMethod } : undefined,
+        );
         if (!res.ok) {
           setError(res.message);
           return;
@@ -239,6 +248,8 @@ export function BookingActivateButton({
             onModeChange={setBillingMode}
             amount={prepaidAmount}
             onAmountChange={setPrepaidAmount}
+            method={prepaidMethod}
+            onMethodChange={setPrepaidMethod}
             hasMeters={hasMeters}
           />
 

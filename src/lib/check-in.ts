@@ -22,6 +22,8 @@ export interface CheckInReceipt {
   /** "/guest/<token>"; the page puts the public base URL in front. */
   portalPath: string;
   lines: ReceiptLine[];
+  /** Prepaid deposit taken at check-in — for the printable deposit receipt. */
+  deposit?: { paymentId: number; amount: number; method: string };
 }
 
 export type CheckInResult =

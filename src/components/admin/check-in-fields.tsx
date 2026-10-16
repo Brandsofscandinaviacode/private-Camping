@@ -16,6 +16,8 @@ import {
   todayKey,
   type ReceiptLine,
 } from "@/lib/check-in";
+import type { DeskPaymentMethod } from "@/lib/payments-shared";
+import { PaymentMethodPicker } from "./payment-dialog";
 
 // Pieces shared by the walk-in and the booking check-in dialogs.
 
@@ -115,6 +117,8 @@ export function BillingModeField({
   onModeChange,
   amount,
   onAmountChange,
+  method,
+  onMethodChange,
   hasMeters,
 }: {
   idPrefix: string;
@@ -122,6 +126,9 @@ export function BillingModeField({
   onModeChange: (mode: "PREPAID" | "POSTPAID") => void;
   amount: string;
   onAmountChange: (amount: string) => void;
+  /** How the deposit was paid — recorded in the till. */
+  method: DeskPaymentMethod;
+  onMethodChange: (method: DeskPaymentMethod) => void;
   hasMeters: boolean;
 }) {
   const option = (value: "PREPAID" | "POSTPAID", title: string, hint: string) => (
@@ -162,6 +169,9 @@ export function BillingModeField({
             placeholder="F.eks. 500"
             className="mt-1"
           />
+          <div className="mt-2">
+            <PaymentMethodPicker value={method} onChange={onMethodChange} />
+          </div>
           <p className="text-xs text-muted-foreground mt-1">{hasMeters ? PREPAID_HINT : PREPAID_HINT_NO_METER}</p>
         </div>
       )}
