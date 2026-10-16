@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { CheckInReceipt } from "@/lib/check-in";
@@ -59,6 +59,18 @@ export function CheckInReceiptHost({ sessionId, siteUrl }: { sessionId: number; 
           </p>
         </div>
         <ReceiptLines lines={receipt.lines} />
+        {receipt.deposit && (
+          <a
+            href={`/admin/bookings/${receipt.sessionId}/receipt/${receipt.deposit.paymentId}?print=1`}
+            target="_blank"
+            rel="noopener"
+          >
+            <Button type="button" variant="outline" size="sm" className="w-full">
+              <Printer className="h-4 w-4 mr-2" />
+              Udskriv kvittering for forudbetalingen
+            </Button>
+          </a>
+        )}
         <div className="border-t border-border pt-3">
           <PortalHandover sessionId={receipt.sessionId} portalPath={receipt.portalPath} siteUrl={siteUrl} />
         </div>

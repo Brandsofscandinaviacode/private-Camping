@@ -112,7 +112,11 @@ export interface Settlement {
   } | null;
   /** What the stay bills: open invoices + remainder + on-account services + stay price (prepaid: the shortfall). */
   due: number;
-  /** Net SETTLEMENT payments (reversals are negative rows). */
+  /**
+   * Net SETTLEMENT payments plus part payments on invoices still open (a
+   * fully paid invoice is PAID and out of `due`). Reversals are negative rows;
+   * BALANCE deposits are not here — they are in the prepaid balance.
+   */
   paid: number;
   /** due − paid, rounded to øre; under 1 kr counts as nothing. */
   owed: number;
@@ -221,7 +225,7 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   CARD_TERMINAL: "Kortterminal",
   BANK: "Bankoverførsel",
   QUICKPAY: "Kort (online)",
-  OTHER: "Registreret i skranken",
+  OTHER: "Andet",
 };
 
 export function paymentMethodLabel(method: string | null | undefined): string {

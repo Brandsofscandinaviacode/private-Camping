@@ -1,10 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Wallet, Plus, Loader2, Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { addPrepaidAmount } from "@/lib/actions";
+import { Wallet } from "lucide-react";
+import { RegisterPaymentDialog } from "./payment-dialog";
 
 interface PrepaidBalanceProps {
   sessionId: number;
@@ -15,14 +12,11 @@ interface PrepaidBalanceProps {
   /** Accumulated el+water cost, deducted from the balance at display time. */
   accumulatedCost: number;
   isActive: boolean;
+  /** "Plads 12 · Jens Hansen", for the payment dialog. */
+  context?: string;
 }
 
-export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, accumulatedCost, isActive }: PrepaidBalanceProps) {
-  const [isPending, startTransition] = useTransition();
-  const [showAdd, setShowAdd] = useState(false);
-  const [addAmount, setAddAmount] = useState("");
-  const [saved, setSaved] = useState(false);
-
+export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, accumulatedCost, isActive, context }: PrepaidBalanceProps) {
   const remainingRaw = prepaidAmount - accumulatedCost;
   const remaining = Math.max(0, remainingRaw);
   const isOverdrawn = remainingRaw < 0;
@@ -43,25 +37,6 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
     { label: "Resterende", value: remaining, cls: "bg-green-500" },
     { label: "Overtræk", value: overdrawnAmount, cls: "bg-red-500" },
   ].filter((x) => x.value > 0);
-
-  const [addError, setAddError] = useState<string | null>(null);
-  function handleAdd() {
-    const extra = parseFloat(addAmount);
-    if (isNaN(extra) || extra <= 0) return;
-    startTransition(async () => {
-      setAddError(null);
-      try {
-        await addPrepaidAmount(sessionId, extra);
-      } catch (e) {
-        setAddError(e instanceof Error ? e.message : "Beløbet kunne ikke tilføjes");
-        return;
-      }
-      setSaved(true);
-      setShowAdd(false);
-      setAddAmount("");
-      setTimeout(() => setSaved(false), 3000);
-    });
-  }
 
   return (
     <section className="rounded-xl border border-border/60 bg-card shadow-sm" aria-label="Forudbetalt saldo">
@@ -111,45 +86,14 @@ export function PrepaidBalance({ sessionId, prepaidAmount, prepaidDeposited, acc
           </span>
         </div>
 
-        {addError && <p className="text-sm p-2 rounded-lg bg-red-50 text-red-600">{addError}</p>}
-
         {isActive && (
-          <>
-            {!showAdd ? (
-              <Button variant="outline" size="sm" className="w-full" onClick={() => setShowAdd(true)} disabled={isPending}>
-                {saved ? (
-                  <>
-                    <Check className="h-4 w-4 mr-2 text-green-600" />
-                    Opdateret!
-                  </>
-                ) : (
-                  <>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Tilføj indbetaling
-                  </>
-                )}
-              </Button>
-            ) : (
-              <div className="flex gap-2">
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="Beløb i DKK"
-                  value={addAmount}
-                  onChange={(e) => setAddAmount(e.target.value)}
-                  className="flex-1"
-                  autoFocus
-                />
-                <Button size="sm" onClick={handleAdd} disabled={isPending || !addAmount}>
-                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Tilføj"}
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setAddAmount(""); }}>
-                  Annullér
-                </Button>
-              </div>
-            )}
-          </>
+          <RegisterPaymentDialog
+            purpose="DEPOSIT"
+            sessionId={sessionId}
+            context={context}
+            triggerLabel="Tilføj indbetaling"
+            triggerVariant="outline"
+          />
         )}
       </div>
     </section>

@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { checkIn } from "@/lib/actions";
 import { addDaysToKey, checkOutDateError, prepaidAmountError, todayKey } from "@/lib/check-in";
 import { fmtShortDate } from "@/lib/format";
+import { parseAmount, type DeskPaymentMethod } from "@/lib/payments-shared";
 import {
   BillingModeField,
   CheckOutDateField,
@@ -53,6 +54,7 @@ export function CheckInDialog({
   const [expectedCheckOut, setExpectedCheckOut] = useState("");
   const [billingMode, setBillingMode] = useState<"PREPAID" | "POSTPAID">("POSTPAID");
   const [prepaidAmount, setPrepaidAmount] = useState("");
+  const [prepaidMethod, setPrepaidMethod] = useState<DeskPaymentMethod>("CASH");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +67,7 @@ export function CheckInDialog({
     setExpectedCheckOut(isLongTerm ? "" : addDaysToKey(todayKey(), 1));
     setBillingMode("POSTPAID");
     setPrepaidAmount("");
+    setPrepaidMethod("CASH");
     setError(null);
   }
 
@@ -88,7 +91,7 @@ export function CheckInDialog({
     }
     let amount: number | undefined;
     if (billingMode === "PREPAID") {
-      amount = parseFloat(prepaidAmount);
+      amount = parseAmount(prepaidAmount) ?? undefined;
       const amountError = prepaidAmountError(amount);
       if (amountError) {
         setError(amountError);
@@ -108,7 +111,7 @@ export function CheckInDialog({
         expectedCheckOut || undefined,
         billingMode,
         amount,
-        { requireExpectedCheckOut: true },
+        { requireExpectedCheckOut: true, prepaidMethod: billingMode === "PREPAID" ? prepaidMethod : undefined },
       );
       if (!res.ok) {
         setError(res.message);
@@ -205,6 +208,8 @@ export function CheckInDialog({
             onModeChange={setBillingMode}
             amount={prepaidAmount}
             onAmountChange={setPrepaidAmount}
+            method={prepaidMethod}
+            onMethodChange={setPrepaidMethod}
             hasMeters={hasMeters}
           />
 

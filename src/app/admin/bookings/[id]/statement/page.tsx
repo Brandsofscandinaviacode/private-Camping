@@ -4,9 +4,11 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getSessionStatement } from "@/lib/actions";
 import { PrintButton } from "@/components/admin/print-button";
-import { fmtDate, fmtShortDate } from "@/lib/format";
+import { fmtDate, fmtDateTime, fmtShortDate } from "@/lib/format";
 import { bookingRefReceiptLabel } from "@/lib/booking-ref";
 import { fmtMoney, paymentMethodLabel, SERVICE_SETTLEMENT_LABELS } from "@/lib/settlement-shared";
+import { paymentPurposeLabel } from "@/lib/payments-shared";
+import { RegisterPaymentDialog } from "@/components/admin/payment-dialog";
 
 import { unitDisplayName } from "@/lib/utils";
 
@@ -80,14 +82,46 @@ export default async function BookingStatementPage({
   return (
     <div className="p-4 sm:p-6 lg:p-10 print:p-0">
       {/* Screen-only toolbar */}
-      <div className="max-w-3xl mx-auto mb-6 flex items-center justify-between print:hidden">
+      <div className="max-w-3xl mx-auto mb-6 flex flex-wrap items-center justify-between gap-2 print:hidden">
         <Link href={`/admin/bookings/${session.id}`}>
           <Button variant="ghost" size="sm">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Tilbage til booking
           </Button>
         </Link>
-        <PrintButton />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The guest is usually at the desk right after check-out: take the
+              money here. Mounted while nothing is due too, so the receipt
+              step survives the refresh. */}
+          {s.sessionStatus === "COMPLETED" && (
+            <>
+              <RegisterPaymentDialog
+                purpose="SETTLEMENT"
+                sessionId={session.id}
+                suggested={s.owed}
+                max={s.owed}
+                currency={cur}
+                context={`${unitDisplayName(unit.type, unit.name)} · ${session.guestName}`}
+                triggerLabel={`Registrér betaling (${money(s.owed)})`}
+                triggerClassName=""
+                hideTrigger={s.owed <= 0}
+              />
+              <RegisterPaymentDialog
+                purpose="REFUND"
+                sessionId={session.id}
+                suggested={s.refundDue}
+                max={s.refundDue}
+                currency={cur}
+                context={`${unitDisplayName(unit.type, unit.name)} · ${session.guestName}`}
+                triggerLabel="Udbetal ubrugt saldo"
+                triggerVariant="outline"
+                triggerClassName=""
+                hideTrigger={s.refundDue <= 0}
+              />
+            </>
+          )}
+          <PrintButton />
+        </div>
       </div>
 
       {/* Printable statement */}
@@ -253,19 +287,21 @@ export default async function BookingStatementPage({
                 <thead>
                   <tr className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600">
                     <th className="px-3 py-2 font-medium">Dato</th>
-                    <th className="px-3 py-2 font-medium">Betalingsmåde</th>
+                    <th className="px-3 py-2 font-medium">Betaling</th>
                     <th className="px-3 py-2 font-medium text-right">Beløb</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visiblePayments.map((p) => (
                     <tr key={p.id} className={`border-b border-gray-200 last:border-0 ${p.reversed ? "text-gray-400 line-through" : ""}`}>
-                      <td className="px-3 py-2 whitespace-nowrap">{fmtDate(p.createdAt)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(p.createdAt)}</td>
                       <td className="px-3 py-2">
                         {paymentMethodLabel(p.method)}
-                        {p.reversesId != null && <span className="text-gray-500"> · modpost</span>}
-                        {p.kind === "INVOICE" && <span className="text-gray-500"> · faktura</span>}
-                        {p.kind === "BALANCE" && <span className="text-gray-500"> · {p.amount < 0 ? "udbetalt af saldo" : "indbetalt på saldo"}</span>}
+                        <span className="text-gray-500">
+                          {" · "}
+                          {paymentPurposeLabel(p).toLowerCase()}
+                          {p.kind === "INVOICE" && p.invoiceId ? ` nr. ${p.invoiceId}` : ""}
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{money(p.amount)}</td>
                     </tr>

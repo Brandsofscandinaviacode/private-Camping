@@ -5,6 +5,8 @@ import { activateLaundrySession, activateShowerSession, applyShowerExtension } f
 import { logger } from "@/lib/logger";
 import { runWithApiAuth } from "@/lib/auth-context";
 import { resolvePrepaidDeposited, restorePrepaidPowerIfFunded, prepaidShortfall } from "@/lib/prepaid";
+import { invoiceRemaining, recordQuickPayPayment } from "@/lib/payments";
+import { syncPaymentStatus } from "@/lib/settlement";
 
 function getCallbackAmount(body: Record<string, unknown>): number | null {
   const ops = body.operations;
@@ -42,11 +44,11 @@ export async function POST(req: NextRequest) {
     });
 
     if (session) {
+      // Must match what createSessionPayment linked: the shortfall for prepaid.
+      const expectedDKK = session.billingMode === "PREPAID"
+        ? prepaidShortfall(session)
+        : (session.totalCost ?? 0) + (session.externalPrice ?? 0);
       if (paidAmountOere !== null && session.totalCost !== null) {
-        // Must match what createSessionPayment linked: the shortfall for prepaid.
-        const expectedDKK = session.billingMode === "PREPAID"
-          ? prepaidShortfall(session)
-          : session.totalCost + (session.externalPrice ?? 0);
         const expectedOere = Math.round(expectedDKK * 100);
         if (paidAmountOere < expectedOere) {
           logger.error("quickpay", `Session ${session.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);
@@ -57,6 +59,15 @@ export async function POST(req: NextRequest) {
         where: { id: session.id },
         data: { paymentStatus: "PAID", paidAt: new Date() },
       });
+      // The same ledger as the desk, so the till and the statement show it.
+      // Idempotent per QuickPay id.
+      await recordQuickPayPayment({
+        externalId: quickpayId,
+        kind: "SETTLEMENT",
+        sessionId: session.id,
+        amount: paidAmountOere !== null ? paidAmountOere / 100 : expectedDKK,
+      });
+      await syncPaymentStatus(session.id);
       logger.info("quickpay", `Session ${session.id} marked as PAID`);
       return NextResponse.json({ status: "ok", type: "session", id: session.id });
     }
@@ -67,8 +78,12 @@ export async function POST(req: NextRequest) {
     });
 
     if (invoice) {
-      if (paidAmountOere !== null) {
-        const expectedOere = Math.round(invoice.totalAmount * 100);
+      // createInvoicePayment links what is left after part payments at the desk.
+      const alreadyRecorded = await prisma.payment.count({ where: { externalId: quickpayId, kind: "INVOICE" } });
+      const wasPaid = invoice.status === "PAID";
+      const remaining = wasPaid ? 0 : await invoiceRemaining(invoice);
+      if (paidAmountOere !== null && alreadyRecorded === 0 && !wasPaid) {
+        const expectedOere = Math.round(remaining * 100);
         if (paidAmountOere < expectedOere) {
           logger.error("quickpay", `Invoice ${invoice.id}: amount mismatch — paid ${paidAmountOere} øre, expected ${expectedOere} øre`);
           return NextResponse.json({ error: "Amount mismatch" }, { status: 400 });
@@ -78,6 +93,21 @@ export async function POST(req: NextRequest) {
         where: { id: invoice.id },
         data: { status: "PAID", paidAt: new Date() },
       });
+      if (alreadyRecorded === 0) {
+        // Money received online always goes in the ledger — even when the
+        // desk had already settled the invoice (then it is a double payment).
+        const recorded = await recordQuickPayPayment({
+          externalId: quickpayId,
+          kind: "INVOICE",
+          invoiceId: invoice.id,
+          amount: paidAmountOere !== null ? paidAmountOere / 100 : remaining,
+        });
+        if (recorded && wasPaid) {
+          logger.warn("quickpay", `Invoice ${invoice.id}: betalt online (${quickpayId}), men var allerede betalt — tjek for dobbeltbetaling`);
+        }
+      }
+      const stay = await prisma.payment.findFirst({ where: { externalId: quickpayId, kind: "INVOICE" }, select: { sessionId: true } });
+      if (stay?.sessionId) await syncPaymentStatus(stay.sessionId);
       logger.info("quickpay", `Invoice ${invoice.id} marked as PAID`);
       return NextResponse.json({ status: "ok", type: "invoice", id: invoice.id });
     }
@@ -224,6 +254,19 @@ export async function POST(req: NextRequest) {
               sessionId: topupSession.id,
               paymentId: quickpayId,
               amount: topupAmount,
+            },
+          }),
+          // Same ledger as desk deposits; the unique PrepaidTopUp above keeps
+          // a repeated callback from writing it twice.
+          prisma.payment.create({
+            data: {
+              sessionId: topupSession.id,
+              amount: topupAmount,
+              method: "QUICKPAY",
+              kind: "BALANCE",
+              externalId: quickpayId,
+              createdBy: "QuickPay",
+              note: "Optankning online",
             },
           }),
         ]);

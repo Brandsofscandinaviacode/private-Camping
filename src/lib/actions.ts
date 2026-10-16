@@ -32,6 +32,8 @@ import {
 } from "./settlement-shared";
 import { isProviderBookingRef, parseBookingRef } from "./booking-ref";
 import { fmtDateTime } from "./format";
+import { isDeskPaymentMethod, methodLabel } from "./payments-shared";
+import { PaymentError, depositToBalance, invoiceRemaining, recordInvoicePayment } from "./payments";
 import {
   checkOutDateError,
   describeWelcomeMessage,
@@ -796,9 +798,9 @@ export async function checkIn(
   expectedCheckOut?: string,
   billingMode?: "PREPAID" | "POSTPAID",
   prepaidAmount?: number,
-  options?: { requireExpectedCheckOut?: boolean },
+  options?: { requireExpectedCheckOut?: boolean; prepaidMethod?: string; prepaidNote?: string },
 ): Promise<CheckInResult> {
-  await requireAuth();
+  const auth = await requireAuth();
   const name = guestName?.trim();
   if (!name) return { ok: false, message: "Gæstens navn er påkrævet." };
   const unit = await prisma.unit.findUnique({
@@ -813,9 +815,12 @@ export async function checkIn(
   });
   if (dateError) return { ok: false, message: dateError };
   const mode = billingMode === "PREPAID" ? "PREPAID" : "POSTPAID";
+  let deposit: ReturnType<typeof depositPayment> = null;
   if (mode === "PREPAID") {
     const amountError = prepaidAmountError(prepaidAmount);
     if (amountError) return { ok: false, message: amountError };
+    deposit = depositPayment(prepaidAmount!, options?.prepaidMethod, options?.prepaidNote, auth.username || "admin");
+    if (!deposit) return { ok: false, message: "Vælg hvordan gæsten har betalt forudbetalingen." };
   }
 
   // Claim the unit atomically so a double-click can't open two stays on it.
@@ -848,6 +853,8 @@ export async function checkIn(
         startHeatingKwh: hw.startHeatingKwh,
         startWaterLiters: hw.startWaterLiters,
         status: "ACTIVE",
+        // The deposit is a ledger row like any other desk payment.
+        ...(deposit && { payments: { create: deposit } }),
       },
     });
   } catch (e) {
@@ -868,7 +875,8 @@ export async function checkIn(
 
   const dispName = unitDisplayName(unit.type, unit.name);
   const welcome = await sendWelcomeMessage(session, dispName);
-  const lines = [...hwLines, welcome.line];
+  const depositInfo = await depositReceipt(session.id, deposit);
+  const lines = [...hwLines, ...(depositInfo ? [depositInfo.line] : []), welcome.line];
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unitId}`);
@@ -885,7 +893,39 @@ export async function checkIn(
       guestName: session.guestName,
       portalPath: `/guest/${guestPortalToken}`,
       lines,
+      deposit: depositInfo?.deposit,
     },
+  };
+}
+
+/**
+ * The ledger row for a prepaid deposit taken at check-in. The desk dialogs
+ * always send the method; API callers that don't are recorded as "Andet".
+ * Null for a method that isn't one.
+ */
+function depositPayment(amount: number, method: string | undefined, note: string | undefined, by: string) {
+  if (method !== undefined && !isDeskPaymentMethod(method)) return null;
+  return {
+    amount: roundOre(amount),
+    method: method ?? "OTHER",
+    kind: "BALANCE",
+    note: note?.trim() || (method === undefined ? "Forudbetaling ved check-in (uden betalingsmåde)" : "Forudbetaling ved check-in"),
+    createdBy: by,
+  };
+}
+
+/** Receipt line and printable slip for the deposit of a check-in. */
+async function depositReceipt(sessionId: number, deposit: ReturnType<typeof depositPayment>) {
+  if (!deposit) return null;
+  const row = await prisma.payment.findFirst({
+    where: { sessionId, kind: "BALANCE", amount: { gt: 0 } },
+    orderBy: { id: "desc" },
+    select: { id: true },
+  });
+  if (!row) return null;
+  return {
+    line: { label: "Forudbetaling", tone: "ok" as const, text: `${fmtMoney(deposit.amount)} registreret · ${methodLabel(deposit.method)}` },
+    deposit: { paymentId: row.id, amount: deposit.amount, method: deposit.method },
   };
 }
 
@@ -2264,8 +2304,9 @@ export async function activateBookingSession(
     bookingRef?: string | null;
     expectedCheckOut?: string | null;
   },
+  payment?: { method?: string; note?: string },
 ): Promise<CheckInResult> {
-  await requireAuth();
+  const auth = await requireAuth();
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: { unit: { include: { hardware: true } } },
@@ -2277,9 +2318,12 @@ export async function activateBookingSession(
 
   const unit = session.unit;
   const mode = billingMode === "PREPAID" ? "PREPAID" : "POSTPAID";
+  let deposit: ReturnType<typeof depositPayment> = null;
   if (mode === "PREPAID") {
     const amountError = prepaidAmountError(prepaidAmount);
     if (amountError) return { ok: false, message: amountError };
+    deposit = depositPayment(prepaidAmount!, payment?.method, payment?.note, auth.username || "admin");
+    if (!deposit) return { ok: false, message: "Vælg hvordan gæsten har betalt forudbetalingen." };
   }
   if (updates?.expectedCheckOut !== undefined) {
     const dateError = checkOutDateError(updates.expectedCheckOut, { required: !unit.isLongTerm });
@@ -2323,24 +2367,29 @@ export async function activateBookingSession(
     const pricing = await getPricing();
     const hw = await startStayHardware(unit.hardware, `activate unit=${unit.id}`, pricing.defaultOccupiedTemp);
     hwLines = hw.lines;
-    activated = await prisma.session.updateMany({
-      where: { id: sessionId, status: "PENDING" },
-      data: {
-        status: "ACTIVE",
-        billingMode: mode,
-        prepaidAmount: mode === "PREPAID" ? prepaidAmount! : null,
-        prepaidDeposited: mode === "PREPAID" ? prepaidAmount! : null,
-        guestName: finalGuestName,
-        guestEmail: finalGuestEmail,
-        guestPhone: finalGuestPhone,
-        bookingRef: finalBookingRef,
-        expectedCheckOut: finalExpectedCheckOut,
-        lockedFields,
-        checkInTime: new Date(),
-        startKwh: hw.startKwh,
-        startHeatingKwh: hw.startHeatingKwh,
-        startWaterLiters: hw.startWaterLiters,
-      },
+    // The deposit's ledger row is written with the activation, or not at all.
+    activated = await prisma.$transaction(async (tx) => {
+      const res = await tx.session.updateMany({
+        where: { id: sessionId, status: "PENDING" },
+        data: {
+          status: "ACTIVE",
+          billingMode: mode,
+          prepaidAmount: mode === "PREPAID" ? prepaidAmount! : null,
+          prepaidDeposited: mode === "PREPAID" ? prepaidAmount! : null,
+          guestName: finalGuestName,
+          guestEmail: finalGuestEmail,
+          guestPhone: finalGuestPhone,
+          bookingRef: finalBookingRef,
+          expectedCheckOut: finalExpectedCheckOut,
+          lockedFields,
+          checkInTime: new Date(),
+          startKwh: hw.startKwh,
+          startHeatingKwh: hw.startHeatingKwh,
+          startWaterLiters: hw.startWaterLiters,
+        },
+      });
+      if (res.count === 1 && deposit) await tx.payment.create({ data: { ...deposit, sessionId } });
+      return res;
     });
   } catch (e) {
     await prisma.unit.updateMany({ where: { id: unit.id, status: "OCCUPIED" }, data: { status: "VACANT" } }).catch(() => {});
@@ -2365,7 +2414,8 @@ export async function activateBookingSession(
     { id: sessionId, guestName: finalGuestName, guestEmail: finalGuestEmail, guestPhone: finalGuestPhone, guestPortalToken: session.guestPortalToken },
     dispName,
   );
-  const lines = [...hwLines, welcome.line];
+  const depositInfo = await depositReceipt(sessionId, deposit);
+  const lines = [...hwLines, ...(depositInfo ? [depositInfo.line] : []), welcome.line];
 
   revalidatePath("/admin");
   revalidatePath(`/admin/units/${unit.id}`);
@@ -2383,6 +2433,7 @@ export async function activateBookingSession(
       guestName: finalGuestName,
       portalPath: `/guest/${session.guestPortalToken}`,
       lines,
+      deposit: depositInfo?.deposit,
     },
   };
 }
@@ -2899,13 +2950,22 @@ export async function getInvoiceByPaymentToken(token: string) {
   });
 }
 
-export async function markInvoicePaid(invoiceId: number, paymentId?: string) {
-  await requireAuth();
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { status: "PAID", paidAt: new Date(), paymentId: paymentId ?? null },
-  });
-  revalidatePath("/admin");
+/**
+ * Pays what is left on an invoice through the payments ledger (method
+ * "Andet"). The desk uses "Registrér betaling" with amount and method instead.
+ */
+export async function markInvoicePaid(invoiceId: number, paymentId?: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const auth = await requireAuth();
+  try {
+    const note = paymentId ? `Markeret som betalt (reference ${paymentId})` : "Markeret som betalt";
+    const res = await recordInvoicePayment(invoiceId, "REST", "OTHER", note, auth.username || "admin");
+    if (res.sessionId) revalidatePath(`/admin/bookings/${res.sessionId}`);
+  } catch (e) {
+    if (e instanceof PaymentError) return { ok: false, message: e.message };
+    throw e;
+  }
+  revalidatePath("/admin", "layout");
+  return { ok: true };
 }
 
 export async function sendInvoiceToCustomer(invoiceId: number, unitId: number): Promise<{ ok: boolean; message: string }> {
@@ -3331,31 +3391,23 @@ export async function markSessionUnpaid(sessionId: number): Promise<{ ok: true }
 }
 
 /**
- * Add to the live prepaid balance atomically (e.g. cash at reception).
- * Uses increments so a concurrent laundry/shower decrement is never lost,
- * and turns the electricity back on if a prior auto power-off is now funded.
+ * Add to the live prepaid balance atomically, as a ledger row (method
+ * "Andet" — the desk uses "Registrér betaling" with the real method).
+ * Increments, so a concurrent laundry/shower draw is never lost, and the
+ * electricity comes back on if a prior auto power-off is now funded.
  */
-export async function addPrepaidAmount(sessionId: number, delta: number) {
-  await requireAuth();
-  if (!Number.isFinite(delta) || delta <= 0) throw new Error("Beløb skal være større end 0");
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    select: { id: true, prepaidAmount: true, prepaidDeposited: true },
-  });
-  if (!session) throw new Error("Booking ikke fundet");
-  // An increment on a NULL column stays NULL in SQLite, so backfill legacy
-  // rows with an absolute value once; afterwards increment.
-  const depositedUpdate =
-    session.prepaidDeposited != null
-      ? { increment: delta }
-      : (await resolvePrepaidDeposited(session)) + delta;
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { prepaidAmount: { increment: delta }, prepaidDeposited: depositedUpdate },
-  });
-  await restorePrepaidPowerIfFunded(sessionId);
+export async function addPrepaidAmount(sessionId: number, delta: number): Promise<{ ok: true } | { ok: false; message: string }> {
+  const auth = await requireAuth();
+  if (!Number.isFinite(delta) || delta <= 0) return { ok: false, message: "Beløb skal være større end 0" };
+  try {
+    await depositToBalance(sessionId, delta, "OTHER", "Indbetaling uden betalingsmåde", auth.username || "admin");
+  } catch (e) {
+    if (e instanceof PaymentError) return { ok: false, message: e.message };
+    throw e;
+  }
   revalidatePath(`/admin/bookings/${sessionId}`);
   revalidatePath("/admin/bookings");
+  return { ok: true };
 }
 
 /** Set the prepaid balance to an absolute amount (corrections). Prefer addPrepaidAmount for top-ups. */
@@ -4461,7 +4513,9 @@ export async function createInvoicePayment(invoiceId: number, guestToken: string
     (await prisma.session.count({ where: { unitId: invoice.unitId, guestPortalToken: guestToken } })) > 0;
   if (!ownsInvoice) throw new Error("Faktura ikke fundet");
   if (invoice.status === "PAID") throw new Error("Allerede betalt");
-  if (invoice.totalAmount <= 0) throw new Error("Intet beløb at betale");
+  // Part payments taken at the desk are already off the invoice.
+  const amount = await invoiceRemaining(invoice);
+  if (amount <= 0) throw new Error("Intet beløb at betale");
 
   const settings = await readGlobalSettings();
   const baseUrl = getBaseUrl(settings);
@@ -4486,7 +4540,7 @@ export async function createInvoicePayment(invoiceId: number, guestToken: string
 
   const { paymentId, paymentLink } = await createPaymentLink({
     orderId,
-    amount: invoice.totalAmount,
+    amount,
     currency: settings.currency || "DKK",
     continueUrl: `${baseUrl}/guest/${portalToken}?paid=1`,
     cancelUrl: `${baseUrl}/guest/${portalToken}?cancelled=1`,
