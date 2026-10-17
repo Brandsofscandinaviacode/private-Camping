@@ -928,8 +928,8 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
                             {d.energyWh != null && <span>{(d.energyWh / 1000).toFixed(1)} kWh i alt</span>}
                             {d.rssi != null && <span>{d.rssi} dBm</span>}
                             {d.ip && <span className="hidden md:inline">{d.ip}</span>}
-                            <span>{d.topicCount} emner · {d.messageCount} beskeder</span>
-                            <span className="hidden sm:inline">{timeAgoDa(d.lastSeen)}</span>
+                            <span>{d.topicCount} emner · {d.messageCount} beskeder fra enheden</span>
+                            <span className="hidden sm:inline">{d.lastSeen ? timeAgoDa(d.lastSeen) : "intet fra enheden"}</span>
                           </div>
                         </button>
 
@@ -954,7 +954,12 @@ export function MQTTSettings({ settings }: SettingsFormProps) {
                           {d.topics.map((t) => (
                             <div key={t.topic} className="px-3 py-2">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-mono font-medium truncate">{t.topic}</span>
+                                <span className="text-xs font-mono font-medium truncate">
+                                  {t.topic}
+                                  {t.fromCampSense && (
+                                    <span className="ml-2 font-sans font-normal text-muted-foreground">— forespørgsel fra CampSense, ikke svar fra enheden</span>
+                                  )}
+                                </span>
                                 <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
                                   {t.count} beskeder · {timeAgoDa(t.receivedAt)}
                                 </span>

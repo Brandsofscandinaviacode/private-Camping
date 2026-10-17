@@ -52,6 +52,8 @@ export interface MqttTopicInfo {
   receivedAt: string; // ISO
   /** Messages received on this topic since the client connected. */
   count: number;
+  /** CampSense's own RPC request to the device ({id}/rpc) — not activity from it. */
+  fromCampSense?: boolean;
 }
 
 /** A device discovered on the broker, grouped by its top-level topic prefix. */
@@ -59,7 +61,7 @@ export interface MqttDevice {
   id: string; // top-level topic segment, e.g. "Camping-S001"
   topicCount: number; // number of distinct topics seen under this prefix
   messageCount: number; // total messages received across those topics
-  lastSeen: string; // ISO timestamp of the most recent message
+  lastSeen: string | null; // ISO timestamp of the most recent message FROM the device; null = nothing from it
   online: boolean | null; // parsed from {id}/online, null if unknown
   power: number | null; // summed apower (W) across switch/pm components, best-effort
   voltage: number | null; // grid voltage (V), best-effort
@@ -356,7 +358,7 @@ class MqttClientWrapper {
 
     interface Group {
       topics: Map<string, MqttTopicInfo>;
-      lastSeen: Date;
+      lastSeen: Date | null;
       online: boolean | null;
       power: number | null;
       voltage: number | null;
@@ -372,12 +374,17 @@ class MqttClientWrapper {
     for (const [topic, msg] of this.cache.entries()) {
       const seg = topic.split("/")[0];
       if (!seg || seg.startsWith("$")) continue;
+      // CampSense's own RPC reply inbox is not a device.
+      if (seg.startsWith("campsense-rpc-")) continue;
+      // Requests CampSense publishes to the device ({id}/rpc) sit on the broker
+      // even when the device is offline — they must not look like activity.
+      const fromCampSense = topic === `${seg}/rpc`;
 
       let g = groups.get(seg);
       if (!g) {
         g = {
           topics: new Map(),
-          lastSeen: msg.receivedAt,
+          lastSeen: null,
           online: null,
           power: null,
           voltage: null,
@@ -396,9 +403,11 @@ class MqttClientWrapper {
         payload: msg.payload.length > 400 ? `${msg.payload.slice(0, 400)}…` : msg.payload,
         receivedAt: msg.receivedAt.toISOString(),
         count,
+        ...(fromCampSense ? { fromCampSense: true } : {}),
       });
+      if (fromCampSense) continue;
       g.messageCount += count;
-      if (msg.receivedAt > g.lastSeen) g.lastSeen = msg.receivedAt;
+      if (!g.lastSeen || msg.receivedAt > g.lastSeen) g.lastSeen = msg.receivedAt;
 
       // Shelly last-will: {id}/online = "true" | "false"
       if (topic === `${seg}/online`) {
@@ -439,7 +448,7 @@ class MqttClientWrapper {
         id,
         topicCount: g.topics.size,
         messageCount: g.messageCount,
-        lastSeen: g.lastSeen.toISOString(),
+        lastSeen: g.lastSeen?.toISOString() ?? null,
         online: g.online,
         power: g.power,
         voltage: g.voltage,

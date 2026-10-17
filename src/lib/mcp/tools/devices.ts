@@ -71,8 +71,9 @@ export function registerDeviceTools(server: McpServer): void {
         devices: devices.slice(0, 200).map((d) => ({
           id: d.id,
           online: d.online,
+          // Only messages from the device itself; CampSense's own /rpc requests don't count.
           lastSeen: d.lastSeen,
-          lastSeenAgeSeconds: secondsSince(new Date(d.lastSeen), now),
+          lastSeenAgeSeconds: d.lastSeen ? secondsSince(new Date(d.lastSeen), now) : null,
           usedBy: d.usedBy,
           outputs: d.outputs,
           powerW: d.power,
